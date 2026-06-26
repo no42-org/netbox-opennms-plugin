@@ -45,4 +45,9 @@ urlpatterns = (
         name="monitoringprofile_changelog",
         kwargs={"model": MonitoringProfile},
     ),
+    path(
+        "connection-test/",
+        views.OpenNMSConnectionTestView.as_view(),
+        name="connection_test",
+    ),
 )

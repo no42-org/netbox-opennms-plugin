@@ -1,0 +1,24 @@
+{# Copyright 2026 Ronny Trommer <ronny@no42.org> #}
+{# SPDX-License-Identifier: Apache-2.0 #}
+{% extends 'base/layout.html' %}
+
+{% block title %}OpenNMS Connection Test{% endblock %}
+
+{% block content %}
+  <div class="row">
+    <div class="col col-md-6">
+      <div class="card">
+        <h2 class="card-header">OpenNMS Connection Test</h2>
+        <div class="card-body">
+          <p>Probe the configured OpenNMS instance for reachability and valid credentials.</p>
+          <form method="post" action="">
+            {% csrf_token %}
+            <button type="submit" class="btn btn-primary">
+              <i class="mdi mdi-lan-connect"></i> Test connection
+            </button>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+{% endblock %}

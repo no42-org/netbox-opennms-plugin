@@ -4,7 +4,14 @@
 
 from unittest import mock
 
-from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Site
+from dcim.models import (
+    Device,
+    DeviceRole,
+    DeviceType,
+    Interface,
+    Manufacturer,
+    Site,
+)
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.urls import reverse
@@ -25,7 +32,8 @@ class MonitoringProfileSyncViewTest(TestCase):
         device = Device.objects.create(
             name="rtr-1", device_type=dt, role=role, site=site
         )
-        ip = IPAddress.objects.create(address="10.0.0.1/24")
+        iface = Interface.objects.create(device=device, name="eth0", type="virtual")
+        ip = IPAddress.objects.create(address="10.0.0.1/24", assigned_object=iface)
         cls.profile = MonitoringProfile.objects.create(
             assigned_object=device, management_ip=ip
         )
@@ -105,6 +113,27 @@ class MonitoringProfileSyncViewTest(TestCase):
             "plugins:netbox_opennms:monitoringprofile", args=[self.profile.pk]
         )
         self.assertNotContains(self.client.get(url), "No background worker is running")
+
+    @mock.patch("netbox_opennms.views.SyncForeignSourceJob.enqueue_sync")
+    def test_sync_blocked_on_validation_error(self, mock_enqueue):
+        # No resolvable management IP → validation error → not enqueued (FR-8).
+        MonitoringProfile.objects.filter(pk=self.profile.pk).update(management_ip=None)
+        self.client.force_login(self.superuser)
+        response = self.client.post(self._url(), follow=True)
+        mock_enqueue.assert_not_called()
+        self.assertContains(response, "no resolvable management IP")
+
+    @mock.patch("netbox_opennms.views.SyncForeignSourceJob.enqueue_sync")
+    @mock.patch("netbox_opennms.views.validate_foreign_source")
+    def test_sync_warns_but_proceeds(self, mock_validate, mock_enqueue):
+        from netbox_opennms.validation import ValidationResult
+
+        mock_validate.return_value = ValidationResult(errors=[], warnings=["heads up"])
+        mock_enqueue.return_value = mock.Mock(pk=5)
+        self.client.force_login(self.superuser)
+        response = self.client.post(self._url(), follow=True)
+        mock_enqueue.assert_called_once()
+        self.assertContains(response, "heads up")
 
     @mock.patch(
         "netbox_opennms.views.any_workers_for_queue",

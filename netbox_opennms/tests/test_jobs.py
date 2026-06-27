@@ -6,7 +6,14 @@ from unittest import mock
 
 from core.exceptions import JobFailed
 from core.models import Job
-from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Site
+from dcim.models import (
+    Device,
+    DeviceRole,
+    DeviceType,
+    Interface,
+    Manufacturer,
+    Site,
+)
 from django.test import TestCase
 from ipam.models import IPAddress
 
@@ -31,7 +38,8 @@ class SyncForeignSourceJobTest(TestCase):
         cls.device = Device.objects.create(
             name="rtr-1", device_type=dt, role=role, site=site
         )
-        ip = IPAddress.objects.create(address="10.0.0.1/24")
+        iface = Interface.objects.create(device=cls.device, name="eth0", type="virtual")
+        ip = IPAddress.objects.create(address="10.0.0.1/24", assigned_object=iface)
         cls.profile = MonitoringProfile.objects.create(
             assigned_object=cls.device, management_ip=ip
         )
@@ -132,6 +140,26 @@ class SyncForeignSourceJobTest(TestCase):
         )
         result = enabled_profiles_for(FS)  # must not raise
         self.assertEqual([p.pk for p in result], [self.profile.pk])
+
+    @mock.patch("netbox_opennms.jobs.advisory_lock")
+    @mock.patch("netbox_opennms.jobs.OpenNMSClient.from_config")
+    def test_validation_error_marks_failed(self, mock_from_config, _lock):
+        # No management IP → pre-flight validation fails the job before any push.
+        MonitoringProfile.objects.filter(pk=self.profile.pk).update(management_ip=None)
+        with self.assertRaises(JobFailed):
+            self._runner().run(foreign_source=FS)
+        mock_from_config.assert_not_called()
+
+    @mock.patch("netbox_opennms.jobs.advisory_lock")
+    @mock.patch("netbox_opennms.jobs.OpenNMSClient.from_config")
+    @mock.patch("netbox_opennms.jobs.get_plugin_config")
+    def test_invalid_import_mode_marks_failed(self, mock_cfg, mock_from_config, _lock):
+        mock_cfg.side_effect = lambda _plugin, key: (
+            "bogus" if key == "import_mode" else ""
+        )
+        with self.assertRaises(JobFailed):
+            self._runner().run(foreign_source=FS)
+        mock_from_config.assert_not_called()
 
     def test_enabled_profiles_for_filters_by_fs_and_enabled(self):
         role = DeviceRole.objects.get(slug="router")

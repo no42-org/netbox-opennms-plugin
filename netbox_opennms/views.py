@@ -12,8 +12,9 @@ from utilities.rqworker import any_workers_for_queue
 from . import filtersets, forms, tables
 from .client import OpenNMSClient, OpenNMSError
 from .derivation import foreign_source_for
-from .jobs import SyncForeignSourceJob
-from .models import MonitoringProfile
+from .jobs import SyncForeignSourceJob, enabled_profiles_for
+from .models import MonitoredService, MonitoringProfile
+from .validation import validate_foreign_source
 
 # Sync jobs are enqueued without an instance, so they run on the default RQ
 # queue (get_queue_for_model(None) -> RQ_QUEUE_DEFAULT). FR-13 / AD-16.
@@ -62,6 +63,30 @@ class MonitoringProfileBulkDeleteView(generic.BulkDeleteView):
     table = tables.MonitoringProfileTable
 
 
+class MonitoredServiceView(generic.ObjectView):
+    queryset = MonitoredService.objects.all()
+
+
+class MonitoredServiceListView(generic.ObjectListView):
+    queryset = MonitoredService.objects.select_related("profile", "ip_address")
+    table = tables.MonitoredServiceTable
+    filterset = filtersets.MonitoredServiceFilterSet
+
+
+class MonitoredServiceEditView(generic.ObjectEditView):
+    queryset = MonitoredService.objects.all()
+    form = forms.MonitoredServiceForm
+
+
+class MonitoredServiceDeleteView(generic.ObjectDeleteView):
+    queryset = MonitoredService.objects.all()
+
+
+class MonitoredServiceBulkDeleteView(generic.BulkDeleteView):
+    queryset = MonitoredService.objects.all()
+    table = tables.MonitoredServiceTable
+
+
 class MonitoringProfileSyncView(PermissionRequiredMixin, View):
     """Enqueue a background Sync for a profile's whole Foreign Source (AD-4/5).
 
@@ -96,6 +121,19 @@ class MonitoringProfileSyncView(PermissionRequiredMixin, View):
                 "and cannot be synced.",
             )
             return redirect(profile.get_absolute_url())
+
+        # Validate the whole Foreign Source's intent before enqueuing (FR-8):
+        # errors block the sync; warnings are informational.
+        result = validate_foreign_source(
+            foreign_source, enabled_profiles_for(foreign_source)
+        )
+        for warning in result.warnings:
+            messages.warning(request, warning)
+        if result.errors:
+            for error in result.errors:
+                messages.error(request, error)
+            return redirect(profile.get_absolute_url())
+
         job = SyncForeignSourceJob.enqueue_sync(foreign_source, user=request.user)
         messages.success(
             request,

@@ -3,9 +3,13 @@
 """Plugin data models."""
 
 from django.contrib.contenttypes.fields import GenericForeignKey
+from django.core.exceptions import ValidationError
 from django.db import models
 from django.urls import reverse
 from netbox.models import NetBoxModel
+
+from .choices import ServiceChoices
+from .derivation import validate_location_name
 
 # A Monitoring Profile may be assigned to a Device or a VirtualMachine.
 ASSIGNMENT_MODELS = models.Q(
@@ -48,6 +52,17 @@ class MonitoringProfile(NetBoxModel):
         blank=True,
         related_name="+",
     )
+    # The object's other monitored IPs — rendered as non-primary (snmp-primary="N")
+    # interfaces (AD-15). The management IP is NOT stored here; the renderer is the
+    # single interface-set authority and excludes it even if mistakenly added.
+    additional_ips = models.ManyToManyField(
+        to="ipam.IPAddress",
+        related_name="+",
+        blank=True,
+    )
+    # OpenNMS Monitoring Location (which Minion polls the node). Empty falls back
+    # to the configured default location at render time (AD-9/AD-13).
+    location = models.CharField(max_length=255, blank=True, default="")
 
     class Meta:
         ordering = ("pk",)
@@ -67,3 +82,93 @@ class MonitoringProfile(NetBoxModel):
 
     def get_absolute_url(self):
         return reverse("plugins:netbox_opennms:monitoringprofile", args=[self.pk])
+
+    def clean(self):
+        super().clean()
+        try:
+            validate_location_name(self.location)
+        except ValueError as exc:
+            raise ValidationError({"location": str(exc)}) from exc
+
+
+def profile_ip_pks(profile):
+    """PKs of a profile's monitored IPs: the management IP + the additional IPs.
+
+    A node's interfaces are exactly these IPs (AD-15), so a MonitoredService may
+    only sit on one of them.
+    """
+    pks = set()
+    if profile.management_ip_id:
+        pks.add(profile.management_ip_id)
+    pks.update(profile.additional_ips.values_list("pk", flat=True))
+    return pks
+
+
+def object_ip_pks(target):
+    """PKs of the IPs assigned to a Device/VM's interfaces (its own addresses).
+
+    Used to constrain a profile's additional IPs to the monitored object's own
+    addresses. Returns an empty set for a target without interfaces.
+    """
+    pks = set()
+    interfaces = getattr(target, "interfaces", None)
+    if interfaces is None:
+        return pks
+    for interface in interfaces.all():
+        pks.update(interface.ip_addresses.values_list("pk", flat=True))
+    return pks
+
+
+class MonitoredService(NetBoxModel):
+    """A service monitored on one interface (IP) of a MonitoringProfile (AD-15).
+
+    Only the explicit services here are monitored — auto-detection stays disabled
+    (AD-11). The ``name`` is drawn from the admin-extensible ``ServiceChoices``.
+    """
+
+    profile = models.ForeignKey(
+        to=MonitoringProfile,
+        on_delete=models.CASCADE,
+        related_name="services",
+    )
+    # The interface this service runs on — must be one of the profile's monitored
+    # IPs (management IP or an additional IP).
+    ip_address = models.ForeignKey(
+        to="ipam.IPAddress",
+        on_delete=models.CASCADE,
+        related_name="+",
+    )
+    name = models.CharField(max_length=100, choices=ServiceChoices)
+
+    class Meta:
+        ordering = ("profile", "ip_address", "name")
+        constraints = [
+            models.UniqueConstraint(
+                fields=("profile", "ip_address", "name"),
+                name="%(app_label)s_%(class)s_unique_service",
+            ),
+        ]
+        verbose_name = "monitored service"
+        verbose_name_plural = "monitored services"
+
+    def __str__(self):
+        return f"{self.name} on {self.ip_address}"
+
+    def get_absolute_url(self):
+        return reverse("plugins:netbox_opennms:monitoredservice", args=[self.pk])
+
+    def clean(self):
+        super().clean()
+        if (
+            self.profile_id
+            and self.ip_address_id
+            and self.ip_address_id not in profile_ip_pks(self.profile)
+        ):
+            raise ValidationError(
+                {
+                    "ip_address": (
+                        "The IP must be the profile's management IP or one of "
+                        "its additional IPs."
+                    )
+                }
+            )

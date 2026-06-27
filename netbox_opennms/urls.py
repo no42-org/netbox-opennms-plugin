@@ -6,7 +6,7 @@ from django.urls import path
 from netbox.views.generic import ObjectChangeLogView
 
 from . import views
-from .models import MonitoringProfile
+from .models import MonitoredService, MonitoringProfile
 
 urlpatterns = (
     path(
@@ -49,6 +49,42 @@ urlpatterns = (
         "monitoring-profiles/<int:pk>/sync/",
         views.MonitoringProfileSyncView.as_view(),
         name="monitoringprofile_sync",
+    ),
+    path(
+        "monitored-services/",
+        views.MonitoredServiceListView.as_view(),
+        name="monitoredservice_list",
+    ),
+    path(
+        "monitored-services/add/",
+        views.MonitoredServiceEditView.as_view(),
+        name="monitoredservice_add",
+    ),
+    path(
+        "monitored-services/delete/",
+        views.MonitoredServiceBulkDeleteView.as_view(),
+        name="monitoredservice_bulk_delete",
+    ),
+    path(
+        "monitored-services/<int:pk>/",
+        views.MonitoredServiceView.as_view(),
+        name="monitoredservice",
+    ),
+    path(
+        "monitored-services/<int:pk>/edit/",
+        views.MonitoredServiceEditView.as_view(),
+        name="monitoredservice_edit",
+    ),
+    path(
+        "monitored-services/<int:pk>/delete/",
+        views.MonitoredServiceDeleteView.as_view(),
+        name="monitoredservice_delete",
+    ),
+    path(
+        "monitored-services/<int:pk>/changelog/",
+        ObjectChangeLogView.as_view(),
+        name="monitoredservice_changelog",
+        kwargs={"model": MonitoredService},
     ),
     path(
         "connection-test/",

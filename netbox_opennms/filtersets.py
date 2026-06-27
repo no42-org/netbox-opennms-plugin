@@ -4,7 +4,7 @@
 
 from netbox.filtersets import NetBoxModelFilterSet
 
-from .models import MonitoringProfile
+from .models import MonitoredService, MonitoringProfile
 
 
 class MonitoringProfileFilterSet(NetBoxModelFilterSet):
@@ -17,4 +17,15 @@ class MonitoringProfileFilterSet(NetBoxModelFilterSet):
         # than silently returning every profile.
         if value:
             return queryset.none()
+        return queryset
+
+
+class MonitoredServiceFilterSet(NetBoxModelFilterSet):
+    class Meta:
+        model = MonitoredService
+        fields = ("id", "profile", "ip_address", "name")
+
+    def search(self, queryset, name, value):
+        if value:
+            return queryset.filter(name__icontains=value)
         return queryset

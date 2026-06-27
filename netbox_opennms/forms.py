@@ -8,10 +8,18 @@ from django.core.exceptions import ValidationError
 from django.utils.translation import gettext_lazy as _
 from ipam.models import IPAddress
 from netbox.forms import NetBoxModelForm
-from utilities.forms.fields import DynamicModelChoiceField
+from utilities.forms.fields import (
+    DynamicModelChoiceField,
+    DynamicModelMultipleChoiceField,
+)
 from virtualization.models import VirtualMachine
 
-from .models import MonitoringProfile
+from .models import (
+    MonitoredService,
+    MonitoringProfile,
+    object_ip_pks,
+    profile_ip_pks,
+)
 
 
 class MonitoringProfileForm(NetBoxModelForm):
@@ -38,10 +46,28 @@ class MonitoringProfileForm(NetBoxModelForm):
         label=_("Management IP"),
         help_text=_("Defaults to the object's primary IP if left blank."),
     )
+    additional_ips = DynamicModelMultipleChoiceField(
+        queryset=IPAddress.objects.all(),
+        required=False,
+        label=_("Additional IPs"),
+        query_params={
+            "device_id": "$device",
+            "virtual_machine_id": "$virtual_machine",
+        },
+        help_text=_("Other IPs of this object to monitor as non-primary interfaces."),
+    )
 
     class Meta:
         model = MonitoringProfile
-        fields = ("device", "virtual_machine", "management_ip", "enabled", "tags")
+        fields = (
+            "device",
+            "virtual_machine",
+            "management_ip",
+            "additional_ips",
+            "location",
+            "enabled",
+            "tags",
+        )
 
     def __init__(self, *args, **kwargs):
         instance = kwargs.get("instance")
@@ -95,4 +121,59 @@ class MonitoringProfileForm(NetBoxModelForm):
                 }
             )
         self.cleaned_data["management_ip"] = management_ip
+
+        # Additional IPs must belong to the monitored object (AD-15) and must not
+        # duplicate the management IP (which is the primary "P" interface).
+        additional = self.cleaned_data.get("additional_ips")
+        if additional:
+            # Drop the management IP first — it's the lone primary (no duplicate
+            # P+N), and it may legitimately be off the object's interfaces
+            # (Story 1.3), so excluding it before the membership check avoids a
+            # false "not assigned" error.
+            additional = [ip for ip in additional if ip.pk != management_ip.pk]
+            owned = object_ip_pks(target)
+            foreign = [ip for ip in additional if ip.pk not in owned]
+            if foreign:
+                raise ValidationError(
+                    {
+                        "additional_ips": _(
+                            "These IPs are not assigned to the selected object: %(ips)s"
+                        )
+                        % {"ips": ", ".join(str(ip) for ip in foreign)}
+                    }
+                )
+            self.cleaned_data["additional_ips"] = additional
+        return self.cleaned_data
+
+
+class MonitoredServiceForm(NetBoxModelForm):
+    """Add/edit a service monitored on one interface of a profile."""
+
+    profile = DynamicModelChoiceField(
+        queryset=MonitoringProfile.objects.all(),
+        label=_("Monitoring Profile"),
+    )
+    ip_address = DynamicModelChoiceField(
+        queryset=IPAddress.objects.all(),
+        label=_("Interface IP"),
+        help_text=_("Must be the profile's management IP or an additional IP."),
+    )
+
+    class Meta:
+        model = MonitoredService
+        fields = ("profile", "ip_address", "name", "tags")
+
+    def clean(self):
+        super().clean()
+        profile = self.cleaned_data.get("profile")
+        ip_address = self.cleaned_data.get("ip_address")
+        if profile and ip_address and ip_address.pk not in profile_ip_pks(profile):
+            raise ValidationError(
+                {
+                    "ip_address": _(
+                        "The IP must be the profile's management IP or one of "
+                        "its additional IPs."
+                    )
+                }
+            )
         return self.cleaned_data

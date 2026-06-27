@@ -23,13 +23,14 @@ from netbox.jobs import JobRunner
 from netbox.plugins import get_plugin_config
 
 from .client import OpenNMSClient, OpenNMSError
-from .derivation import foreign_source_for
+from .derivation import foreign_source_for, validate_location_name
 from .models import MonitoringProfile
 from .translation import (
     RenderError,
     render_foreign_source_definition,
     render_requisition,
 )
+from .validation import validate_foreign_source
 
 PLUGIN_NAME = "netbox_opennms"
 
@@ -42,7 +43,9 @@ def enabled_profiles_for(foreign_source):
     with ``last_synced_foreign_source`` in Story 3.2).
     """
     profiles = []
-    for profile in MonitoringProfile.objects.filter(enabled=True):
+    for profile in MonitoringProfile.objects.filter(enabled=True).prefetch_related(
+        "additional_ips", "services"
+    ):
         target = profile.assigned_object
         if target is None:
             continue
@@ -110,14 +113,37 @@ class SyncForeignSourceJob(JobRunner):
                 )
                 return
 
+            # Re-validate intent as a safety net (FR-8): the view blocks on
+            # errors, but non-UI triggers must fail cleanly too, not push bad
+            # intent (AD-12).
+            validation = validate_foreign_source(foreign_source, profiles)
+            if validation.errors:
+                for error in validation.errors:
+                    self.logger.error(error)
+                raise JobFailed()
+
+            default_location = get_plugin_config(PLUGIN_NAME, "default_location")
+            if default_location:
+                try:
+                    validate_location_name(default_location)
+                except ValueError as exc:
+                    self.logger.error(f"Configured default_location is invalid: {exc}")
+                    raise JobFailed() from exc
             try:
                 fs_xml = render_foreign_source_definition(foreign_source)
-                requisition_xml = render_requisition(foreign_source, profiles)
+                requisition_xml = render_requisition(
+                    foreign_source, profiles, default_location=default_location
+                )
             except RenderError as exc:
                 self.logger.error(f"Cannot render {foreign_source}: {exc}")
                 raise JobFailed() from exc
 
-            rescan = get_plugin_config(PLUGIN_NAME, "import_mode")
+            rescan = str(get_plugin_config(PLUGIN_NAME, "import_mode")).strip().lower()
+            if rescan not in ("true", "false", "dbonly"):
+                self.logger.error(
+                    f"Invalid import_mode {rescan!r} (expected true/false/dbonly)."
+                )
+                raise JobFailed()
 
             try:
                 with OpenNMSClient.from_config() as client:

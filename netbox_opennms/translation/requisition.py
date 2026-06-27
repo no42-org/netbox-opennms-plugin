@@ -8,6 +8,8 @@ they read the passed objects' attributes only. ``date_stamp`` is a parameter so
 output is reproducible (the sync job supplies the timestamp).
 """
 
+from collections import defaultdict
+
 from lxml import etree
 
 from ..derivation import foreign_id_for
@@ -29,17 +31,31 @@ class RenderError(Exception):
     """
 
 
-def _management_ip(profile):
-    """The bare management IP (no CIDR mask) for an interface ``ip-addr``.
+def _bare_ip(ip):
+    """The bare IP (no CIDR mask) for an interface ``ip-addr``.
 
     ``IPAddress.address`` may be a ``netaddr`` network or a plain string
     (in-memory, pre-DB-roundtrip); stripping the mask off the string form
     handles both.
     """
-    return str(profile.management_ip.address).split("/")[0]
+    return str(ip.address).split("/")[0]
 
 
-def render_requisition(foreign_source, profiles, date_stamp=None):
+def _management_ip(profile):
+    """The bare management IP for the primary interface."""
+    return _bare_ip(profile.management_ip)
+
+
+def _add_services(interface_el, names):
+    """Append ``<monitored-service service-name="…">`` children, sorted (AD-3)."""
+    for name in sorted(names):
+        service = etree.SubElement(
+            interface_el, f"{{{MODEL_IMPORT_NS}}}monitored-service"
+        )
+        service.set("service-name", name)
+
+
+def render_requisition(foreign_source, profiles, date_stamp=None, default_location=""):
     """Render the complete ``model-import`` requisition for one Foreign Source.
 
     ``foreign_source`` is the already-derived name (from ``foreign_source_for`` —
@@ -86,9 +102,42 @@ def render_requisition(foreign_source, profiles, date_stamp=None):
         node.set("node-label", target.name)
         node.set("foreign-id", foreign_id)
 
-        interface = etree.SubElement(node, f"{{{MODEL_IMPORT_NS}}}interface")
-        interface.set("ip-addr", _management_ip(profile))
-        interface.set("snmp-primary", "P")
+        # Monitoring location: the profile's, else the configured default (passed
+        # in for purity, AD-3). Empty means OpenNMS's built-in Default location.
+        location = profile.location or default_location
+        if location:
+            node.set("location", location)
+
+        # Services grouped by the interface IP they run on (AD-15).
+        services_by_ip = defaultdict(list)
+        for service in profile.services.all():
+            services_by_ip[service.ip_address_id].append(service.name)
+
+        # The single interface-set authority (AD-15): the management IP is the
+        # lone primary ("P"); additional IPs are non-primary ("N"). An IP appears
+        # at most once per node, keyed by bare address, so a duplicate address
+        # (including the management IP re-listed as additional) merges onto the
+        # existing interface rather than emitting a second element or dropping its
+        # services. Additional IPs are sorted by bare address for determinism.
+        primary_ip = _management_ip(profile)
+        interfaces = [(primary_ip, "P", [profile.management_ip_id])]
+        index = {primary_ip: 0}
+        for ip in sorted(profile.additional_ips.all(), key=_bare_ip):
+            bare = _bare_ip(ip)
+            if bare in index:
+                interfaces[index[bare]][2].append(ip.pk)
+            else:
+                index[bare] = len(interfaces)
+                interfaces.append((bare, "N", [ip.pk]))
+
+        for bare, snmp_primary, ip_pks in interfaces:
+            interface = etree.SubElement(node, f"{{{MODEL_IMPORT_NS}}}interface")
+            interface.set("ip-addr", bare)
+            interface.set("snmp-primary", snmp_primary)
+            names = set()
+            for ip_pk in ip_pks:
+                names.update(services_by_ip.get(ip_pk, []))
+            _add_services(interface, names)
 
     return etree.tostring(root, xml_declaration=True, encoding="UTF-8")
 

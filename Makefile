@@ -1,10 +1,15 @@
 # netbox-opennms developer / CI entrypoints. CI invokes these targets, never the
 # underlying tooling directly, so local and CI runs stay in sync.
-.PHONY: help test makemigrations regen-counts lint verify clean
+.PHONY: help test makemigrations regen-counts lint verify build clean
 
 COMPOSE := docker compose -f compose.yml
 # Pinned ruff image so lint matches CI without a host install.
 RUFF := ghcr.io/astral-sh/ruff:0.15.20
+# Pinned Python image for builds — no host toolchain required.
+BUILD_IMAGE := python:3.12-slim
+# The build runs as root in the container; chown artifacts back to the caller so
+# host/CI can clean them without sudo.
+OWNER := $(shell id -u):$(shell id -g)
 PY := /opt/netbox/venv/bin/python
 
 help: ## List targets
@@ -29,6 +34,11 @@ lint: ## Ruff lint (pinned image, no host install)
 	docker run --rm -v "$(CURDIR)":/io -w /io $(RUFF) check .
 
 verify: lint test ## Lint + test (the CI entrypoint)
+
+build: ## Build the wheel + sdist into dist/ (pinned Python image)
+	docker run --rm -v "$(CURDIR)":/src -w /src $(BUILD_IMAGE) \
+		sh -c 'pip install --quiet build && python -m build && \
+		chown -R $(OWNER) dist build *.egg-info 2>/dev/null || true'
 
 clean: ## Tear down the stack and volumes
 	$(COMPOSE) down -v --remove-orphans

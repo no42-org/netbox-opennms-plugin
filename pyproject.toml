@@ -17,10 +17,10 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.12",
 ]
-# Runtime deps are added by the stories that need them (XML rendering / lxml:
-# Story 1.6). NetBox itself is the host application and is NOT declared here.
+# NetBox itself is the host application and is NOT declared here.
 dependencies = [
     "requests>=2.34",
+    "lxml>=6.1",
 ]
 
 [project.urls]

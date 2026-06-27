@@ -50,6 +50,22 @@ def _site_for(target):
     return site
 
 
+def foreign_id_for(target):
+    """Return the type-qualified OpenNMS Foreign ID for a Device/VM (AD-8).
+
+    ``device-{pk}`` / ``vm-{pk}`` — the type prefix keeps a Device and a VM with
+    the same primary key from colliding on node identity.
+    """
+    if isinstance(target, Device):
+        return f"device-{target.pk}"
+    if isinstance(target, VirtualMachine):
+        return f"vm-{target.pk}"
+    raise TypeError(
+        "foreign_id_for() expects a Device or VirtualMachine, "
+        f"got {type(target).__name__}."
+    )
+
+
 def foreign_source_for(target):
     """Return the Foreign Source name for a monitored Device or VirtualMachine.
 

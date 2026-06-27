@@ -45,6 +45,39 @@ class MonitoringProfileSyncViewTest(TestCase):
             "plugins:netbox_opennms:monitoringprofile_sync", args=[self.profile.pk]
         )
 
+    def _remove_url(self):
+        return reverse(
+            "plugins:netbox_opennms:monitoringprofile_remove", args=[self.profile.pk]
+        )
+
+    @mock.patch("netbox_opennms.views.SyncForeignSourceJob.enqueue_sync")
+    def test_remove_disables_and_enqueues_allow_empty(self, mock_enqueue):
+        mock_enqueue.return_value = mock.Mock(pk=11)
+        self.client.force_login(self.superuser)
+        response = self.client.post(self._remove_url(), follow=True)
+        self.profile.refresh_from_db()
+        self.assertFalse(self.profile.enabled)
+        self.assertContains(response, "Remove submitted")
+        mock_enqueue.assert_called_once()
+        self.assertTrue(mock_enqueue.call_args.kwargs.get("allow_empty"))
+
+    def test_remove_denied_without_permission(self):
+        self.client.force_login(self.plain)
+        self.assertEqual(self.client.post(self._remove_url()).status_code, 403)
+
+    @mock.patch("netbox_opennms.views.SyncForeignSourceJob.enqueue_sync")
+    def test_remove_non_device_vm_fails_cleanly(self, mock_enqueue):
+        site = Site.objects.get(slug="raleigh")
+        bad = MonitoringProfile.objects.create(
+            assigned_object=site,
+            management_ip=IPAddress.objects.create(address="10.9.9.8/24"),
+        )
+        url = reverse("plugins:netbox_opennms:monitoringprofile_remove", args=[bad.pk])
+        self.client.force_login(self.superuser)
+        response = self.client.post(url, follow=True)
+        mock_enqueue.assert_not_called()
+        self.assertContains(response, "not a Device or VirtualMachine")
+
     @mock.patch("netbox_opennms.views.SyncForeignSourceJob.enqueue_sync")
     def test_sync_enqueues_and_messages(self, mock_enqueue):
         mock_enqueue.return_value = mock.Mock(pk=42)

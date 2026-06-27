@@ -161,6 +161,55 @@ class SyncForeignSourceJobTest(TestCase):
             self._runner().run(foreign_source=FS)
         mock_from_config.assert_not_called()
 
+    @mock.patch("netbox_opennms.jobs.advisory_lock")
+    @mock.patch("netbox_opennms.jobs.OpenNMSClient.from_config")
+    def test_remove_pushes_empty_requisition(self, mock_from_config, _lock):
+        # allow_empty + no enabled profiles → push a node-less requisition that
+        # deletes the FS's nodes (the intentional Remove path, Story 3.1).
+        client = mock_from_config.return_value.__enter__.return_value
+        client.import_requisition.return_value = mock.Mock(status_code=202)
+        MonitoringProfile.objects.filter(pk=self.profile.pk).update(enabled=False)
+
+        self._runner().run(foreign_source=FS, allow_empty=True)
+
+        client.post_requisition.assert_called_once()
+        requisition_xml = client.post_requisition.call_args.args[0]
+        self.assertNotIn(b"<node", requisition_xml)  # node-less
+        client.import_requisition.assert_called_once()
+
+    @mock.patch("netbox_opennms.jobs.advisory_lock")
+    @mock.patch("netbox_opennms.jobs.OpenNMSClient.from_config")
+    def test_remove_renders_remaining_when_not_last(self, mock_from_config, _lock):
+        client = mock_from_config.return_value.__enter__.return_value
+        client.import_requisition.return_value = mock.Mock(status_code=202)
+        role = DeviceRole.objects.get(slug="router")
+        dt = DeviceType.objects.get(slug="m1")
+        site = Site.objects.get(slug="raleigh")
+        other = Device.objects.create(
+            name="rtr-9", device_type=dt, role=role, site=site
+        )
+        oface = Interface.objects.create(device=other, name="eth0", type="virtual")
+        oip = IPAddress.objects.create(address="10.0.0.9/24", assigned_object=oface)
+        MonitoringProfile.objects.create(assigned_object=other, management_ip=oip)
+        # remove self.profile; the other profile remains in the FS
+        MonitoringProfile.objects.filter(pk=self.profile.pk).update(enabled=False)
+
+        self._runner().run(foreign_source=FS, allow_empty=True)
+
+        requisition_xml = client.post_requisition.call_args.args[0]
+        self.assertEqual(requisition_xml.count(b"<node"), 1)  # only the remaining
+
+    def test_remove_then_restore_is_idempotent(self):
+        # AC4: disable (remove) then re-enable (restore) yields the IDENTICAL
+        # requisition — same pk-derived foreign-id (AD-8), so re-syncing the
+        # restored intent produces zero duplicate nodes.
+        before = render_requisition(FS, enabled_profiles_for(FS))
+        MonitoringProfile.objects.filter(pk=self.profile.pk).update(enabled=False)
+        self.assertEqual(enabled_profiles_for(FS), [])  # dropped from the render
+        MonitoringProfile.objects.filter(pk=self.profile.pk).update(enabled=True)
+        after = render_requisition(FS, enabled_profiles_for(FS))
+        self.assertEqual(before, after)
+
     def test_enabled_profiles_for_filters_by_fs_and_enabled(self):
         role = DeviceRole.objects.get(slug="router")
         dt = DeviceType.objects.get(slug="m1")

@@ -51,6 +51,11 @@ urlpatterns = (
         name="monitoringprofile_sync",
     ),
     path(
+        "monitoring-profiles/<int:pk>/remove/",
+        views.MonitoringProfileRemoveView.as_view(),
+        name="monitoringprofile_remove",
+    ),
+    path(
         "monitored-services/",
         views.MonitoredServiceListView.as_view(),
         name="monitoredservice_list",

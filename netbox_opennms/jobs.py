@@ -69,7 +69,7 @@ class SyncForeignSourceJob(JobRunner):
         name = "OpenNMS sync"
 
     @classmethod
-    def enqueue_sync(cls, foreign_source, user=None):
+    def enqueue_sync(cls, foreign_source, user=None, allow_empty=False):
         """Enqueue a sync, coalescing a redundant pending sync for the same FS.
 
         The advisory lock in ``run`` is the hard race guard (AD-6); this skip-if-
@@ -82,7 +82,13 @@ class SyncForeignSourceJob(JobRunner):
         ``Job`` itself (status + log).
         """
         # Job.name is max_length=200; cap so two max-length slugs can't overflow.
-        job_name = f"{cls.name}: {foreign_source}"[:200]
+        # The "(remove)" marker keeps a Remove (allow_empty) from coalescing into
+        # a pending Sync that would refuse the empty requisition. Budget the marker
+        # INTO the cap so a long Foreign Source can't truncate it away — otherwise
+        # the Remove and Sync names would collide and coalesce with the wrong
+        # empty-policy.
+        suffix = " (remove)" if allow_empty else ""
+        job_name = f"{cls.name}: {foreign_source}"[: 200 - len(suffix)] + suffix
         existing = Job.objects.filter(
             name=job_name,
             status__in=JobStatusChoices.ENQUEUED_STATE_CHOICES,
@@ -93,25 +99,28 @@ class SyncForeignSourceJob(JobRunner):
             name=job_name,
             foreign_source=foreign_source,
             user=user,
+            allow_empty=allow_empty,
         )
 
-    def run(self, foreign_source, **kwargs):
+    def run(self, foreign_source, allow_empty=False, **kwargs):
         # AD-6: serialize all work for this Foreign Source. wait=True blocks until
         # acquired; the lock auto-releases at block exit.
         with advisory_lock(f"netbox_opennms:fs:{foreign_source}"):
             profiles = enabled_profiles_for(foreign_source)
 
-            if not profiles:
+            if not profiles and not allow_empty:
                 # A Sync must never mass-delete. An empty requisition would tell
                 # OpenNMS to remove every node in the Foreign Source — that is the
-                # deliberate Remove path (Story 3.1), not Sync. The trigger was
-                # enabled at enqueue; reaching here means it was disabled/deleted
-                # in the meantime — skip rather than wipe live monitoring.
+                # deliberate Remove path (allow_empty, Story 3.1), not Sync. The
+                # trigger was enabled at enqueue; reaching here means it was
+                # disabled/deleted in the meantime — skip rather than wipe.
                 self.logger.info(
                     f"nothing to sync for {foreign_source} (no enabled profiles) "
                     "— skipped; use Remove to clear the Foreign Source."
                 )
                 return
+            # allow_empty + no profiles falls through: render the node-less
+            # requisition and import it, which deletes the FS's remaining nodes.
 
             # Re-validate intent as a safety net (FR-8): the view blocks on
             # errors, but non-UI triggers must fail cleanly too, not push bad

@@ -4,6 +4,7 @@
 
 from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin, PermissionRequiredMixin
+from django.db import transaction
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.generic import View
 from netbox.views import generic
@@ -141,6 +142,55 @@ class MonitoringProfileSyncView(PermissionRequiredMixin, View):
         )
         # The no-worker warning is surfaced by the detail page's banner (shown on
         # the redirect target and on every view) — no duplicate flash here.
+        return redirect(profile.get_absolute_url())
+
+
+class MonitoringProfileRemoveView(PermissionRequiredMixin, View):
+    """Remove a node from OpenNMS: clear intent (disable) + render-and-replace.
+
+    Disabling the profile drops it from the FS render, so the node is deleted on
+    import (AD-5). Uses the same job as Sync with allow_empty=True so removing the
+    last node pushes the (intentional) empty requisition.
+
+    Unlike Sync, this skips the *view's* pre-flight validation so the action isn't
+    blocked at submit time by the whole-FS gate. Removing the LAST node always
+    succeeds (an empty Foreign Source validates clean). A non-last remove still
+    re-renders the surviving siblings (render-and-replace can't push a partial
+    FS), so an invalid/un-renderable sibling will fail that job — the outcome
+    lives on the Job (AD-12 honest status), not a request-time error.
+    """
+
+    permission_required = "netbox_opennms.change_monitoringprofile"
+
+    def post(self, request, pk):
+        profile = get_object_or_404(MonitoringProfile, pk=pk)
+        target = profile.assigned_object
+        if target is None:
+            messages.error(
+                request, "This profile has no assigned object and cannot be removed."
+            )
+            return redirect(profile.get_absolute_url())
+        try:
+            foreign_source = foreign_source_for(target)
+        except TypeError:
+            messages.error(
+                request,
+                "This profile's object is not a Device or VirtualMachine.",
+            )
+            return redirect(profile.get_absolute_url())
+
+        # Clear intent and enqueue atomically: if the enqueue raises, the disable
+        # rolls back so we never strand a disabled profile with no job.
+        with transaction.atomic():
+            profile.enabled = False
+            profile.save()
+            job = SyncForeignSourceJob.enqueue_sync(
+                foreign_source, user=request.user, allow_empty=True
+            )
+        messages.success(
+            request,
+            f"Remove submitted for Foreign Source {foreign_source} (job #{job.pk}).",
+        )
         return redirect(profile.get_absolute_url())
 
 

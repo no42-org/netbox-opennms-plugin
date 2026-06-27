@@ -44,12 +44,13 @@ def validate_profile(profile):
         result.errors.append(f"{label}: invalid Foreign Source name — {exc}")
 
     # Missing site/role → non-blocking warning (groups under no-site/no-role).
+    # The Foreign Source delimiter is '.' (AD-14 / Story 4.4 — ':' is forbidden).
     if foreign_source is not None:
-        if ":no-site:" in foreign_source:
+        if ".no-site." in foreign_source:
             result.warnings.append(
                 f"{label}: no site — will group under a 'no-site' Foreign Source."
             )
-        if foreign_source.endswith(":no-role"):
+        if foreign_source.endswith(".no-role"):
             result.warnings.append(
                 f"{label}: no role — will group under a 'no-role' Foreign Source."
             )

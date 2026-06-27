@@ -93,21 +93,29 @@ class OpenNMSClientTest(SimpleTestCase):
         self.assertEqual(mock_request.call_args.kwargs["data"], b"<model-import/>")
 
     @mock.patch.object(requests.Session, "request")
-    def test_import_requisition_encodes_fs_and_passes_rescan(self, mock_request):
+    def test_import_requisition_builds_path_and_passes_rescan(self, mock_request):
         # 202 ACCEPTED is the real OpenNMS import response — it must be success.
         mock_request.return_value = mock.Mock(status_code=202, ok=True)
-        _client().import_requisition("netbox:raleigh:router", rescan_existing="false")
+        _client().import_requisition("netbox.raleigh.router", rescan_existing="false")
         method, url = mock_request.call_args.args
         self.assertEqual(method, "PUT")
-        # ':' in the Foreign Source name is percent-encoded in the path.
+        # The Foreign Source is URL-quoted into the path (dots are URL-safe).
         self.assertEqual(
             url,
             "https://onms.example/opennms/rest/requisitions/"
-            "netbox%3Araleigh%3Arouter/import",
+            "netbox.raleigh.router/import",
         )
         self.assertEqual(
             mock_request.call_args.kwargs["params"], {"rescanExisting": "false"}
         )
+
+    @mock.patch.object(requests.Session, "request")
+    def test_import_requisition_encodes_unsafe_chars(self, mock_request):
+        # The client still percent-encodes any unsafe char it's handed (defensive).
+        mock_request.return_value = mock.Mock(status_code=202, ok=True)
+        _client().import_requisition("a/b c", rescan_existing="false")
+        _, url = mock_request.call_args.args
+        self.assertTrue(url.endswith("/rest/requisitions/a%2Fb%20c/import"))
 
     @mock.patch.object(requests.Session, "request")
     def test_list_locations_parses_dict_form(self, mock_request):

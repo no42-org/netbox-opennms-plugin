@@ -30,7 +30,7 @@ from netbox_opennms.translation import (
     render_requisition,
 )
 
-FS = "netbox:raleigh:router"
+FS = "netbox.raleigh.router"
 
 
 class SyncForeignSourceJobTest(TestCase):
@@ -213,7 +213,7 @@ class SyncForeignSourceJobTest(TestCase):
         # render-and-replaces the OLD FS (now empty) then the NEW FS (with node).
         client = mock_from_config.return_value.__enter__.return_value
         client.import_requisition.return_value = mock.Mock(status_code=202)
-        old_fs = "netbox:durham:router"
+        old_fs = "netbox.durham.router"
         MonitoringProfile.objects.filter(pk=self.profile.pk).update(
             last_synced_foreign_source=old_fs
         )
@@ -244,7 +244,7 @@ class SyncForeignSourceJobTest(TestCase):
         # re-renders that sibling only (moved node absent).
         client = mock_from_config.return_value.__enter__.return_value
         client.import_requisition.return_value = mock.Mock(status_code=202)
-        old_fs = "netbox:durham:router"
+        old_fs = "netbox.durham.router"
         role = DeviceRole.objects.get(slug="router")
         dt = DeviceType.objects.get(slug="m1")
         durham = Site.objects.create(name="Durham", slug="durham")
@@ -286,10 +286,10 @@ class SyncForeignSourceJobTest(TestCase):
         MonitoringProfile.objects.create(
             assigned_object=rtr2,
             management_ip=ip2,
-            last_synced_foreign_source="netbox:durham:router",
+            last_synced_foreign_source="netbox.durham.router",
         )
         MonitoringProfile.objects.filter(pk=self.profile.pk).update(
-            last_synced_foreign_source="netbox:cary:router"
+            last_synced_foreign_source="netbox.cary.router"
         )
 
         self._runner().run(foreign_source=FS)
@@ -297,7 +297,7 @@ class SyncForeignSourceJobTest(TestCase):
         imported = [c.args[0] for c in client.import_requisition.call_args_list]
         # Both old FSs reconciled (empty) before the new FS, names sorted.
         self.assertEqual(
-            imported, ["netbox:cary:router", "netbox:durham:router", FS]
+            imported, ["netbox.cary.router", "netbox.durham.router", FS]
         )
         locked = [c.args[0] for c in mock_lock.call_args_list]
         self.assertEqual(locked, sorted(locked))
@@ -330,14 +330,14 @@ class SyncForeignSourceJobTest(TestCase):
         # self.profile moves OUT of durham → triggers the durham old-FS leg, which
         # re-renders {zed} and must stamp zed.last_synced = durham.
         MonitoringProfile.objects.filter(pk=self.profile.pk).update(
-            last_synced_foreign_source="netbox:durham:router"
+            last_synced_foreign_source="netbox.durham.router"
         )
 
         self._runner().run(foreign_source=FS)
 
         zed_profile.refresh_from_db()
         self.assertEqual(
-            zed_profile.last_synced_foreign_source, "netbox:durham:router"
+            zed_profile.last_synced_foreign_source, "netbox.durham.router"
         )
 
     @mock.patch("netbox_opennms.jobs.advisory_lock")
@@ -348,7 +348,7 @@ class SyncForeignSourceJobTest(TestCase):
         # AC3: if the NEW-FS import fails after the OLD-FS leg succeeded,
         # last_synced is NOT advanced, so the next Sync retries the whole move.
         client = mock_from_config.return_value.__enter__.return_value
-        old_fs = "netbox:durham:router"
+        old_fs = "netbox.durham.router"
         MonitoringProfile.objects.filter(pk=self.profile.pk).update(
             last_synced_foreign_source=old_fs
         )
@@ -493,7 +493,7 @@ class SyncForeignSourceJobTest(TestCase):
 
         self.assertEqual(
             enabled_foreign_sources(),
-            ["netbox:durham:router", "netbox:raleigh:router"],
+            ["netbox.durham.router", "netbox.raleigh.router"],
         )
 
     def test_enabled_profiles_for_filters_by_fs_and_enabled(self):

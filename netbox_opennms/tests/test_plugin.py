@@ -24,7 +24,9 @@ class PluginConfigTestCase(SimpleTestCase):
         self.assertEqual(NetBoxOpenNMSConfig.version, __version__)
 
     def test_min_version_pinned_to_46(self):
-        self.assertEqual(NetBoxOpenNMSConfig.min_version, "4.6.0")
+        # 4.6.1 floor — the no-worker warning uses any_workers_for_queue (added
+        # in 4.6.1; absent in 4.6.0).
+        self.assertEqual(NetBoxOpenNMSConfig.min_version, "4.6.1")
 
     def test_config_defaults_resolve(self):
         self.assertEqual(get_plugin_config("netbox_opennms", "import_mode"), "false")

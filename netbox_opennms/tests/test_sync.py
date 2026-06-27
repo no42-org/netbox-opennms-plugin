@@ -70,3 +70,64 @@ class MonitoringProfileSyncViewTest(TestCase):
         response = self.client.post(url, follow=True)
         mock_enqueue.assert_not_called()
         self.assertContains(response, "not a Device or VirtualMachine")
+
+    @mock.patch("netbox_opennms.views.any_workers_for_queue", return_value=False)
+    @mock.patch("netbox_opennms.views.SyncForeignSourceJob.enqueue_sync")
+    def test_sync_warns_when_no_worker(self, mock_enqueue, _no_worker):
+        # AD-16: warn but do NOT block — the job is still enqueued.
+        mock_enqueue.return_value = mock.Mock(pk=7)
+        self.client.force_login(self.superuser)
+        response = self.client.post(self._url(), follow=True)
+        mock_enqueue.assert_called_once()
+        self.assertContains(response, "No background worker is running")
+
+    @mock.patch("netbox_opennms.views.any_workers_for_queue", return_value=True)
+    @mock.patch("netbox_opennms.views.SyncForeignSourceJob.enqueue_sync")
+    def test_sync_no_warning_when_worker_present(self, mock_enqueue, _worker):
+        mock_enqueue.return_value = mock.Mock(pk=7)
+        self.client.force_login(self.superuser)
+        response = self.client.post(self._url(), follow=True)
+        self.assertContains(response, "Sync submitted for")
+        self.assertNotContains(response, "No background worker is running")
+
+    @mock.patch("netbox_opennms.views.any_workers_for_queue", return_value=False)
+    def test_detail_shows_worker_warning(self, _no_worker):
+        self.client.force_login(self.superuser)
+        url = reverse(
+            "plugins:netbox_opennms:monitoringprofile", args=[self.profile.pk]
+        )
+        self.assertContains(self.client.get(url), "No background worker is running")
+
+    @mock.patch("netbox_opennms.views.any_workers_for_queue", return_value=True)
+    def test_detail_no_warning_when_worker_present(self, _worker):
+        self.client.force_login(self.superuser)
+        url = reverse(
+            "plugins:netbox_opennms:monitoringprofile", args=[self.profile.pk]
+        )
+        self.assertNotContains(self.client.get(url), "No background worker is running")
+
+    @mock.patch(
+        "netbox_opennms.views.any_workers_for_queue",
+        side_effect=Exception("broker down"),
+    )
+    def test_detail_warns_and_renders_when_probe_errors(self, _boom):
+        # AD-16: a failed probe must not break the page; the new policy warns on
+        # uncertainty rather than hiding the warning.
+        self.client.force_login(self.superuser)
+        url = reverse(
+            "plugins:netbox_opennms:monitoringprofile", args=[self.profile.pk]
+        )
+        self.assertContains(self.client.get(url), "No background worker is running")
+
+    @mock.patch(
+        "netbox_opennms.views.any_workers_for_queue",
+        side_effect=Exception("broker down"),
+    )
+    @mock.patch("netbox_opennms.views.SyncForeignSourceJob.enqueue_sync")
+    def test_sync_still_enqueues_when_probe_errors(self, mock_enqueue, _boom):
+        # AD-16: never block — a probe error doesn't stop the enqueue.
+        mock_enqueue.return_value = mock.Mock(pk=9)
+        self.client.force_login(self.superuser)
+        response = self.client.post(self._url(), follow=True)
+        mock_enqueue.assert_called_once()
+        self.assertEqual(response.status_code, 200)

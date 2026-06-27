@@ -7,6 +7,7 @@ from django.contrib.auth.mixins import LoginRequiredMixin, PermissionRequiredMix
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.generic import View
 from netbox.views import generic
+from utilities.rqworker import any_workers_for_queue
 
 from . import filtersets, forms, tables
 from .client import OpenNMSClient, OpenNMSError
@@ -14,9 +15,31 @@ from .derivation import foreign_source_for
 from .jobs import SyncForeignSourceJob
 from .models import MonitoringProfile
 
+# Sync jobs are enqueued without an instance, so they run on the default RQ
+# queue (get_queue_for_model(None) -> RQ_QUEUE_DEFAULT). FR-13 / AD-16.
+SYNC_QUEUE = "default"
+
+
+def _no_worker_running():
+    """True if no live RQ worker is servicing the Sync queue (best-effort, AD-16).
+
+    Never raises into the page/action (AD-16). If the liveness probe itself fails
+    (broker unreachable), warn rather than stay silent — we can't confirm a worker
+    is running, and that uncertainty is exactly what FR-13 surfaces.
+    """
+    try:
+        return not any_workers_for_queue(SYNC_QUEUE)
+    except Exception:
+        return True
+
 
 class MonitoringProfileView(generic.ObjectView):
     queryset = MonitoringProfile.objects.all()
+
+    def get_extra_context(self, request, instance):
+        # Surface the no-worker warning on the detail page (AC2); derived live so
+        # it clears automatically once a worker starts (AC3).
+        return {"no_worker_warning": _no_worker_running()}
 
 
 class MonitoringProfileListView(generic.ObjectListView):
@@ -78,6 +101,8 @@ class MonitoringProfileSyncView(PermissionRequiredMixin, View):
             request,
             f"Sync submitted for Foreign Source {foreign_source} (job #{job.pk}).",
         )
+        # The no-worker warning is surfaced by the detail page's banner (shown on
+        # the redirect target and on every view) — no duplicate flash here.
         return redirect(profile.get_absolute_url())
 
 

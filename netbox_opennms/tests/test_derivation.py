@@ -94,7 +94,7 @@ class ForeignSourceNameValidationTest(SimpleTestCase):
         )
 
     def test_forbidden_characters_rejected(self):
-        # ':' is forbidden by OpenNMS (Horizon 35 400s on import) — Story 4.4.
+        # ':' is forbidden by OpenNMS (it 400s on import) — Story 4.4.
         for bad in ["a/b", "a\\b", "a?b", "a*b", "a'b", 'a"b', "a:b"]:
             with self.assertRaises(ValueError):
                 validate_foreign_source_name(bad)

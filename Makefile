@@ -3,7 +3,7 @@
 .PHONY: help test makemigrations regen-counts lint verify build integration clean
 
 COMPOSE := docker compose -f compose.yml
-# Integration overlay adds a disposable OpenNMS Horizon 35 (slow boot).
+# Integration overlay adds a disposable OpenNMS Horizon 36 (slow boot).
 INTEGRATION := docker compose -f compose.yml -f compose.integration.yml
 # Pinned ruff image so lint matches CI without a host install.
 RUFF := ghcr.io/astral-sh/ruff:0.15.20
@@ -42,7 +42,7 @@ build: ## Build the wheel + sdist into dist/ (pinned Python image)
 		sh -c 'pip install --quiet build && python -m build && \
 		chown -R $(OWNER) dist build *.egg-info 2>/dev/null || true'
 
-integration: ## Live OpenNMS Horizon 35 round-trip (slow; boots OpenNMS)
+integration: ## Live OpenNMS Horizon 36 round-trip (slow; boots OpenNMS)
 	$(INTEGRATION) run --rm netbox \
 		'$(PY) manage.py test netbox_opennms.tests.test_integration -v2'; \
 		rc=$$?; $(INTEGRATION) down -v; exit $$rc

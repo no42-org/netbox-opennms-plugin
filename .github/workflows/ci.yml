@@ -55,7 +55,7 @@ jobs:
           PY
 
   integration:
-    name: Live OpenNMS Horizon 35 round-trip
+    name: Live OpenNMS Horizon 36 round-trip
     runs-on: ubuntu-latest
     # Bound the run — OpenNMS boot is slow and the healthcheck can loop a while.
     timeout-minutes: 30

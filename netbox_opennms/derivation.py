@@ -22,7 +22,7 @@ from dcim.models import Device, Site
 from virtualization.models import VirtualMachine
 
 # Characters OpenNMS forbids in a Foreign Source (requisition) name. ':' is
-# forbidden too — Horizon 35 rejects it on import with HTTP 400 (caught by the
+# forbidden too — OpenNMS rejects it on import with HTTP 400 (caught by the
 # Story 4.4 live round-trip), which is why the delimiter below is '.'.
 _FORBIDDEN_CHARS = set("/\\?*'\":")
 

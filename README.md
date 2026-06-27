@@ -1,7 +1,7 @@
 # netbox-opennms-plugin
 
 A [NetBox](https://netboxlabs.com/) plugin that provisions NetBox devices and
-virtual machines into [OpenNMS](https://www.opennms.com/) (Horizon 35) via the
+virtual machines into [OpenNMS](https://www.opennms.com/) (Horizon 36) via the
 OpenNMS REST provisioning API. NetBox is the source of truth; OpenNMS monitoring
 is a derived artifact kept in sync from NetBox intent.
 
@@ -18,7 +18,7 @@ re-syncing is idempotent and never duplicates a node.
 | --- | --- |
 | NetBox | 4.6.1+ |
 | Python | 3.12+ |
-| OpenNMS | Horizon 35 |
+| OpenNMS | Horizon 36 |
 | License | Apache-2.0 |
 
 ## Installation
@@ -118,7 +118,7 @@ make verify          # ruff lint + full test suite
 make test            # tests only
 make makemigrations  # generate + verify migrations
 make build           # build the wheel + sdist into dist/
-make integration     # live round-trip against a disposable OpenNMS Horizon 35
+make integration     # live round-trip against a disposable OpenNMS Horizon 36
 ```
 
 CI (GitHub Actions, `.github/workflows/ci.yml`) runs `make verify` (matrixed over

@@ -1,12 +1,12 @@
 # Copyright 2026 Ronny Trommer <ronny@no42.org>
 # SPDX-License-Identifier: Apache-2.0
-"""Live OpenNMS Horizon 35 round-trip (Story 4.4) — SKIPPED unless an endpoint is
+"""Live OpenNMS Horizon 36 round-trip (Story 4.4) — SKIPPED unless an endpoint is
 configured.
 
 Set ``OPENNMS_LIVE_URL`` (+ ``OPENNMS_LIVE_USERNAME`` / ``OPENNMS_LIVE_PASSWORD``)
 to run a real import round-trip against a disposable OpenNMS. With nothing set the
 class is skipped, so ``make verify`` stays green without OpenNMS. The live job runs
-this via ``make integration`` / the nightly CI workflow against a throwaway H35.
+this via ``make integration`` / the nightly CI workflow against a throwaway H36.
 
 It validates that OpenNMS accepts our rendered XML (XSD-valid), provisions the
 node, and places it in the expected monitoring ``location`` (read back from the

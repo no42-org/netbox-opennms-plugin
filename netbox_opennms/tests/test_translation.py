@@ -64,6 +64,32 @@ class RenderRequisitionTest(TestCase):
         self.assertEqual(iface.get("ip-addr"), "10.0.0.1")
         self.assertEqual(iface.get("snmp-primary"), "P")
 
+    def test_multiple_profiles_render_as_distinct_nodes(self):
+        # FS-level render (what the job pushes): two profiles in one Foreign
+        # Source → two <node> with distinct foreign-ids in one <model-import>.
+        site = Site.objects.get(slug="raleigh")
+        role = DeviceRole.objects.get(slug="router")
+        device_type = DeviceType.objects.get(slug="model-1")
+        rtr2 = Device.objects.create(
+            name="rtr-2", device_type=device_type, role=role, site=site
+        )
+        profile2 = MonitoringProfile.objects.create(
+            assigned_object=rtr2,
+            management_ip=IPAddress.objects.create(address="10.0.0.9/24"),
+        )
+
+        xml = render_requisition("netbox:raleigh:router", [self.profile, profile2])
+        root = etree.fromstring(xml)
+        nodes = root.findall(_q(MODEL_IMPORT_NS, "node"))
+        self.assertEqual(len(nodes), 2)
+        self.assertEqual(
+            {n.get("node-label") for n in nodes}, {"rtr-1", "rtr-2"}
+        )
+        self.assertEqual(
+            {n.get("foreign-id") for n in nodes},
+            {f"device-{self.device.pk}", f"device-{rtr2.pk}"},
+        )
+
     def _interfaces(self, xml):
         root = etree.fromstring(xml)
         node = root.find(_q(MODEL_IMPORT_NS, "node"))

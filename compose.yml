@@ -20,7 +20,9 @@ services:
     image: redis:7-alpine
 
   netbox:
-    image: netboxcommunity/netbox:v4.6
+    # NETBOX_VERSION lets CI matrix over supported tags; default keeps local runs
+    # on the pinned line.
+    image: netboxcommunity/netbox:${NETBOX_VERSION:-v4.6}
     depends_on:
       postgres:
         condition: service_healthy

@@ -118,7 +118,14 @@ make verify          # ruff lint + full test suite
 make test            # tests only
 make makemigrations  # generate + verify migrations
 make build           # build the wheel + sdist into dist/
+make integration     # live round-trip against a disposable OpenNMS Horizon 35
 ```
+
+CI (GitHub Actions, `.github/workflows/ci.yml`) runs `make verify` (matrixed over
+the supported NetBox version) and `make build` (asserting the wheel ships its
+templates) on every PR. The live `make integration` round-trip runs nightly /
+on demand — it boots a throwaway OpenNMS and is skipped by `make verify` unless
+`OPENNMS_LIVE_URL` is set, so the unit suite never depends on OpenNMS.
 
 `make` targets run NetBox in a throwaway Postgres/Redis container, so no local
 NetBox install is needed. Set `DEVELOPER = True` in NetBox's `configuration.py`

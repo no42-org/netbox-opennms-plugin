@@ -1,4 +1,4 @@
-# Integration overlay (Story 4.4): adds a disposable OpenNMS Horizon 35 to the
+# Integration overlay (Story 4.4): adds a disposable OpenNMS Horizon 36 to the
 # base test stack and points the netbox test container at it. Used by
 # `make integration` (and the nightly CI job) for the live round-trip — it is NOT
 # part of `make verify`. Boot is slow (OpenNMS is a Java app + schema init), so
@@ -20,7 +20,7 @@ services:
       retries: 30
 
   opennms:
-    image: opennms/horizon:35.0.0
+    image: opennms/horizon:36.0.1
     depends_on:
       opennms-db:
         condition: service_healthy

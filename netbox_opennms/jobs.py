@@ -67,6 +67,25 @@ def enabled_profiles_for(foreign_source):
     return profiles
 
 
+def enabled_foreign_sources():
+    """The sorted set of distinct Foreign Sources across all enabled profiles.
+
+    One scan, same target guard as ``enabled_profiles_for`` (skip ``None`` /
+    non-Device-VM). Used by the bulk / "Sync all" actions to fan out one job per
+    Foreign Source (AD-5: render-and-replace is per whole Foreign Source).
+    """
+    foreign_sources = set()
+    for profile in MonitoringProfile.objects.filter(enabled=True):
+        target = profile.assigned_object
+        if target is None:
+            continue
+        try:
+            foreign_sources.add(foreign_source_for(target))
+        except TypeError:
+            continue
+    return sorted(foreign_sources)
+
+
 class SyncForeignSourceJob(JobRunner):
     """Render-and-replace one Foreign Source against OpenNMS, serialized per FS."""
 

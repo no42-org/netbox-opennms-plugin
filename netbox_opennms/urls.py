@@ -20,6 +20,16 @@ urlpatterns = (
         name="monitoringprofile_add",
     ),
     path(
+        "monitoring-profiles/sync-all/",
+        views.MonitoringProfileSyncAllView.as_view(),
+        name="monitoringprofile_sync_all",
+    ),
+    path(
+        "monitoring-profiles/sync-selected/",
+        views.MonitoringProfileBulkSyncView.as_view(),
+        name="monitoringprofile_bulk_sync",
+    ),
+    path(
         "monitoring-profiles/delete/",
         views.MonitoringProfileBulkDeleteView.as_view(),
         name="monitoringprofile_bulk_delete",

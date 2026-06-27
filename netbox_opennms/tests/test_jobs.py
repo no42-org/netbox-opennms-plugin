@@ -18,7 +18,11 @@ from django.test import TestCase
 from ipam.models import IPAddress
 
 from netbox_opennms.client import OpenNMSHTTPError
-from netbox_opennms.jobs import SyncForeignSourceJob, enabled_profiles_for
+from netbox_opennms.jobs import (
+    SyncForeignSourceJob,
+    enabled_foreign_sources,
+    enabled_profiles_for,
+)
 from netbox_opennms.models import MonitoringProfile
 from netbox_opennms.translation import (
     render_foreign_source_definition,
@@ -398,6 +402,48 @@ class SyncForeignSourceJobTest(TestCase):
         MonitoringProfile.objects.filter(pk=self.profile.pk).update(enabled=True)
         after = render_requisition(FS, enabled_profiles_for(FS))
         self.assertEqual(before, after)
+
+    def test_enabled_foreign_sources_distinct_sorted(self):
+        # Distinct sorted FSs across enabled profiles; same-FS profiles collapse,
+        # disabled and non-Device/VM profiles are excluded.
+        role = DeviceRole.objects.get(slug="router")
+        dt = DeviceType.objects.get(slug="m1")
+        raleigh = Site.objects.get(slug="raleigh")
+        durham = Site.objects.create(name="Durham", slug="durham")
+        # Second enabled device in the SAME FS as self.profile (collapses to one).
+        twin = Device.objects.create(
+            name="rtr-2", device_type=dt, role=role, site=raleigh
+        )
+        MonitoringProfile.objects.create(
+            assigned_object=twin,
+            management_ip=IPAddress.objects.create(address="10.0.0.2/24"),
+        )
+        # A device in a different FS.
+        far = Device.objects.create(
+            name="rtr-3", device_type=dt, role=role, site=durham
+        )
+        MonitoringProfile.objects.create(
+            assigned_object=far,
+            management_ip=IPAddress.objects.create(address="10.0.1.3/24"),
+        )
+        # Disabled (excluded) and a non-Device/VM target (skipped).
+        off = Device.objects.create(
+            name="rtr-4", device_type=dt, role=role, site=durham
+        )
+        MonitoringProfile.objects.create(
+            assigned_object=off,
+            enabled=False,
+            management_ip=IPAddress.objects.create(address="10.0.1.4/24"),
+        )
+        MonitoringProfile.objects.create(
+            assigned_object=raleigh,  # a Site, not a Device/VM
+            management_ip=IPAddress.objects.create(address="10.9.9.9/24"),
+        )
+
+        self.assertEqual(
+            enabled_foreign_sources(),
+            ["netbox:durham:router", "netbox:raleigh:router"],
+        )
 
     def test_enabled_profiles_for_filters_by_fs_and_enabled(self):
         role = DeviceRole.objects.get(slug="router")

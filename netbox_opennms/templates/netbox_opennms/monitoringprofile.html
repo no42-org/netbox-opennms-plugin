@@ -11,6 +11,16 @@
         <i class="mdi mdi-sync"></i> Sync to OpenNMS
       </button>
     </form>
+    <form method="post" action="{% url 'plugins:netbox_opennms:monitoringprofile_remove' pk=object.pk %}" class="d-inline">
+      {% csrf_token %}
+      <button type="submit" class="btn btn-sm btn-danger">
+        <i class="mdi mdi-trash-can-outline"></i> Remove from OpenNMS
+      </button>
+    </form>
+    <small class="d-block text-muted mt-1">
+      Sync republishes the entire Foreign Source — every enabled Device/VM in this
+      role + site group, not just this object.
+    </small>
   {% endif %}
 {% endblock %}
 

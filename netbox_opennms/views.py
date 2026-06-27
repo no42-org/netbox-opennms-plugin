@@ -4,7 +4,10 @@
 
 from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin, PermissionRequiredMixin
+from django.db import transaction
 from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import reverse
+from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.generic import View
 from netbox.views import generic
 from utilities.rqworker import any_workers_for_queue
@@ -12,7 +15,11 @@ from utilities.rqworker import any_workers_for_queue
 from . import filtersets, forms, tables
 from .client import OpenNMSClient, OpenNMSError
 from .derivation import foreign_source_for
-from .jobs import SyncForeignSourceJob, enabled_profiles_for
+from .jobs import (
+    SyncForeignSourceJob,
+    enabled_foreign_sources,
+    enabled_profiles_for,
+)
 from .models import MonitoredService, MonitoringProfile
 from .validation import validate_foreign_source
 
@@ -47,6 +54,8 @@ class MonitoringProfileListView(generic.ObjectListView):
     queryset = MonitoringProfile.objects.all()
     table = tables.MonitoringProfileTable
     filterset = filtersets.MonitoringProfileFilterSet
+    # Adds the "Sync all" / "Sync selected" buttons (Story 3.3).
+    template_name = "netbox_opennms/monitoringprofile_list.html"
 
 
 class MonitoringProfileEditView(generic.ObjectEditView):
@@ -142,6 +151,143 @@ class MonitoringProfileSyncView(PermissionRequiredMixin, View):
         # The no-worker warning is surfaced by the detail page's banner (shown on
         # the redirect target and on every view) — no duplicate flash here.
         return redirect(profile.get_absolute_url())
+
+
+class MonitoringProfileRemoveView(PermissionRequiredMixin, View):
+    """Remove a node from OpenNMS: clear intent (disable) + render-and-replace.
+
+    Disabling the profile drops it from the FS render, so the node is deleted on
+    import (AD-5). Uses the same job as Sync with allow_empty=True so removing the
+    last node pushes the (intentional) empty requisition.
+
+    Unlike Sync, this skips the *view's* pre-flight validation so the action isn't
+    blocked at submit time by the whole-FS gate. Removing the LAST node always
+    succeeds (an empty Foreign Source validates clean). A non-last remove still
+    re-renders the surviving siblings (render-and-replace can't push a partial
+    FS), so an invalid/un-renderable sibling will fail that job — the outcome
+    lives on the Job (AD-12 honest status), not a request-time error.
+    """
+
+    permission_required = "netbox_opennms.change_monitoringprofile"
+
+    def post(self, request, pk):
+        profile = get_object_or_404(MonitoringProfile, pk=pk)
+        target = profile.assigned_object
+        if target is None:
+            messages.error(
+                request, "This profile has no assigned object and cannot be removed."
+            )
+            return redirect(profile.get_absolute_url())
+        try:
+            foreign_source = foreign_source_for(target)
+        except TypeError:
+            messages.error(
+                request,
+                "This profile's object is not a Device or VirtualMachine.",
+            )
+            return redirect(profile.get_absolute_url())
+
+        # Clear intent and enqueue atomically: if the enqueue raises, the disable
+        # rolls back so we never strand a disabled profile with no job.
+        with transaction.atomic():
+            profile.enabled = False
+            profile.save()
+            job = SyncForeignSourceJob.enqueue_sync(
+                foreign_source, user=request.user, allow_empty=True
+            )
+        messages.success(
+            request,
+            f"Remove submitted for Foreign Source {foreign_source} (job #{job.pk}).",
+        )
+        return redirect(profile.get_absolute_url())
+
+
+class MonitoringProfileSyncAllView(PermissionRequiredMixin, View):
+    """Enqueue a Sync for every Foreign Source that has an enabled profile (FR-9).
+
+    Fans out one ``SyncForeignSourceJob`` per distinct Foreign Source (AD-5:
+    render-and-replace is per whole Foreign Source). Like Remove, it skips the
+    Sync view's pre-flight validation so one broken Foreign Source can't block the
+    rest of the batch — each job validates itself and reports honest status
+    (AD-12). ``enqueue_sync`` coalesces redundant pending jobs per FS (AD-6).
+    """
+
+    permission_required = "netbox_opennms.change_monitoringprofile"
+
+    def post(self, request):
+        foreign_sources = enabled_foreign_sources()
+        for foreign_source in foreign_sources:
+            SyncForeignSourceJob.enqueue_sync(foreign_source, user=request.user)
+        if foreign_sources:
+            messages.success(
+                request,
+                f"Submitted {len(foreign_sources)} Foreign Source sync(s).",
+            )
+        else:
+            messages.info(request, "Nothing enabled to sync.")
+        return redirect("plugins:netbox_opennms:monitoringprofile_list")
+
+
+class MonitoringProfileBulkSyncView(PermissionRequiredMixin, View):
+    """Sync the Foreign Sources of the selected profiles (per-FS bulk, FR-9).
+
+    Groups the selected profiles by their derived Foreign Source and enqueues ONE
+    job per distinct Foreign Source (not one per profile) — render-and-replace is
+    per whole Foreign Source (AD-5), so three devices in the same role+site
+    collapse to a single requisition push. Non-Device/VM or unassigned selections
+    are skipped cleanly. No pre-flight validation (each job self-validates, AD-12).
+    """
+
+    permission_required = "netbox_opennms.change_monitoringprofile"
+
+    def post(self, request):
+        return_url = request.POST.get("return_url")
+        if not return_url or not url_has_allowed_host_and_scheme(
+            return_url, allowed_hosts={request.get_host()}
+        ):
+            return_url = reverse("plugins:netbox_opennms:monitoringprofile_list")
+
+        # Only enabled profiles are syncable intent — match Sync-all and the
+        # single Sync view (which refuses disabled profiles).
+        enabled = MonitoringProfile.objects.filter(enabled=True)
+        if request.POST.get("_all"):
+            # NetBox's "select all N matching query" toggle. The dedicated bulk
+            # endpoint doesn't receive the list's filter query, so this acts on
+            # every enabled profile (== Sync all) rather than silently syncing
+            # only the checked page (deferred: filter-scoped bulk sync).
+            profiles = enabled
+        else:
+            # Drop non-numeric pks defensively (crafted POST) instead of 500ing.
+            pks = [pk for pk in request.POST.getlist("pk") if pk.isdigit()]
+            profiles = enabled.filter(pk__in=pks)
+
+        foreign_sources = set()
+        matched = 0
+        for profile in profiles:
+            target = profile.assigned_object
+            if target is None:
+                continue
+            try:
+                foreign_sources.add(foreign_source_for(target))
+            except TypeError:
+                # Non-Device/VM target (limit_choices_to is form-only) — skip it.
+                continue
+            matched += 1
+
+        for foreign_source in sorted(foreign_sources):
+            SyncForeignSourceJob.enqueue_sync(foreign_source, user=request.user)
+
+        if foreign_sources:
+            messages.success(
+                request,
+                f"Submitted {len(foreign_sources)} Foreign Source sync(s) for "
+                f"{matched} profile(s).",
+            )
+        else:
+            messages.warning(
+                request, "No syncable, enabled Device/VM profiles were selected."
+            )
+        return redirect(return_url)
 
 
 class OpenNMSConnectionTestView(LoginRequiredMixin, View):

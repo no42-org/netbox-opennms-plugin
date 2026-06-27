@@ -63,6 +63,14 @@ class MonitoringProfile(NetBoxModel):
     # OpenNMS Monitoring Location (which Minion polls the node). Empty falls back
     # to the configured default location at render time (AD-9/AD-13).
     location = models.CharField(max_length=255, blank=True, default="")
+    # The Foreign Source this node was last successfully imported into (AD-10).
+    # Job-owned bookkeeping, not user intent: the sync job sets it after a
+    # successful import so a later role/site change (which alters the *derived*
+    # Foreign Source) is detected as a move and the node is relocated, never
+    # orphaned or duplicated (FR-14). Empty means "never synced" (first sync).
+    last_synced_foreign_source = models.CharField(
+        max_length=255, blank=True, default=""
+    )
 
     class Meta:
         ordering = ("pk",)

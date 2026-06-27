@@ -23,7 +23,7 @@ from netbox.jobs import JobRunner
 from netbox.plugins import get_plugin_config
 
 from .client import OpenNMSClient, OpenNMSError
-from .derivation import foreign_source_for
+from .derivation import foreign_source_for, validate_location_name
 from .models import MonitoringProfile
 from .translation import (
     RenderError,
@@ -112,9 +112,18 @@ class SyncForeignSourceJob(JobRunner):
                 )
                 return
 
+            default_location = get_plugin_config(PLUGIN_NAME, "default_location")
+            if default_location:
+                try:
+                    validate_location_name(default_location)
+                except ValueError as exc:
+                    self.logger.error(f"Configured default_location is invalid: {exc}")
+                    raise JobFailed() from exc
             try:
                 fs_xml = render_foreign_source_definition(foreign_source)
-                requisition_xml = render_requisition(foreign_source, profiles)
+                requisition_xml = render_requisition(
+                    foreign_source, profiles, default_location=default_location
+                )
             except RenderError as exc:
                 self.logger.error(f"Cannot render {foreign_source}: {exc}")
                 raise JobFailed() from exc

@@ -263,6 +263,44 @@ class MonitoringProfileFormTest(MonitoringProfileTestData, TestCase):
         )
         self.assertTrue(serializer.is_valid(), serializer.errors)
 
+    def test_invalid_location_rejected(self):
+        ip = IPAddress.objects.create(address="10.0.0.50/24")
+        form = MonitoringProfileForm(
+            data={
+                "device": self.device.pk,
+                "management_ip": ip.pk,
+                "location": "bad name",
+                "enabled": True,
+            }
+        )
+        self.assertFalse(form.is_valid())
+        self.assertIn("location", form.errors)
+
+    def test_valid_location_saves(self):
+        ip = IPAddress.objects.create(address="10.0.0.51/24")
+        form = MonitoringProfileForm(
+            data={
+                "device": self.device.pk,
+                "management_ip": ip.pk,
+                "location": "RDU.1",
+                "enabled": True,
+            }
+        )
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertEqual(form.save().location, "RDU.1")
+
+    def test_serializer_rejects_invalid_location(self):
+        serializer = MonitoringProfileSerializer(
+            data={
+                "assigned_object_type": "dcim.device",
+                "assigned_object_id": self.device.pk,
+                "location": "bad name",
+                "enabled": True,
+            }
+        )
+        self.assertFalse(serializer.is_valid())
+        self.assertIn("location", serializer.errors)
+
 
 class MonitoredServiceTest(MonitoringProfileTestData, TestCase):
     def _profile_with_ips(self):

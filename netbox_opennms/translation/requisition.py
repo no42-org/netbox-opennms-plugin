@@ -55,7 +55,7 @@ def _add_services(interface_el, names):
         service.set("service-name", name)
 
 
-def render_requisition(foreign_source, profiles, date_stamp=None):
+def render_requisition(foreign_source, profiles, date_stamp=None, default_location=""):
     """Render the complete ``model-import`` requisition for one Foreign Source.
 
     ``foreign_source`` is the already-derived name (from ``foreign_source_for`` —
@@ -101,6 +101,12 @@ def render_requisition(foreign_source, profiles, date_stamp=None):
         node = etree.SubElement(root, f"{{{MODEL_IMPORT_NS}}}node")
         node.set("node-label", target.name)
         node.set("foreign-id", foreign_id)
+
+        # Monitoring location: the profile's, else the configured default (passed
+        # in for purity, AD-3). Empty means OpenNMS's built-in Default location.
+        location = profile.location or default_location
+        if location:
+            node.set("location", location)
 
         # Services grouped by the interface IP they run on (AD-15).
         services_by_ip = defaultdict(list)

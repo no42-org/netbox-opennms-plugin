@@ -9,6 +9,7 @@ from django.urls import reverse
 from netbox.models import NetBoxModel
 
 from .choices import ServiceChoices
+from .derivation import validate_location_name
 
 # A Monitoring Profile may be assigned to a Device or a VirtualMachine.
 ASSIGNMENT_MODELS = models.Q(
@@ -59,6 +60,9 @@ class MonitoringProfile(NetBoxModel):
         related_name="+",
         blank=True,
     )
+    # OpenNMS Monitoring Location (which Minion polls the node). Empty falls back
+    # to the configured default location at render time (AD-9/AD-13).
+    location = models.CharField(max_length=255, blank=True, default="")
 
     class Meta:
         ordering = ("pk",)
@@ -78,6 +82,13 @@ class MonitoringProfile(NetBoxModel):
 
     def get_absolute_url(self):
         return reverse("plugins:netbox_opennms:monitoringprofile", args=[self.pk])
+
+    def clean(self):
+        super().clean()
+        try:
+            validate_location_name(self.location)
+        except ValueError as exc:
+            raise ValidationError({"location": str(exc)}) from exc
 
 
 def profile_ip_pks(profile):

@@ -8,6 +8,7 @@ from netbox.api.serializers import NetBoxModelSerializer
 from rest_framework import serializers
 from utilities.api import get_serializer_for_model
 
+from ..derivation import validate_location_name
 from ..models import (
     ASSIGNMENT_MODELS,
     MonitoredService,
@@ -36,6 +37,7 @@ class MonitoringProfileSerializer(NetBoxModelSerializer):
             "assigned_object",
             "management_ip",
             "additional_ips",
+            "location",
             "enabled",
             "tags",
             "custom_fields",
@@ -43,6 +45,14 @@ class MonitoringProfileSerializer(NetBoxModelSerializer):
             "last_updated",
         )
         brief_fields = ("id", "url", "display", "enabled")
+
+    def validate_location(self, value):
+        # Serializers don't run Model.clean(); enforce the AD-9 name rule here.
+        try:
+            validate_location_name(value)
+        except ValueError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
+        return value
 
     def get_assigned_object(self, obj):
         if obj.assigned_object is None:

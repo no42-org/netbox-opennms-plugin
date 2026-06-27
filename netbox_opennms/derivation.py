@@ -16,11 +16,31 @@ related objects — callers in the render/sync paths should pass prefetched
 (``select_related``) instances to keep it query-free.
 """
 
+import re
+
 from dcim.models import Device, Site
 from virtualization.models import VirtualMachine
 
 # Characters OpenNMS forbids in a Foreign Source (requisition) name.
 _FORBIDDEN_CHARS = set("/\\?*'\"")
+
+# OpenNMS Monitoring Location names: ASCII alphanumeric plus '-' and '.' (AD-9).
+# \A...\Z (not ^...$) so a trailing newline is rejected, not accepted.
+_LOCATION_ALLOWED = re.compile(r"\A[A-Za-z0-9.-]*\Z")
+
+
+def validate_location_name(name):
+    """Raise ``ValueError`` if *name* is not a valid OpenNMS location name (AD-9).
+
+    An empty value is allowed (it means "use the default location"). Otherwise
+    only ASCII letters, digits, ``-`` and ``.`` are permitted.
+    """
+    if name and not _LOCATION_ALLOWED.match(name):
+        raise ValueError(
+            f"Location name {name!r} may contain only ASCII letters, digits, "
+            "'-' and '.'."
+        )
+    return name
 
 
 def validate_foreign_source_name(name):

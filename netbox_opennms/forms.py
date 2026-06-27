@@ -59,6 +59,7 @@ class MonitoringProfileForm(NetBoxModelForm):
             "virtual_machine",
             "management_ip",
             "additional_ips",
+            "location",
             "enabled",
             "tags",
         )

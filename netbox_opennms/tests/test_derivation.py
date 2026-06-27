@@ -16,6 +16,7 @@ from virtualization.models import Cluster, ClusterType, VirtualMachine
 from netbox_opennms.derivation import (
     foreign_source_for,
     validate_foreign_source_name,
+    validate_location_name,
 )
 
 
@@ -96,3 +97,14 @@ class ForeignSourceNameValidationTest(SimpleTestCase):
         for bad in ["a/b", "a\\b", "a?b", "a*b", "a'b", 'a"b']:
             with self.assertRaises(ValueError):
                 validate_foreign_source_name(bad)
+
+
+class LocationNameValidationTest(SimpleTestCase):
+    def test_valid_names_pass(self):
+        for ok in ["", "Default", "RDU.1-edge", "loc-01"]:
+            self.assertEqual(validate_location_name(ok), ok)
+
+    def test_invalid_names_rejected(self):
+        for bad in ["bad name", "a/b", "héllo", "a_b", "a:b"]:
+            with self.assertRaises(ValueError):
+                validate_location_name(bad)

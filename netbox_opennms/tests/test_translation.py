@@ -150,6 +150,32 @@ class RenderRequisitionTest(TestCase):
         self.assertEqual(ifaces[0].get("snmp-primary"), "P")
         self.assertEqual(self._services(ifaces[0]), ["HTTP"])
 
+    def test_location_from_profile(self):
+        self.profile.location = "RDU.1-edge"
+        root = etree.fromstring(render_requisition("netbox:x:y", [self.profile]))
+        node = root.find(_q(MODEL_IMPORT_NS, "node"))
+        self.assertEqual(node.get("location"), "RDU.1-edge")
+
+    def test_location_falls_back_to_default(self):
+        root = etree.fromstring(
+            render_requisition("netbox:x:y", [self.profile], default_location="HQ")
+        )
+        node = root.find(_q(MODEL_IMPORT_NS, "node"))
+        self.assertEqual(node.get("location"), "HQ")
+
+    def test_no_location_attribute_when_unset(self):
+        root = etree.fromstring(render_requisition("netbox:x:y", [self.profile]))
+        node = root.find(_q(MODEL_IMPORT_NS, "node"))
+        self.assertIsNone(node.get("location"))
+
+    def test_profile_location_overrides_default(self):
+        self.profile.location = "PROFILE"
+        root = etree.fromstring(
+            render_requisition("netbox:x:y", [self.profile], default_location="DEFAULT")
+        )
+        node = root.find(_q(MODEL_IMPORT_NS, "node"))
+        self.assertEqual(node.get("location"), "PROFILE")
+
     def test_date_stamp_optional(self):
         without = etree.fromstring(render_requisition("netbox:x:y", [self.profile]))
         self.assertIsNone(without.get("date-stamp"))

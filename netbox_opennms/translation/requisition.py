@@ -29,14 +29,19 @@ class RenderError(Exception):
     """
 
 
-def _management_ip(profile):
-    """The bare management IP (no CIDR mask) for an interface ``ip-addr``.
+def _bare_ip(ip):
+    """The bare IP (no CIDR mask) for an interface ``ip-addr``.
 
     ``IPAddress.address`` may be a ``netaddr`` network or a plain string
     (in-memory, pre-DB-roundtrip); stripping the mask off the string form
     handles both.
     """
-    return str(profile.management_ip.address).split("/")[0]
+    return str(ip.address).split("/")[0]
+
+
+def _management_ip(profile):
+    """The bare management IP for the primary interface."""
+    return _bare_ip(profile.management_ip)
 
 
 def render_requisition(foreign_source, profiles, date_stamp=None):
@@ -86,9 +91,26 @@ def render_requisition(foreign_source, profiles, date_stamp=None):
         node.set("node-label", target.name)
         node.set("foreign-id", foreign_id)
 
+        primary_ip = _management_ip(profile)
         interface = etree.SubElement(node, f"{{{MODEL_IMPORT_NS}}}interface")
-        interface.set("ip-addr", _management_ip(profile))
+        interface.set("ip-addr", primary_ip)
         interface.set("snmp-primary", "P")
+
+        # Additional IPs as non-primary interfaces (AD-15). The renderer is the
+        # single interface-set authority: additional = additional_ips minus the
+        # management IP, deduped by bare IP — an IP appears at most once per node,
+        # and the management IP never also appears as an "N" (no duplicate P+N).
+        seen = {primary_ip}
+        # Sort by bare IP for deterministic, churn-free output (AD-3). Sorting the
+        # already-fetched .all() in Python keeps any prefetch_related effective.
+        for ip in sorted(profile.additional_ips.all(), key=_bare_ip):
+            bare = _bare_ip(ip)
+            if bare in seen:
+                continue
+            seen.add(bare)
+            extra = etree.SubElement(node, f"{{{MODEL_IMPORT_NS}}}interface")
+            extra.set("ip-addr", bare)
+            extra.set("snmp-primary", "N")
 
     return etree.tostring(root, xml_declaration=True, encoding="UTF-8")
 

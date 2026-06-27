@@ -42,7 +42,9 @@ def enabled_profiles_for(foreign_source):
     with ``last_synced_foreign_source`` in Story 3.2).
     """
     profiles = []
-    for profile in MonitoringProfile.objects.filter(enabled=True):
+    for profile in MonitoringProfile.objects.filter(enabled=True).prefetch_related(
+        "additional_ips"
+    ):
         target = profile.assigned_object
         if target is None:
             continue

@@ -8,7 +8,10 @@ from django.core.exceptions import ValidationError
 from django.utils.translation import gettext_lazy as _
 from ipam.models import IPAddress
 from netbox.forms import NetBoxModelForm
-from utilities.forms.fields import DynamicModelChoiceField
+from utilities.forms.fields import (
+    DynamicModelChoiceField,
+    DynamicModelMultipleChoiceField,
+)
 from virtualization.models import VirtualMachine
 
 from .models import MonitoringProfile
@@ -38,10 +41,27 @@ class MonitoringProfileForm(NetBoxModelForm):
         label=_("Management IP"),
         help_text=_("Defaults to the object's primary IP if left blank."),
     )
+    additional_ips = DynamicModelMultipleChoiceField(
+        queryset=IPAddress.objects.all(),
+        required=False,
+        label=_("Additional IPs"),
+        query_params={
+            "device_id": "$device",
+            "virtual_machine_id": "$virtual_machine",
+        },
+        help_text=_("Other IPs of this object to monitor as non-primary interfaces."),
+    )
 
     class Meta:
         model = MonitoringProfile
-        fields = ("device", "virtual_machine", "management_ip", "enabled", "tags")
+        fields = (
+            "device",
+            "virtual_machine",
+            "management_ip",
+            "additional_ips",
+            "enabled",
+            "tags",
+        )
 
     def __init__(self, *args, **kwargs):
         instance = kwargs.get("instance")
@@ -95,4 +115,30 @@ class MonitoringProfileForm(NetBoxModelForm):
                 }
             )
         self.cleaned_data["management_ip"] = management_ip
+
+        # Additional IPs must belong to the monitored object (AD-15) and must not
+        # duplicate the management IP (which is the primary "P" interface).
+        additional = self.cleaned_data.get("additional_ips")
+        if additional:
+            # Drop the management IP first — it's the lone primary (no duplicate
+            # P+N), and it may legitimately be off the object's interfaces
+            # (Story 1.3), so excluding it before the membership check avoids a
+            # false "not assigned" error.
+            additional = [ip for ip in additional if ip.pk != management_ip.pk]
+            object_ip_pks = set()
+            for interface in target.interfaces.all():
+                object_ip_pks.update(
+                    interface.ip_addresses.values_list("pk", flat=True)
+                )
+            foreign = [ip for ip in additional if ip.pk not in object_ip_pks]
+            if foreign:
+                raise ValidationError(
+                    {
+                        "additional_ips": _(
+                            "These IPs are not assigned to the selected object: %(ips)s"
+                        )
+                        % {"ips": ", ".join(str(ip) for ip in foreign)}
+                    }
+                )
+            self.cleaned_data["additional_ips"] = additional
         return self.cleaned_data

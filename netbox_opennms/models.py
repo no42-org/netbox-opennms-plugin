@@ -48,6 +48,14 @@ class MonitoringProfile(NetBoxModel):
         blank=True,
         related_name="+",
     )
+    # The object's other monitored IPs — rendered as non-primary (snmp-primary="N")
+    # interfaces (AD-15). The management IP is NOT stored here; the renderer is the
+    # single interface-set authority and excludes it even if mistakenly added.
+    additional_ips = models.ManyToManyField(
+        to="ipam.IPAddress",
+        related_name="+",
+        blank=True,
+    )
 
     class Meta:
         ordering = ("pk",)

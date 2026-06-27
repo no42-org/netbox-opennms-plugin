@@ -30,6 +30,7 @@ class MonitoringProfileSerializer(NetBoxModelSerializer):
             "assigned_object_id",
             "assigned_object",
             "management_ip",
+            "additional_ips",
             "enabled",
             "tags",
             "custom_fields",
@@ -69,4 +70,29 @@ class MonitoringProfileSerializer(NetBoxModelSerializer):
                 raise serializers.ValidationError(
                     "This object already has a Monitoring Profile."
                 )
+
+            # Additional IPs must belong to the object and must not duplicate the
+            # management IP (AD-15) — mirror the form's guard on the API path.
+            additional = data.get("additional_ips")
+            if additional:
+                target = model.objects.get(pk=object_id)
+                object_ip_pks = set()
+                for interface in target.interfaces.all():
+                    object_ip_pks.update(
+                        interface.ip_addresses.values_list("pk", flat=True)
+                    )
+                management_ip = data.get("management_ip") or getattr(
+                    self.instance, "management_ip", None
+                )
+                management_pk = management_ip.pk if management_ip is not None else None
+                filtered = [ip for ip in additional if ip.pk != management_pk]
+                foreign = [ip for ip in filtered if ip.pk not in object_ip_pks]
+                if foreign:
+                    raise serializers.ValidationError(
+                        {
+                            "additional_ips": "These IPs are not assigned to the "
+                            "object: " + ", ".join(str(ip) for ip in foreign)
+                        }
+                    )
+                data["additional_ips"] = filtered
         return data

@@ -64,6 +64,49 @@ class RenderRequisitionTest(TestCase):
         self.assertEqual(iface.get("ip-addr"), "10.0.0.1")
         self.assertEqual(iface.get("snmp-primary"), "P")
 
+    def _interfaces(self, xml):
+        root = etree.fromstring(xml)
+        node = root.find(_q(MODEL_IMPORT_NS, "node"))
+        return node.findall(_q(MODEL_IMPORT_NS, "interface"))
+
+    def test_additional_ips_render_as_secondary_interfaces(self):
+        self.profile.additional_ips.set(
+            [
+                IPAddress.objects.create(address="10.0.0.5/24"),
+                IPAddress.objects.create(address="10.0.0.6/24"),
+            ]
+        )
+        ifaces = self._interfaces(render_requisition("netbox:x:y", [self.profile]))
+        primary = [i for i in ifaces if i.get("snmp-primary") == "P"]
+        secondary = [i for i in ifaces if i.get("snmp-primary") == "N"]
+        self.assertEqual([i.get("ip-addr") for i in primary], ["10.0.0.1"])
+        self.assertEqual(
+            {i.get("ip-addr") for i in secondary}, {"10.0.0.5", "10.0.0.6"}
+        )
+
+    def test_management_ip_never_renders_as_additional(self):
+        # AD-15: the management IP added to additional_ips must not become an "N".
+        self.profile.additional_ips.set([self.profile.management_ip])
+        ifaces = self._interfaces(render_requisition("netbox:x:y", [self.profile]))
+        self.assertEqual(len(ifaces), 1)
+        self.assertEqual(ifaces[0].get("snmp-primary"), "P")
+
+    def test_additional_ips_deduped_by_address(self):
+        self.profile.additional_ips.set(
+            [
+                IPAddress.objects.create(address="10.0.0.5/24"),
+                IPAddress.objects.create(address="10.0.0.5/24"),
+            ]
+        )
+        ifaces = self._interfaces(render_requisition("netbox:x:y", [self.profile]))
+        secondary = [i for i in ifaces if i.get("snmp-primary") == "N"]
+        self.assertEqual([i.get("ip-addr") for i in secondary], ["10.0.0.5"])
+
+    def test_no_additional_ips_single_primary(self):
+        ifaces = self._interfaces(render_requisition("netbox:x:y", [self.profile]))
+        self.assertEqual(len(ifaces), 1)
+        self.assertEqual(ifaces[0].get("snmp-primary"), "P")
+
     def test_date_stamp_optional(self):
         without = etree.fromstring(render_requisition("netbox:x:y", [self.profile]))
         self.assertIsNone(without.get("date-stamp"))

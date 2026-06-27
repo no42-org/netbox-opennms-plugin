@@ -15,8 +15,14 @@ from django.db import transaction
 from django.db.utils import IntegrityError
 from django.test import TestCase
 from ipam.models import IPAddress
-from virtualization.models import Cluster, ClusterType, VirtualMachine
+from virtualization.models import (
+    Cluster,
+    ClusterType,
+    VirtualMachine,
+    VMInterface,
+)
 
+from netbox_opennms.api.serializers import MonitoringProfileSerializer
 from netbox_opennms.forms import MonitoringProfileForm
 from netbox_opennms.models import MonitoringProfile
 
@@ -165,3 +171,90 @@ class MonitoringProfileFormTest(MonitoringProfileTestData, TestCase):
         form = MonitoringProfileForm(data={"device": self.device.pk, "enabled": True})
         self.assertFalse(form.is_valid())
         self.assertEqual(MonitoringProfile.objects.count(), 1)
+
+    @classmethod
+    def _add_ip(cls, device, address):
+        interface = Interface.objects.create(
+            device=device, name=f"extra-{address}", type="virtual"
+        )
+        return IPAddress.objects.create(address=address, assigned_object=interface)
+
+    def test_additional_ip_on_object_is_valid(self):
+        self._assign_primary_ip(self.device, "10.0.0.20/24")
+        extra = self._add_ip(self.device, "10.0.0.21/24")
+        form = MonitoringProfileForm(
+            data={
+                "device": self.device.pk,
+                "additional_ips": [extra.pk],
+                "enabled": True,
+            }
+        )
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertIn(extra, form.save().additional_ips.all())
+
+    def test_additional_ip_not_on_object_is_invalid(self):
+        self._assign_primary_ip(self.device, "10.0.0.22/24")
+        foreign = IPAddress.objects.create(address="10.0.0.99/24")  # on no interface
+        form = MonitoringProfileForm(
+            data={
+                "device": self.device.pk,
+                "additional_ips": [foreign.pk],
+                "enabled": True,
+            }
+        )
+        self.assertFalse(form.is_valid())
+        self.assertIn("additional_ips", form.errors)
+
+    def test_management_ip_dropped_from_additional(self):
+        mgmt = self._assign_primary_ip(self.device, "10.0.0.23/24")
+        form = MonitoringProfileForm(
+            data={
+                "device": self.device.pk,
+                "management_ip": mgmt.pk,
+                "additional_ips": [mgmt.pk],
+                "enabled": True,
+            }
+        )
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertNotIn(mgmt, form.save().additional_ips.all())
+
+    def test_additional_ip_on_vm_target_is_valid(self):
+        # the membership chain (target.interfaces -> ip_addresses) for a VM target
+        iface = VMInterface.objects.create(virtual_machine=self.vm, name="eth0")
+        mgmt = IPAddress.objects.create(address="10.1.0.1/24", assigned_object=iface)
+        extra = IPAddress.objects.create(address="10.1.0.2/24", assigned_object=iface)
+        form = MonitoringProfileForm(
+            data={
+                "virtual_machine": self.vm.pk,
+                "management_ip": mgmt.pk,
+                "additional_ips": [extra.pk],
+                "enabled": True,
+            }
+        )
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertIn(extra, form.save().additional_ips.all())
+
+    def test_serializer_rejects_off_object_additional_ip(self):
+        off = IPAddress.objects.create(address="10.0.0.99/24")  # on no interface
+        serializer = MonitoringProfileSerializer(
+            data={
+                "assigned_object_type": "dcim.device",
+                "assigned_object_id": self.device.pk,
+                "additional_ips": [off.pk],
+                "enabled": True,
+            }
+        )
+        self.assertFalse(serializer.is_valid())
+        self.assertIn("additional_ips", serializer.errors)
+
+    def test_serializer_accepts_on_object_additional_ip(self):
+        on = self._add_ip(self.device, "10.0.0.30/24")
+        serializer = MonitoringProfileSerializer(
+            data={
+                "assigned_object_type": "dcim.device",
+                "assigned_object_id": self.device.pk,
+                "additional_ips": [on.pk],
+                "enabled": True,
+            }
+        )
+        self.assertTrue(serializer.is_valid(), serializer.errors)

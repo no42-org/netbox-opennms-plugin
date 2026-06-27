@@ -39,6 +39,16 @@
             <td>{{ object.management_ip|linkify|placeholder }}</td>
           </tr>
           <tr>
+            <th scope="row">Additional IPs</th>
+            <td>
+              {% for ip in object.additional_ips.all %}
+                {{ ip|linkify }}{% if not forloop.last %}, {% endif %}
+              {% empty %}
+                {{ ''|placeholder }}
+              {% endfor %}
+            </td>
+          </tr>
+          <tr>
             <th scope="row">Enabled</th>
             <td>{% checkmark object.enabled %}</td>
           </tr>

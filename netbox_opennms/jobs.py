@@ -43,7 +43,7 @@ def enabled_profiles_for(foreign_source):
     """
     profiles = []
     for profile in MonitoringProfile.objects.filter(enabled=True).prefetch_related(
-        "additional_ips"
+        "additional_ips", "services"
     ):
         target = profile.assigned_object
         if target is None:

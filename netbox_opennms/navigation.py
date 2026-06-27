@@ -17,6 +17,17 @@ menu_items = (
         ),
     ),
     PluginMenuItem(
+        link="plugins:netbox_opennms:monitoredservice_list",
+        link_text="Monitored Services",
+        buttons=(
+            PluginMenuButton(
+                link="plugins:netbox_opennms:monitoredservice_add",
+                title="Add",
+                icon_class="mdi mdi-plus-thick",
+            ),
+        ),
+    ),
+    PluginMenuItem(
         link="plugins:netbox_opennms:connection_test",
         link_text="Connection Test",
     ),

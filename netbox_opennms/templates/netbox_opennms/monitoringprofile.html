@@ -52,6 +52,16 @@
             <th scope="row">Enabled</th>
             <td>{% checkmark object.enabled %}</td>
           </tr>
+          <tr>
+            <th scope="row">Monitored Services</th>
+            <td>
+              {% for service in object.services.all %}
+                {{ service.name }} on {{ service.ip_address|linkify }}<br>
+              {% empty %}
+                {{ ''|placeholder }}
+              {% endfor %}
+            </td>
+          </tr>
         </table>
       </div>
     </div>

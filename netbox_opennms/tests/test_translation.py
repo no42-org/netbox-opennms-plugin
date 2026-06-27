@@ -9,7 +9,7 @@ from lxml import etree
 from virtualization.models import Cluster, ClusterType, VirtualMachine
 
 from netbox_opennms.derivation import foreign_id_for
-from netbox_opennms.models import MonitoringProfile
+from netbox_opennms.models import MonitoredService, MonitoringProfile
 from netbox_opennms.translation import (
     RenderError,
     render_foreign_source_definition,
@@ -106,6 +106,49 @@ class RenderRequisitionTest(TestCase):
         ifaces = self._interfaces(render_requisition("netbox:x:y", [self.profile]))
         self.assertEqual(len(ifaces), 1)
         self.assertEqual(ifaces[0].get("snmp-primary"), "P")
+
+    def _services(self, interface):
+        return [
+            s.get("service-name")
+            for s in interface.findall(_q(MODEL_IMPORT_NS, "monitored-service"))
+        ]
+
+    def test_services_render_under_correct_interface_sorted(self):
+        extra_ip = IPAddress.objects.create(address="10.0.0.5/24")
+        self.profile.additional_ips.set([extra_ip])
+        # created out of order to prove deterministic sorting
+        MonitoredService.objects.create(
+            profile=self.profile, ip_address=self.profile.management_ip, name="SNMP"
+        )
+        MonitoredService.objects.create(
+            profile=self.profile, ip_address=self.profile.management_ip, name="ICMP"
+        )
+        MonitoredService.objects.create(
+            profile=self.profile, ip_address=extra_ip, name="HTTP"
+        )
+        ifaces = self._interfaces(render_requisition("netbox:x:y", [self.profile]))
+        primary = next(i for i in ifaces if i.get("snmp-primary") == "P")
+        secondary = next(i for i in ifaces if i.get("snmp-primary") == "N")
+        self.assertEqual(self._services(primary), ["ICMP", "SNMP"])
+        self.assertEqual(self._services(secondary), ["HTTP"])
+
+    def test_no_services_bare_interface(self):
+        ifaces = self._interfaces(render_requisition("netbox:x:y", [self.profile]))
+        self.assertEqual(self._services(ifaces[0]), [])
+
+    def test_duplicate_address_merges_services_onto_one_interface(self):
+        # A second IPAddress with the management IP's address (re-listed as
+        # additional) must merge onto the single interface, carrying its
+        # services — not emit a second interface or drop the services.
+        dup = IPAddress.objects.create(address="10.0.0.1/24")
+        self.profile.additional_ips.set([dup])
+        MonitoredService.objects.create(
+            profile=self.profile, ip_address=dup, name="HTTP"
+        )
+        ifaces = self._interfaces(render_requisition("netbox:x:y", [self.profile]))
+        self.assertEqual(len(ifaces), 1)
+        self.assertEqual(ifaces[0].get("snmp-primary"), "P")
+        self.assertEqual(self._services(ifaces[0]), ["HTTP"])
 
     def test_date_stamp_optional(self):
         without = etree.fromstring(render_requisition("netbox:x:y", [self.profile]))

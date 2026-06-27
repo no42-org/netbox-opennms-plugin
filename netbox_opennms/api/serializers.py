@@ -8,7 +8,12 @@ from netbox.api.serializers import NetBoxModelSerializer
 from rest_framework import serializers
 from utilities.api import get_serializer_for_model
 
-from ..models import ASSIGNMENT_MODELS, MonitoringProfile
+from ..models import (
+    ASSIGNMENT_MODELS,
+    MonitoredService,
+    MonitoringProfile,
+    profile_ip_pks,
+)
 
 
 class MonitoringProfileSerializer(NetBoxModelSerializer):
@@ -95,4 +100,45 @@ class MonitoringProfileSerializer(NetBoxModelSerializer):
                         }
                     )
                 data["additional_ips"] = filtered
+        return data
+
+
+class MonitoredServiceSerializer(NetBoxModelSerializer):
+    url = serializers.HyperlinkedIdentityField(
+        view_name="plugins-api:netbox_opennms-api:monitoredservice-detail"
+    )
+
+    class Meta:
+        model = MonitoredService
+        fields = (
+            "id",
+            "url",
+            "display",
+            "profile",
+            "ip_address",
+            "name",
+            "tags",
+            "custom_fields",
+            "created",
+            "last_updated",
+        )
+        brief_fields = ("id", "url", "display", "name")
+
+    def validate(self, data):
+        data = super().validate(data)
+        profile = data.get("profile") or getattr(self.instance, "profile", None)
+        ip_address = data.get("ip_address") or getattr(
+            self.instance, "ip_address", None
+        )
+        if (
+            profile is not None
+            and ip_address is not None
+            and ip_address.pk not in profile_ip_pks(profile)
+        ):
+            raise serializers.ValidationError(
+                {
+                    "ip_address": "The IP must be the profile's management IP or "
+                    "one of its additional IPs."
+                }
+            )
         return data

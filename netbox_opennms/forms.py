@@ -14,7 +14,7 @@ from utilities.forms.fields import (
 )
 from virtualization.models import VirtualMachine
 
-from .models import MonitoringProfile
+from .models import MonitoredService, MonitoringProfile, profile_ip_pks
 
 
 class MonitoringProfileForm(NetBoxModelForm):
@@ -141,4 +141,37 @@ class MonitoringProfileForm(NetBoxModelForm):
                     }
                 )
             self.cleaned_data["additional_ips"] = additional
+        return self.cleaned_data
+
+
+class MonitoredServiceForm(NetBoxModelForm):
+    """Add/edit a service monitored on one interface of a profile."""
+
+    profile = DynamicModelChoiceField(
+        queryset=MonitoringProfile.objects.all(),
+        label=_("Monitoring Profile"),
+    )
+    ip_address = DynamicModelChoiceField(
+        queryset=IPAddress.objects.all(),
+        label=_("Interface IP"),
+        help_text=_("Must be the profile's management IP or an additional IP."),
+    )
+
+    class Meta:
+        model = MonitoredService
+        fields = ("profile", "ip_address", "name", "tags")
+
+    def clean(self):
+        super().clean()
+        profile = self.cleaned_data.get("profile")
+        ip_address = self.cleaned_data.get("ip_address")
+        if profile and ip_address and ip_address.pk not in profile_ip_pks(profile):
+            raise ValidationError(
+                {
+                    "ip_address": _(
+                        "The IP must be the profile's management IP or one of "
+                        "its additional IPs."
+                    )
+                }
+            )
         return self.cleaned_data

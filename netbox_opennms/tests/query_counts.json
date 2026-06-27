@@ -1,4 +1,5 @@
 {
+  "monitoredservice:api_list_objects": 13,
   "monitoringprofile:api_list_objects": 17,
   "monitoringprofile:list_objects_with_permission": 19
 }

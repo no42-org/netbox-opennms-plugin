@@ -10,5 +10,6 @@ app_name = "netbox_opennms-api"
 
 router = NetBoxRouter()
 router.register("monitoring-profiles", views.MonitoringProfileViewSet)
+router.register("monitored-services", views.MonitoredServiceViewSet)
 
 urlpatterns = router.urls

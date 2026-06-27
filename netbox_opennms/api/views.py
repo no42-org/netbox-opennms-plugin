@@ -4,12 +4,18 @@
 
 from netbox.api.viewsets import NetBoxModelViewSet
 
-from ..filtersets import MonitoringProfileFilterSet
-from ..models import MonitoringProfile
-from .serializers import MonitoringProfileSerializer
+from ..filtersets import MonitoredServiceFilterSet, MonitoringProfileFilterSet
+from ..models import MonitoredService, MonitoringProfile
+from .serializers import MonitoredServiceSerializer, MonitoringProfileSerializer
 
 
 class MonitoringProfileViewSet(NetBoxModelViewSet):
     queryset = MonitoringProfile.objects.all()
     serializer_class = MonitoringProfileSerializer
     filterset_class = MonitoringProfileFilterSet
+
+
+class MonitoredServiceViewSet(NetBoxModelViewSet):
+    queryset = MonitoredService.objects.select_related("profile", "ip_address")
+    serializer_class = MonitoredServiceSerializer
+    filterset_class = MonitoredServiceFilterSet

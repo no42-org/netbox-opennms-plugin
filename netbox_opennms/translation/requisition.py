@@ -8,6 +8,8 @@ they read the passed objects' attributes only. ``date_stamp`` is a parameter so
 output is reproducible (the sync job supplies the timestamp).
 """
 
+from collections import defaultdict
+
 from lxml import etree
 
 from ..derivation import foreign_id_for
@@ -42,6 +44,15 @@ def _bare_ip(ip):
 def _management_ip(profile):
     """The bare management IP for the primary interface."""
     return _bare_ip(profile.management_ip)
+
+
+def _add_services(interface_el, names):
+    """Append ``<monitored-service service-name="…">`` children, sorted (AD-3)."""
+    for name in sorted(names):
+        service = etree.SubElement(
+            interface_el, f"{{{MODEL_IMPORT_NS}}}monitored-service"
+        )
+        service.set("service-name", name)
 
 
 def render_requisition(foreign_source, profiles, date_stamp=None):
@@ -91,26 +102,36 @@ def render_requisition(foreign_source, profiles, date_stamp=None):
         node.set("node-label", target.name)
         node.set("foreign-id", foreign_id)
 
-        primary_ip = _management_ip(profile)
-        interface = etree.SubElement(node, f"{{{MODEL_IMPORT_NS}}}interface")
-        interface.set("ip-addr", primary_ip)
-        interface.set("snmp-primary", "P")
+        # Services grouped by the interface IP they run on (AD-15).
+        services_by_ip = defaultdict(list)
+        for service in profile.services.all():
+            services_by_ip[service.ip_address_id].append(service.name)
 
-        # Additional IPs as non-primary interfaces (AD-15). The renderer is the
-        # single interface-set authority: additional = additional_ips minus the
-        # management IP, deduped by bare IP — an IP appears at most once per node,
-        # and the management IP never also appears as an "N" (no duplicate P+N).
-        seen = {primary_ip}
-        # Sort by bare IP for deterministic, churn-free output (AD-3). Sorting the
-        # already-fetched .all() in Python keeps any prefetch_related effective.
+        # The single interface-set authority (AD-15): the management IP is the
+        # lone primary ("P"); additional IPs are non-primary ("N"). An IP appears
+        # at most once per node, keyed by bare address, so a duplicate address
+        # (including the management IP re-listed as additional) merges onto the
+        # existing interface rather than emitting a second element or dropping its
+        # services. Additional IPs are sorted by bare address for determinism.
+        primary_ip = _management_ip(profile)
+        interfaces = [(primary_ip, "P", [profile.management_ip_id])]
+        index = {primary_ip: 0}
         for ip in sorted(profile.additional_ips.all(), key=_bare_ip):
             bare = _bare_ip(ip)
-            if bare in seen:
-                continue
-            seen.add(bare)
-            extra = etree.SubElement(node, f"{{{MODEL_IMPORT_NS}}}interface")
-            extra.set("ip-addr", bare)
-            extra.set("snmp-primary", "N")
+            if bare in index:
+                interfaces[index[bare]][2].append(ip.pk)
+            else:
+                index[bare] = len(interfaces)
+                interfaces.append((bare, "N", [ip.pk]))
+
+        for bare, snmp_primary, ip_pks in interfaces:
+            interface = etree.SubElement(node, f"{{{MODEL_IMPORT_NS}}}interface")
+            interface.set("ip-addr", bare)
+            interface.set("snmp-primary", snmp_primary)
+            names = set()
+            for ip_pk in ip_pks:
+                names.update(services_by_ip.get(ip_pk, []))
+            _add_services(interface, names)
 
     return etree.tostring(root, xml_declaration=True, encoding="UTF-8")
 

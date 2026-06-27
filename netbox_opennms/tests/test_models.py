@@ -22,9 +22,13 @@ from virtualization.models import (
     VMInterface,
 )
 
-from netbox_opennms.api.serializers import MonitoringProfileSerializer
-from netbox_opennms.forms import MonitoringProfileForm
-from netbox_opennms.models import MonitoringProfile
+from netbox_opennms.api.serializers import (
+    MonitoredServiceSerializer,
+    MonitoringProfileSerializer,
+)
+from netbox_opennms.choices import ServiceChoices
+from netbox_opennms.forms import MonitoredServiceForm, MonitoringProfileForm
+from netbox_opennms.models import MonitoredService, MonitoringProfile
 
 
 class MonitoringProfileTestData:
@@ -46,6 +50,13 @@ class MonitoringProfileTestData:
         device.primary_ip4 = ip
         device.save()
         return ip
+
+    @classmethod
+    def _add_ip(cls, device, address):
+        interface = Interface.objects.create(
+            device=device, name=f"extra-{address}", type="virtual"
+        )
+        return IPAddress.objects.create(address=address, assigned_object=interface)
 
     @classmethod
     def setUpTestData(cls):
@@ -172,13 +183,6 @@ class MonitoringProfileFormTest(MonitoringProfileTestData, TestCase):
         self.assertFalse(form.is_valid())
         self.assertEqual(MonitoringProfile.objects.count(), 1)
 
-    @classmethod
-    def _add_ip(cls, device, address):
-        interface = Interface.objects.create(
-            device=device, name=f"extra-{address}", type="virtual"
-        )
-        return IPAddress.objects.create(address=address, assigned_object=interface)
-
     def test_additional_ip_on_object_is_valid(self):
         self._assign_primary_ip(self.device, "10.0.0.20/24")
         extra = self._add_ip(self.device, "10.0.0.21/24")
@@ -258,3 +262,85 @@ class MonitoringProfileFormTest(MonitoringProfileTestData, TestCase):
             }
         )
         self.assertTrue(serializer.is_valid(), serializer.errors)
+
+
+class MonitoredServiceTest(MonitoringProfileTestData, TestCase):
+    def _profile_with_ips(self):
+        mgmt = self._assign_primary_ip(self.device, "10.0.0.40/24")
+        extra = self._add_ip(self.device, "10.0.0.41/24")
+        profile = MonitoringProfile.objects.create(
+            assigned_object=self.device, management_ip=mgmt
+        )
+        profile.additional_ips.set([extra])
+        return profile, mgmt, extra
+
+    def test_choiceset_key_enables_field_choices(self):
+        # key drives the FIELD_CHOICES extension point (AC4). Admin extension
+        # resolves at config/import time (ChoiceSet freezes choices when the
+        # class is defined), so it can't be exercised via override_settings here.
+        self.assertEqual(ServiceChoices.key, "MonitoredService.name")
+
+    def test_name_validated_against_choiceset(self):
+        # proves the ChoiceSet is wired as the field's choices (a default value
+        # passes, an unknown one is rejected)
+        profile, mgmt, _extra = self._profile_with_ips()
+        MonitoredService(profile=profile, ip_address=mgmt, name="SNMP").full_clean()
+        with self.assertRaises(ValidationError):
+            MonitoredService(profile=profile, ip_address=mgmt, name="NOPE").full_clean()
+
+    def test_services_pruned_when_additional_ip_removed(self):
+        profile, _mgmt, extra = self._profile_with_ips()
+        svc = MonitoredService.objects.create(
+            profile=profile, ip_address=extra, name="HTTP"
+        )
+        profile.additional_ips.remove(extra)
+        self.assertFalse(MonitoredService.objects.filter(pk=svc.pk).exists())
+
+    def test_services_pruned_when_management_ip_changed(self):
+        profile, mgmt, _extra = self._profile_with_ips()
+        svc = MonitoredService.objects.create(
+            profile=profile, ip_address=mgmt, name="ICMP"
+        )
+        profile.management_ip = self._add_ip(self.device, "10.0.0.42/24")
+        profile.save()
+        self.assertFalse(MonitoredService.objects.filter(pk=svc.pk).exists())
+
+    def test_service_on_management_ip_is_valid(self):
+        profile, mgmt, _extra = self._profile_with_ips()
+        MonitoredService(profile=profile, ip_address=mgmt, name="ICMP").full_clean()
+
+    def test_service_on_additional_ip_is_valid(self):
+        profile, _mgmt, extra = self._profile_with_ips()
+        MonitoredService(profile=profile, ip_address=extra, name="HTTP").full_clean()
+
+    def test_service_on_foreign_ip_is_invalid(self):
+        profile, _mgmt, _extra = self._profile_with_ips()
+        off = IPAddress.objects.create(address="10.0.0.99/24")
+        with self.assertRaises(ValidationError):
+            MonitoredService(profile=profile, ip_address=off, name="ICMP").full_clean()
+
+    def test_unique_service_per_profile_ip_name(self):
+        profile, mgmt, _extra = self._profile_with_ips()
+        MonitoredService.objects.create(profile=profile, ip_address=mgmt, name="ICMP")
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            MonitoredService.objects.create(
+                profile=profile, ip_address=mgmt, name="ICMP"
+            )
+
+    def test_form_rejects_foreign_ip(self):
+        profile, _mgmt, _extra = self._profile_with_ips()
+        off = IPAddress.objects.create(address="10.0.0.98/24")
+        form = MonitoredServiceForm(
+            data={"profile": profile.pk, "ip_address": off.pk, "name": "ICMP"}
+        )
+        self.assertFalse(form.is_valid())
+        self.assertIn("ip_address", form.errors)
+
+    def test_serializer_rejects_foreign_ip(self):
+        profile, _mgmt, _extra = self._profile_with_ips()
+        off = IPAddress.objects.create(address="10.0.0.97/24")
+        serializer = MonitoredServiceSerializer(
+            data={"profile": profile.pk, "ip_address": off.pk, "name": "ICMP"}
+        )
+        self.assertFalse(serializer.is_valid())
+        self.assertIn("ip_address", serializer.errors)

@@ -13,7 +13,7 @@ from . import filtersets, forms, tables
 from .client import OpenNMSClient, OpenNMSError
 from .derivation import foreign_source_for
 from .jobs import SyncForeignSourceJob
-from .models import MonitoringProfile
+from .models import MonitoredService, MonitoringProfile
 
 # Sync jobs are enqueued without an instance, so they run on the default RQ
 # queue (get_queue_for_model(None) -> RQ_QUEUE_DEFAULT). FR-13 / AD-16.
@@ -60,6 +60,30 @@ class MonitoringProfileDeleteView(generic.ObjectDeleteView):
 class MonitoringProfileBulkDeleteView(generic.BulkDeleteView):
     queryset = MonitoringProfile.objects.all()
     table = tables.MonitoringProfileTable
+
+
+class MonitoredServiceView(generic.ObjectView):
+    queryset = MonitoredService.objects.all()
+
+
+class MonitoredServiceListView(generic.ObjectListView):
+    queryset = MonitoredService.objects.select_related("profile", "ip_address")
+    table = tables.MonitoredServiceTable
+    filterset = filtersets.MonitoredServiceFilterSet
+
+
+class MonitoredServiceEditView(generic.ObjectEditView):
+    queryset = MonitoredService.objects.all()
+    form = forms.MonitoredServiceForm
+
+
+class MonitoredServiceDeleteView(generic.ObjectDeleteView):
+    queryset = MonitoredService.objects.all()
+
+
+class MonitoredServiceBulkDeleteView(generic.BulkDeleteView):
+    queryset = MonitoredService.objects.all()
+    table = tables.MonitoredServiceTable
 
 
 class MonitoringProfileSyncView(PermissionRequiredMixin, View):

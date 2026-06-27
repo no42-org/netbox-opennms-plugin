@@ -3,13 +3,15 @@
 """UI views for plugin models."""
 
 from django.contrib import messages
-from django.contrib.auth.mixins import LoginRequiredMixin
-from django.shortcuts import redirect, render
+from django.contrib.auth.mixins import LoginRequiredMixin, PermissionRequiredMixin
+from django.shortcuts import get_object_or_404, redirect, render
 from django.views.generic import View
 from netbox.views import generic
 
 from . import filtersets, forms, tables
 from .client import OpenNMSClient, OpenNMSError
+from .derivation import foreign_source_for
+from .jobs import SyncForeignSourceJob
 from .models import MonitoringProfile
 
 
@@ -35,6 +37,48 @@ class MonitoringProfileDeleteView(generic.ObjectDeleteView):
 class MonitoringProfileBulkDeleteView(generic.BulkDeleteView):
     queryset = MonitoringProfile.objects.all()
     table = tables.MonitoringProfileTable
+
+
+class MonitoringProfileSyncView(PermissionRequiredMixin, View):
+    """Enqueue a background Sync for a profile's whole Foreign Source (AD-4/5).
+
+    Gated by the change permission (NFR-3 wants a distinct Sync permission; a
+    dedicated action permission is a tracked follow-up). The view only enqueues —
+    all OpenNMS I/O happens in the job (AD-4).
+    """
+
+    permission_required = "netbox_opennms.change_monitoringprofile"
+
+    def post(self, request, pk):
+        profile = get_object_or_404(MonitoringProfile, pk=pk)
+        target = profile.assigned_object
+        if not profile.enabled:
+            messages.error(
+                request, "This profile is disabled — enable it before syncing."
+            )
+            return redirect(profile.get_absolute_url())
+        if target is None:
+            messages.error(
+                request, "This profile has no assigned object and cannot be synced."
+            )
+            return redirect(profile.get_absolute_url())
+
+        try:
+            foreign_source = foreign_source_for(target)
+        except TypeError:
+            # Non-Device/VM target (limit_choices_to is form-only) — fail cleanly.
+            messages.error(
+                request,
+                "This profile's object is not a Device or VirtualMachine "
+                "and cannot be synced.",
+            )
+            return redirect(profile.get_absolute_url())
+        job = SyncForeignSourceJob.enqueue_sync(foreign_source, user=request.user)
+        messages.success(
+            request,
+            f"Sync submitted for Foreign Source {foreign_source} (job #{job.pk}).",
+        )
+        return redirect(profile.get_absolute_url())
 
 
 class OpenNMSConnectionTestView(LoginRequiredMixin, View):

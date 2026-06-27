@@ -70,6 +70,45 @@ class OpenNMSClientTest(SimpleTestCase):
         # redirects are not followed silently
         self.assertFalse(mock_request.call_args.kwargs["allow_redirects"])
 
+    @mock.patch.object(requests.Session, "request")
+    def test_post_foreign_source(self, mock_request):
+        mock_request.return_value = mock.Mock(status_code=200, ok=True)
+        _client().post_foreign_source(b"<foreign-source/>")
+        method, url = mock_request.call_args.args
+        self.assertEqual(method, "POST")
+        self.assertEqual(url, "https://onms.example/opennms/rest/foreignSources")
+        self.assertEqual(mock_request.call_args.kwargs["data"], b"<foreign-source/>")
+        self.assertEqual(
+            mock_request.call_args.kwargs["headers"]["Content-Type"],
+            "application/xml",
+        )
+
+    @mock.patch.object(requests.Session, "request")
+    def test_post_requisition(self, mock_request):
+        mock_request.return_value = mock.Mock(status_code=200, ok=True)
+        _client().post_requisition(b"<model-import/>")
+        method, url = mock_request.call_args.args
+        self.assertEqual(method, "POST")
+        self.assertEqual(url, "https://onms.example/opennms/rest/requisitions")
+        self.assertEqual(mock_request.call_args.kwargs["data"], b"<model-import/>")
+
+    @mock.patch.object(requests.Session, "request")
+    def test_import_requisition_encodes_fs_and_passes_rescan(self, mock_request):
+        # 202 ACCEPTED is the real OpenNMS import response — it must be success.
+        mock_request.return_value = mock.Mock(status_code=202, ok=True)
+        _client().import_requisition("netbox:raleigh:router", rescan_existing="false")
+        method, url = mock_request.call_args.args
+        self.assertEqual(method, "PUT")
+        # ':' in the Foreign Source name is percent-encoded in the path.
+        self.assertEqual(
+            url,
+            "https://onms.example/opennms/rest/requisitions/"
+            "netbox%3Araleigh%3Arouter/import",
+        )
+        self.assertEqual(
+            mock_request.call_args.kwargs["params"], {"rescanExisting": "false"}
+        )
+
     def test_from_config_requires_url(self):
         with mock.patch(
             "netbox_opennms.client.client.get_plugin_config", return_value=""

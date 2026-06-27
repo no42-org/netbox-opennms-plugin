@@ -2,12 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 """OpenNMS REST client — the single port for all OpenNMS I/O (AD-2).
 
-This story implements connection plumbing + ``test_connection``. The port grows
-as later stories add ``post_foreign_source`` / ``post_requisition`` /
-``import_requisition`` / ``list_locations``.
+Connection plumbing + ``test_connection`` (Story 1.4) and the requisition write
+methods used by Sync (Story 1.7): ``post_foreign_source`` / ``post_requisition``
+/ ``import_requisition``. The port still grows (``list_locations`` — Story 4.1).
 """
 
 import logging
+from urllib.parse import quote
 
 import requests
 from netbox.plugins import get_plugin_config
@@ -101,3 +102,37 @@ class OpenNMSClient:
         """Probe reachability + credentials via ``GET /rest/requisitions``."""
         self._request("GET", "/rest/requisitions")
         return True
+
+    def post_foreign_source(self, xml_bytes):
+        """Apply a foreign-source definition (auto-detection config) — AD-5/AD-11.
+
+        Posts the rendered ``foreign-source`` XML; must precede the requisition
+        import so the empty-``<detectors/>`` definition is in place.
+        """
+        return self._request(
+            "POST",
+            "/rest/foreignSources",
+            data=xml_bytes,
+            headers={"Content-Type": "application/xml"},
+        )
+
+    def post_requisition(self, xml_bytes):
+        """Stage the complete ``model-import`` requisition for a Foreign Source."""
+        return self._request(
+            "POST",
+            "/rest/requisitions",
+            data=xml_bytes,
+            headers={"Content-Type": "application/xml"},
+        )
+
+    def import_requisition(self, foreign_source, rescan_existing="false"):
+        """Activate the staged requisition (async — OpenNMS returns ``202``).
+
+        ``rescan_existing`` comes from ``import_mode`` config (AD-13). A ``202`` is
+        success here (accepted for import) — never read as "provisioned" (AD-12).
+        """
+        return self._request(
+            "PUT",
+            f"/rest/requisitions/{quote(foreign_source, safe='')}/import",
+            params={"rescanExisting": rescan_existing},
+        )

@@ -21,8 +21,10 @@ import re
 from dcim.models import Device, Site
 from virtualization.models import VirtualMachine
 
-# Characters OpenNMS forbids in a Foreign Source (requisition) name.
-_FORBIDDEN_CHARS = set("/\\?*'\"")
+# Characters OpenNMS forbids in a Foreign Source (requisition) name. ':' is
+# forbidden too — Horizon 35 rejects it on import with HTTP 400 (caught by the
+# Story 4.4 live round-trip), which is why the delimiter below is '.'.
+_FORBIDDEN_CHARS = set("/\\?*'\":")
 
 # OpenNMS Monitoring Location names: ASCII alphanumeric plus '-' and '.' (AD-9).
 # \A...\Z (not ^...$) so a trailing newline is rejected, not accepted.
@@ -89,7 +91,7 @@ def foreign_id_for(target):
 def foreign_source_for(target):
     """Return the Foreign Source name for a monitored Device or VirtualMachine.
 
-    Format: ``netbox:{site.slug}:{role.slug}``, with ``no-site`` / ``no-role``
+    Format: ``netbox.{site.slug}.{role.slug}``, with ``no-site`` / ``no-role``
     substituted when the site or role is absent (AD-9, AD-14).
     """
     if not isinstance(target, (Device, VirtualMachine)):
@@ -101,8 +103,9 @@ def foreign_source_for(target):
     role = getattr(target, "role", None)
     site_slug = site.slug if (site and site.slug) else "no-site"
     role_slug = role.slug if (role and role.slug) else "no-role"
-    # ':' delimiter (not '-'): slugs may contain hyphens, so a hyphen separator
-    # is ambiguous (site "a-b"+role "c" vs site "a"+role "b-c"). ':' cannot
-    # appear in a NetBox slug and is OpenNMS-legal, keeping the name injective.
-    name = f"netbox:{site_slug}:{role_slug}"
+    # '.' delimiter (not '-'): NetBox slugs are [-A-Za-z0-9_] so a hyphen (or
+    # underscore) separator is ambiguous (site "a-b"+role "c" vs site "a"+role
+    # "b-c"). A slug cannot contain '.', keeping the name injective — and '.' is
+    # OpenNMS-legal whereas ':' is FORBIDDEN by OpenNMS (it 400s on import).
+    name = f"netbox.{site_slug}.{role_slug}"
     return validate_foreign_source_name(name)

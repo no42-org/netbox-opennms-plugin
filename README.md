@@ -102,7 +102,7 @@ monitoring to actually happen:
 ## Foreign Source naming
 
 A node's OpenNMS Foreign Source is derived (not configured) as
-`netbox:{site.slug}:{role.slug}` (`no-site` / `no-role` when absent). Node
+`netbox.{site.slug}.{role.slug}` (`no-site` / `no-role` when absent). Node
 identity is the pair *(Foreign Source, type-qualified Foreign ID)* —
 `device-{pk}` / `vm-{pk}` — so a re-sync updates in place and a role/site change
 is handled as a move, never a duplicate.

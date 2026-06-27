@@ -276,7 +276,7 @@ class MonitoringProfileBulkSyncViewTest(TestCase):
         self.assertEqual(mock_enqueue.call_count, 2)  # raleigh + durham, deduped
         self.assertEqual(
             {c.args[0] for c in mock_enqueue.call_args_list},
-            {"netbox:raleigh:router", "netbox:durham:router"},
+            {"netbox.raleigh.router", "netbox.durham.router"},
         )
         self.assertContains(response, "Submitted 2 Foreign Source sync")
 
@@ -304,7 +304,7 @@ class MonitoringProfileBulkSyncViewTest(TestCase):
         self.assertEqual(mock_enqueue.call_count, 2)  # 3 profiles → 2 distinct FSs
         self.assertEqual(
             {c.args[0] for c in mock_enqueue.call_args_list},
-            {"netbox:raleigh:router", "netbox:durham:router"},
+            {"netbox.raleigh.router", "netbox.durham.router"},
         )
         self.assertContains(
             response, "Submitted 2 Foreign Source sync(s) for 3 profile(s)"
@@ -336,7 +336,7 @@ class MonitoringProfileBulkSyncViewTest(TestCase):
         self.assertEqual(mock_enqueue.call_count, 2)  # raleigh + durham
         self.assertEqual(
             {c.args[0] for c in mock_enqueue.call_args_list},
-            {"netbox:raleigh:router", "netbox:durham:router"},
+            {"netbox.raleigh.router", "netbox.durham.router"},
         )
 
     @mock.patch("netbox_opennms.views.SyncForeignSourceJob.enqueue_sync")

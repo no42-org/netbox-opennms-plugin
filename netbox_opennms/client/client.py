@@ -93,8 +93,15 @@ class OpenNMSClient:
             )
         # Only a genuine 2xx is success (3xx redirects are not).
         if not 200 <= response.status_code < 300:
+            # Include a snippet of the response body — OpenNMS explains XSD /
+            # validation rejections there, and it makes the honest-status error
+            # detail actionable (AD-12) instead of a bare status code.
+            text = getattr(response, "text", None)
+            detail = ""
+            if isinstance(text, str) and text.strip():
+                detail = f" — {text.strip()[:500]}"
             raise OpenNMSHTTPError(
-                f"OpenNMS returned HTTP {response.status_code} for {path}.",
+                f"OpenNMS returned HTTP {response.status_code} for {path}.{detail}",
                 status_code=response.status_code,
             )
         return response

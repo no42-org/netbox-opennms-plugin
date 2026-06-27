@@ -39,7 +39,7 @@ LIVE_URL = os.environ.get("OPENNMS_LIVE_URL")
 LIVE_USER = os.environ.get("OPENNMS_LIVE_USERNAME", "admin")
 LIVE_PASSWORD = os.environ.get("OPENNMS_LIVE_PASSWORD", "admin")
 # A throwaway Foreign Source for this test only — cleaned up in finally.
-FS = "netbox:citest:router"
+FS = "netbox.citest.router"
 LOCATION = "Default"
 
 

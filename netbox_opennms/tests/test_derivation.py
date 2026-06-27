@@ -39,7 +39,7 @@ class ForeignSourceDerivationTest(TestCase):
             role=self.role,
             site=self.site,
         )
-        self.assertEqual(foreign_source_for(device), "netbox:raleigh:core-router")
+        self.assertEqual(foreign_source_for(device), "netbox.raleigh.core-router")
 
     def test_vm_uses_its_own_site(self):
         # cluster scoped to durham, but the VM's own site (raleigh) wins.
@@ -49,26 +49,26 @@ class ForeignSourceDerivationTest(TestCase):
         vm = VirtualMachine.objects.create(
             name="vm-1", cluster=cluster, site=self.site, role=self.role
         )
-        self.assertEqual(foreign_source_for(vm), "netbox:raleigh:core-router")
+        self.assertEqual(foreign_source_for(vm), "netbox.raleigh.core-router")
 
     def test_vm_falls_back_to_cluster_site(self):
         cluster = Cluster.objects.create(
             name="c2", type=self.cluster_type, scope=self.site
         )
         vm = VirtualMachine.objects.create(name="vm-2", cluster=cluster, role=self.role)
-        self.assertEqual(foreign_source_for(vm), "netbox:raleigh:core-router")
+        self.assertEqual(foreign_source_for(vm), "netbox.raleigh.core-router")
 
     def test_missing_site_token(self):
         cluster = Cluster.objects.create(name="c3", type=self.cluster_type)
         vm = VirtualMachine.objects.create(name="vm-3", cluster=cluster, role=self.role)
-        self.assertEqual(foreign_source_for(vm), "netbox:no-site:core-router")
+        self.assertEqual(foreign_source_for(vm), "netbox.no-site.core-router")
 
     def test_missing_role_token(self):
         cluster = Cluster.objects.create(
             name="c4", type=self.cluster_type, scope=self.site
         )
         vm = VirtualMachine.objects.create(name="vm-4", cluster=cluster)
-        self.assertEqual(foreign_source_for(vm), "netbox:raleigh:no-role")
+        self.assertEqual(foreign_source_for(vm), "netbox.raleigh.no-role")
 
     def test_non_site_cluster_scope_yields_no_site(self):
         # A cluster scoped to a Region (not a Site) does not resolve a site.
@@ -77,7 +77,7 @@ class ForeignSourceDerivationTest(TestCase):
             name="c5", type=self.cluster_type, scope=region
         )
         vm = VirtualMachine.objects.create(name="vm-5", cluster=cluster, role=self.role)
-        self.assertEqual(foreign_source_for(vm), "netbox:no-site:core-router")
+        self.assertEqual(foreign_source_for(vm), "netbox.no-site.core-router")
 
     def test_non_device_or_vm_raises(self):
         with self.assertRaises(TypeError):
@@ -89,12 +89,13 @@ class ForeignSourceDerivationTest(TestCase):
 class ForeignSourceNameValidationTest(SimpleTestCase):
     def test_valid_name_passes(self):
         self.assertEqual(
-            validate_foreign_source_name("netbox:raleigh:core-router"),
-            "netbox:raleigh:core-router",
+            validate_foreign_source_name("netbox.raleigh.core-router"),
+            "netbox.raleigh.core-router",
         )
 
     def test_forbidden_characters_rejected(self):
-        for bad in ["a/b", "a\\b", "a?b", "a*b", "a'b", 'a"b']:
+        # ':' is forbidden by OpenNMS (Horizon 35 400s on import) — Story 4.4.
+        for bad in ["a/b", "a\\b", "a?b", "a*b", "a'b", 'a"b', "a:b"]:
             with self.assertRaises(ValueError):
                 validate_foreign_source_name(bad)
 

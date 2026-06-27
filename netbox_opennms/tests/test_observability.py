@@ -41,7 +41,7 @@ from netbox_opennms.template_content import (
 )
 
 User = get_user_model()
-FS = "netbox:raleigh:router"
+FS = "netbox.raleigh.router"
 
 
 class ObservabilityTest(TestCase):
@@ -101,7 +101,7 @@ class ObservabilityTest(TestCase):
         )
         new = self._job(JobStatusChoices.STATUS_COMPLETED)
         # A Job for a DIFFERENT Foreign Source must not match.
-        SyncForeignSourceJob.enqueue_sync("netbox:durham:router", user=self.user)
+        SyncForeignSourceJob.enqueue_sync("netbox.durham.router", user=self.user)
         self.assertEqual(latest_sync_job(FS).pk, new.pk)
 
     def test_sync_outcome_mapping(self):
@@ -170,7 +170,7 @@ class ObservabilityTest(TestCase):
         # Node was synced under an OLD Foreign Source; its role/site now derives a
         # different FS. The panel must show the OLD FS's outcome (where the node
         # actually lives) + a move-pending flag — not "Never synced".
-        old_fs = "netbox:durham:router"
+        old_fs = "netbox.durham.router"
         MonitoringProfile.objects.filter(pk=self.profile.pk).update(
             last_synced_foreign_source=old_fs
         )

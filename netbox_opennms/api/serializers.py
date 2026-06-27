@@ -13,6 +13,7 @@ from ..models import (
     ASSIGNMENT_MODELS,
     MonitoredService,
     MonitoringProfile,
+    object_ip_pks,
     profile_ip_pks,
 )
 
@@ -91,17 +92,13 @@ class MonitoringProfileSerializer(NetBoxModelSerializer):
             additional = data.get("additional_ips")
             if additional:
                 target = model.objects.get(pk=object_id)
-                object_ip_pks = set()
-                for interface in target.interfaces.all():
-                    object_ip_pks.update(
-                        interface.ip_addresses.values_list("pk", flat=True)
-                    )
+                owned = object_ip_pks(target)
                 management_ip = data.get("management_ip") or getattr(
                     self.instance, "management_ip", None
                 )
                 management_pk = management_ip.pk if management_ip is not None else None
                 filtered = [ip for ip in additional if ip.pk != management_pk]
-                foreign = [ip for ip in filtered if ip.pk not in object_ip_pks]
+                foreign = [ip for ip in filtered if ip.pk not in owned]
                 if foreign:
                     raise serializers.ValidationError(
                         {

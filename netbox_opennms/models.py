@@ -104,6 +104,21 @@ def profile_ip_pks(profile):
     return pks
 
 
+def object_ip_pks(target):
+    """PKs of the IPs assigned to a Device/VM's interfaces (its own addresses).
+
+    Used to constrain a profile's additional IPs to the monitored object's own
+    addresses. Returns an empty set for a target without interfaces.
+    """
+    pks = set()
+    interfaces = getattr(target, "interfaces", None)
+    if interfaces is None:
+        return pks
+    for interface in interfaces.all():
+        pks.update(interface.ip_addresses.values_list("pk", flat=True))
+    return pks
+
+
 class MonitoredService(NetBoxModel):
     """A service monitored on one interface (IP) of a MonitoringProfile (AD-15).
 

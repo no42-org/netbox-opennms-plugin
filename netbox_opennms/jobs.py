@@ -30,6 +30,7 @@ from .translation import (
     render_foreign_source_definition,
     render_requisition,
 )
+from .validation import validate_foreign_source
 
 PLUGIN_NAME = "netbox_opennms"
 
@@ -112,6 +113,15 @@ class SyncForeignSourceJob(JobRunner):
                 )
                 return
 
+            # Re-validate intent as a safety net (FR-8): the view blocks on
+            # errors, but non-UI triggers must fail cleanly too, not push bad
+            # intent (AD-12).
+            validation = validate_foreign_source(foreign_source, profiles)
+            if validation.errors:
+                for error in validation.errors:
+                    self.logger.error(error)
+                raise JobFailed()
+
             default_location = get_plugin_config(PLUGIN_NAME, "default_location")
             if default_location:
                 try:
@@ -128,7 +138,12 @@ class SyncForeignSourceJob(JobRunner):
                 self.logger.error(f"Cannot render {foreign_source}: {exc}")
                 raise JobFailed() from exc
 
-            rescan = get_plugin_config(PLUGIN_NAME, "import_mode")
+            rescan = str(get_plugin_config(PLUGIN_NAME, "import_mode")).strip().lower()
+            if rescan not in ("true", "false", "dbonly"):
+                self.logger.error(
+                    f"Invalid import_mode {rescan!r} (expected true/false/dbonly)."
+                )
+                raise JobFailed()
 
             try:
                 with OpenNMSClient.from_config() as client:

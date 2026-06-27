@@ -14,7 +14,12 @@ from utilities.forms.fields import (
 )
 from virtualization.models import VirtualMachine
 
-from .models import MonitoredService, MonitoringProfile, profile_ip_pks
+from .models import (
+    MonitoredService,
+    MonitoringProfile,
+    object_ip_pks,
+    profile_ip_pks,
+)
 
 
 class MonitoringProfileForm(NetBoxModelForm):
@@ -126,12 +131,8 @@ class MonitoringProfileForm(NetBoxModelForm):
             # (Story 1.3), so excluding it before the membership check avoids a
             # false "not assigned" error.
             additional = [ip for ip in additional if ip.pk != management_ip.pk]
-            object_ip_pks = set()
-            for interface in target.interfaces.all():
-                object_ip_pks.update(
-                    interface.ip_addresses.values_list("pk", flat=True)
-                )
-            foreign = [ip for ip in additional if ip.pk not in object_ip_pks]
+            owned = object_ip_pks(target)
+            foreign = [ip for ip in additional if ip.pk not in owned]
             if foreign:
                 raise ValidationError(
                     {

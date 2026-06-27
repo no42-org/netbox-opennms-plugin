@@ -19,6 +19,7 @@ from .jobs import (
     SyncForeignSourceJob,
     enabled_foreign_sources,
     enabled_profiles_for,
+    sync_status_for,
     unknown_locations,
 )
 from .models import MonitoredService, MonitoringProfile
@@ -67,8 +68,12 @@ class MonitoringProfileView(generic.ObjectView):
 
     def get_extra_context(self, request, instance):
         # Surface the no-worker warning on the detail page (AC2); derived live so
-        # it clears automatically once a worker starts (AC3).
-        return {"no_worker_warning": _no_worker_running()}
+        # it clears automatically once a worker starts (AC3). The last-sync panel
+        # (Story 4.2) reads the latest Job for the object's Foreign Source.
+        return {
+            "no_worker_warning": _no_worker_running(),
+            "sync_status": sync_status_for(instance.assigned_object),
+        }
 
 
 class MonitoringProfileListView(generic.ObjectListView):

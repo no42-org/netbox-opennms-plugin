@@ -20,6 +20,7 @@ from contextlib import ExitStack
 from core.choices import JobStatusChoices
 from core.exceptions import JobFailed
 from core.models import Job
+from django.contrib.contenttypes.models import ContentType
 from django_pglocks import advisory_lock
 from netbox.jobs import JobRunner
 from netbox.plugins import get_plugin_config
@@ -109,6 +110,18 @@ class SyncForeignSourceJob(JobRunner):
         name = "OpenNMS sync"
 
     @classmethod
+    def job_name(cls, foreign_source, allow_empty=False):
+        """The Job ``name`` for a Foreign Source (the single owner of the format).
+
+        Shared by ``enqueue_sync`` (write) and ``latest_sync_job`` (read), so the
+        observability lookup always matches what was enqueued. ``Job.name`` is
+        max_length=200; the ``(remove)`` marker is budgeted INTO the cap so a long
+        Foreign Source can't truncate it away (Story 3.1).
+        """
+        suffix = " (remove)" if allow_empty else ""
+        return f"{cls.name}: {foreign_source}"[: 200 - len(suffix)] + suffix
+
+    @classmethod
     def enqueue_sync(cls, foreign_source, user=None, allow_empty=False):
         """Enqueue a sync, coalescing a redundant pending sync for the same FS.
 
@@ -121,14 +134,9 @@ class SyncForeignSourceJob(JobRunner):
         per-object linkage/last-sync display is Story 4.2). Outcome lives on the
         ``Job`` itself (status + log).
         """
-        # Job.name is max_length=200; cap so two max-length slugs can't overflow.
         # The "(remove)" marker keeps a Remove (allow_empty) from coalescing into
-        # a pending Sync that would refuse the empty requisition. Budget the marker
-        # INTO the cap so a long Foreign Source can't truncate it away — otherwise
-        # the Remove and Sync names would collide and coalesce with the wrong
-        # empty-policy.
-        suffix = " (remove)" if allow_empty else ""
-        job_name = f"{cls.name}: {foreign_source}"[: 200 - len(suffix)] + suffix
+        # a pending Sync that would refuse the empty requisition (Story 3.1).
+        job_name = cls.job_name(foreign_source, allow_empty=allow_empty)
         existing = Job.objects.filter(
             name=job_name,
             status__in=JobStatusChoices.ENQUEUED_STATE_CHOICES,
@@ -285,3 +293,80 @@ class SyncForeignSourceJob(JobRunner):
             ).update(last_synced_foreign_source=foreign_source)
 
         return True
+
+
+def latest_sync_job(foreign_sources):
+    """The most recent sync/remove ``Job`` across one or more Foreign Sources
+    (Story 4.2, NFR-4).
+
+    The Job is the audit record (user, timestamps, status, log, error). Matches
+    both the sync and remove name forms via the shared ``job_name`` so the lookup
+    can never drift from what ``enqueue_sync`` wrote. Accepts a single FS name or
+    an iterable (a moved node spans its old + new FS). ``None`` if none found.
+    """
+    if isinstance(foreign_sources, str):
+        foreign_sources = [foreign_sources]
+    names = []
+    for foreign_source in foreign_sources:
+        names.append(SyncForeignSourceJob.job_name(foreign_source))
+        names.append(SyncForeignSourceJob.job_name(foreign_source, allow_empty=True))
+    if not names:
+        return None
+    return Job.objects.filter(name__in=names).order_by("-created").first()
+
+
+def sync_outcome(job, is_removal=False, enabled=True):
+    """Map a sync ``Job`` to the honest outcome vocabulary (AD-12), or ``None``.
+
+    Returns ``(label, color)``: ``submitted`` (pending/scheduled/running);
+    ``succeeded-accepted`` (completed — accepted for import, never "provisioned");
+    ``removed`` (a completed Remove, or a disabled profile — the node is excluded
+    from the requisition and deleted on import); ``failed`` (errored/failed). The
+    caller passes ``is_removal`` (the latest action was a Remove) and ``enabled``.
+    """
+    if job is None:
+        return None
+    if job.status in JobStatusChoices.ENQUEUED_STATE_CHOICES:
+        return ("submitted", "cyan")
+    if job.status == JobStatusChoices.STATUS_COMPLETED:
+        if is_removal or not enabled:
+            return ("removed", "gray")
+        return ("succeeded-accepted", "green")
+    return ("failed", "red")
+
+
+def sync_status_for(target):
+    """Last-sync state for a monitored Device/VM — the single source the profile
+    detail and the Device/VM template extension both render (Story 4.2).
+
+    Reflects the node's *actual* provisioned location: it looks up the latest Job
+    across both where the node was last imported (``last_synced_foreign_source``)
+    and where it now derives (a pending move targets the derived FS), so a node
+    that moved role/site isn't mislabeled "Never synced" or shown a stale FS's
+    job. ``move_pending`` is set when the derived FS differs from the last-synced
+    one. Returns ``None`` for a missing or non-Device/VM target.
+    """
+    if target is None:
+        return None
+    try:
+        derived = foreign_source_for(target)
+    except TypeError:
+        return None
+    content_type = ContentType.objects.get_for_model(target)
+    profile = MonitoringProfile.objects.filter(
+        assigned_object_type=content_type, assigned_object_id=target.pk
+    ).first()
+    last_synced = profile.last_synced_foreign_source if profile else ""
+    enabled = profile.enabled if profile else True
+    # The node's relevant Foreign Sources, newest job wins. dict.fromkeys keeps
+    # order and de-dups when last_synced == derived (the steady state).
+    foreign_sources = [fs for fs in dict.fromkeys([last_synced, derived]) if fs]
+    job = latest_sync_job(foreign_sources) if foreign_sources else None
+    is_removal = bool(job) and job.name.endswith(" (remove)")
+    return {
+        "foreign_source": derived,
+        "last_synced_foreign_source": last_synced,
+        "move_pending": bool(last_synced and last_synced != derived),
+        "job": job,
+        "outcome": sync_outcome(job, is_removal=is_removal, enabled=enabled),
+    }

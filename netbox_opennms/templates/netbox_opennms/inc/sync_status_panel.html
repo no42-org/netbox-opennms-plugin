@@ -1,0 +1,58 @@
+{# Copyright 2026 Ronny Trommer <ronny@no42.org> #}
+{# SPDX-License-Identifier: Apache-2.0 #}
+{# Last-sync panel (Story 4.2). Expects `sync_status` in context: a dict with
+   `job`, `outcome` (label, color), `foreign_source` — or None/no job. Shared by
+   the Monitoring Profile detail page and the Device/VM template extension. #}
+{% load helpers %}
+<div class="card">
+  <h2 class="card-header">OpenNMS Sync Status</h2>
+  <table class="table table-hover attr-table">
+    {% if sync_status and sync_status.job %}
+      <tr>
+        <th scope="row">Last sync</th>
+        <td>
+          <span class="badge text-bg-{{ sync_status.outcome.1 }}">{{ sync_status.outcome.0 }}</span>
+          <small class="text-muted d-block">Reflects the whole Foreign Source, not just this object.</small>
+        </td>
+      </tr>
+      <tr>
+        <th scope="row">Foreign Source</th>
+        <td>{{ sync_status.foreign_source }}</td>
+      </tr>
+      {% if sync_status.move_pending %}
+        <tr>
+          <th scope="row">Move pending</th>
+          <td class="text-warning">
+            Role/site changed — the node moves to <strong>{{ sync_status.foreign_source }}</strong>
+            on the next sync (currently in {{ sync_status.last_synced_foreign_source }}).
+          </td>
+        </tr>
+      {% endif %}
+      <tr>
+        <th scope="row">When</th>
+        <td>{{ sync_status.job.completed|default:sync_status.job.created }}</td>
+      </tr>
+      {% if perms.core.view_job %}
+        <tr>
+          <th scope="row">Triggered by</th>
+          <td>{{ sync_status.job.user|placeholder }}</td>
+        </tr>
+        {% if sync_status.job.error %}
+          <tr>
+            <th scope="row">Error</th>
+            <td class="text-danger"><pre class="mb-0">{{ sync_status.job.error }}</pre></td>
+          </tr>
+        {% endif %}
+        <tr>
+          <th scope="row">Job</th>
+          <td><a href="{{ sync_status.job.get_absolute_url }}">#{{ sync_status.job.pk }}</a></td>
+        </tr>
+      {% endif %}
+    {% else %}
+      <tr>
+        <th scope="row">Last sync</th>
+        <td><span class="text-muted">Never synced</span></td>
+      </tr>
+    {% endif %}
+  </table>
+</div>

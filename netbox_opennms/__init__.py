@@ -27,7 +27,9 @@ class NetBoxOpenNMSConfig(PluginConfig):
     base_url = "opennms"
 
     # NetBox 4.6 introduced Python 3.12+ and Django 6.0; pin to the 4.6.x line.
-    min_version = "4.6.0"
+    # 4.6.1 minimum: the no-worker warning (Story 1.8) uses
+    # utilities.rqworker.any_workers_for_queue, added in 4.6.1.
+    min_version = "4.6.1"
     # max_version intentionally unset — pinned against a tested 4.6.x patch at
     # release (Story 4.4). Do not pin Django independently; NetBox bundles it.
 

@@ -45,4 +45,14 @@ urlpatterns = (
         name="monitoringprofile_changelog",
         kwargs={"model": MonitoringProfile},
     ),
+    path(
+        "monitoring-profiles/<int:pk>/sync/",
+        views.MonitoringProfileSyncView.as_view(),
+        name="monitoringprofile_sync",
+    ),
+    path(
+        "connection-test/",
+        views.OpenNMSConnectionTestView.as_view(),
+        name="connection_test",
+    ),
 )

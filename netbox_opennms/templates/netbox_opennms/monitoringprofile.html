@@ -3,7 +3,24 @@
 {% extends 'generic/object.html' %}
 {% load helpers %}
 
+{% block extra_controls %}
+  {% if perms.netbox_opennms.change_monitoringprofile %}
+    <form method="post" action="{% url 'plugins:netbox_opennms:monitoringprofile_sync' pk=object.pk %}" class="d-inline">
+      {% csrf_token %}
+      <button type="submit" class="btn btn-sm btn-primary"{% if not object.enabled %} disabled{% endif %}>
+        <i class="mdi mdi-sync"></i> Sync to OpenNMS
+      </button>
+    </form>
+  {% endif %}
+{% endblock %}
+
 {% block content %}
+  {% if no_worker_warning %}
+    <div class="alert alert-warning" role="alert">
+      <i class="mdi mdi-alert"></i> No background worker is running — Sync jobs will
+      stay pending until an RQ worker is started.
+    </div>
+  {% endif %}
   <div class="row">
     <div class="col col-md-6">
       <div class="card">

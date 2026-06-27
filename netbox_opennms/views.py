@@ -19,6 +19,8 @@ from .jobs import (
     SyncForeignSourceJob,
     enabled_foreign_sources,
     enabled_profiles_for,
+    sync_status_for,
+    unknown_locations,
 )
 from .models import MonitoredService, MonitoringProfile
 from .validation import validate_foreign_source
@@ -41,13 +43,37 @@ def _no_worker_running():
         return True
 
 
+def _location_warnings(profiles):
+    """Best-effort warnings for chosen locations with no Minion (FR-5/AD-16).
+
+    Mirrors ``_no_worker_running``'s swallow-everything contract: opens the port,
+    asks OpenNMS which monitoring locations exist, and returns a warning string per
+    explicit profile location it doesn't know. ANY failure (OpenNMS unreachable,
+    auth, malformed response) degrades to ``[]`` — the check never blocks Sync.
+    """
+    try:
+        with OpenNMSClient.from_config() as client:
+            missing = unknown_locations(client, profiles)
+    except Exception:
+        return []
+    return [
+        f"Location {location!r} is not a known OpenNMS monitoring location — "
+        "no Minion will poll it (check the OpenNMS Minion/location setup)."
+        for location in missing
+    ]
+
+
 class MonitoringProfileView(generic.ObjectView):
     queryset = MonitoringProfile.objects.all()
 
     def get_extra_context(self, request, instance):
         # Surface the no-worker warning on the detail page (AC2); derived live so
-        # it clears automatically once a worker starts (AC3).
-        return {"no_worker_warning": _no_worker_running()}
+        # it clears automatically once a worker starts (AC3). The last-sync panel
+        # (Story 4.2) reads the latest Job for the object's Foreign Source.
+        return {
+            "no_worker_warning": _no_worker_running(),
+            "sync_status": sync_status_for(instance.assigned_object),
+        }
 
 
 class MonitoringProfileListView(generic.ObjectListView):
@@ -133,15 +159,18 @@ class MonitoringProfileSyncView(PermissionRequiredMixin, View):
 
         # Validate the whole Foreign Source's intent before enqueuing (FR-8):
         # errors block the sync; warnings are informational.
-        result = validate_foreign_source(
-            foreign_source, enabled_profiles_for(foreign_source)
-        )
+        profiles = enabled_profiles_for(foreign_source)
+        result = validate_foreign_source(foreign_source, profiles)
         for warning in result.warnings:
             messages.warning(request, warning)
         if result.errors:
             for error in result.errors:
                 messages.error(request, error)
             return redirect(profile.get_absolute_url())
+
+        # Best-effort no-Minion-at-location advisory (FR-5/AD-16) — never blocks.
+        for warning in _location_warnings(profiles):
+            messages.warning(request, warning)
 
         job = SyncForeignSourceJob.enqueue_sync(foreign_source, user=request.user)
         messages.success(

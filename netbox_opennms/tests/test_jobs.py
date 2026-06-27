@@ -22,6 +22,7 @@ from netbox_opennms.jobs import (
     SyncForeignSourceJob,
     enabled_foreign_sources,
     enabled_profiles_for,
+    unknown_locations,
 )
 from netbox_opennms.models import MonitoringProfile
 from netbox_opennms.translation import (
@@ -391,6 +392,56 @@ class SyncForeignSourceJobTest(TestCase):
         self.assertEqual(client.import_requisition.call_count, 1)
         locked = [c.args[0] for c in mock_lock.call_args_list]
         self.assertEqual(locked, [f"netbox_opennms:fs:{FS}"])
+
+    def test_unknown_locations_helper(self):
+        fake = mock.Mock()
+        fake.list_locations.return_value = {"Default", "edge-2"}
+        MonitoringProfile.objects.filter(pk=self.profile.pk).update(location="edge-1")
+        profiles = list(MonitoringProfile.objects.filter(pk=self.profile.pk))
+        self.assertEqual(unknown_locations(fake, profiles), ["edge-1"])
+
+    def test_unknown_locations_skips_when_no_explicit_location(self):
+        fake = mock.Mock()
+        profiles = list(MonitoringProfile.objects.filter(pk=self.profile.pk))
+        self.assertEqual(unknown_locations(fake, profiles), [])  # location=""
+        fake.list_locations.assert_not_called()  # no port call when none explicit
+
+    @mock.patch("netbox_opennms.jobs.advisory_lock")
+    @mock.patch("netbox_opennms.jobs.OpenNMSClient.from_config")
+    def test_unknown_location_logs_warning(self, mock_from_config, _lock):
+        client = mock_from_config.return_value.__enter__.return_value
+        client.import_requisition.return_value = mock.Mock(status_code=202)
+        client.list_locations.return_value = {"Default"}
+        MonitoringProfile.objects.filter(pk=self.profile.pk).update(location="edge-1")
+        with self.assertLogs(
+            "netbox.jobs.SyncForeignSourceJob", level="WARNING"
+        ) as captured:
+            self._runner().run(foreign_source=FS)
+        self.assertIn("edge-1", "\n".join(captured.output))
+
+    @mock.patch("netbox_opennms.jobs.advisory_lock")
+    @mock.patch("netbox_opennms.jobs.OpenNMSClient.from_config")
+    def test_location_check_failure_does_not_fail_sync(self, mock_from_config, _lock):
+        # Best-effort (AD-16): a list_locations failure must not fail a sync whose
+        # import already succeeded.
+        client = mock_from_config.return_value.__enter__.return_value
+        client.import_requisition.return_value = mock.Mock(status_code=202)
+        client.list_locations.side_effect = OpenNMSHTTPError("boom", status_code=500)
+        MonitoringProfile.objects.filter(pk=self.profile.pk).update(location="edge-1")
+        self._runner().run(foreign_source=FS)  # must not raise
+        client.import_requisition.assert_called_once()
+
+    @mock.patch("netbox_opennms.jobs.advisory_lock")
+    @mock.patch("netbox_opennms.jobs.OpenNMSClient.from_config")
+    def test_location_parse_failure_does_not_fail_sync(self, mock_from_config, _lock):
+        # A non-OpenNMSError from the location probe (e.g. a malformed-JSON
+        # ValueError) must also be swallowed — the import already succeeded.
+        client = mock_from_config.return_value.__enter__.return_value
+        client.import_requisition.return_value = mock.Mock(status_code=202)
+        client.list_locations.side_effect = ValueError("unparseable")
+        MonitoringProfile.objects.filter(pk=self.profile.pk).update(location="edge-1")
+        self._runner().run(foreign_source=FS)  # must not raise
+        client.import_requisition.assert_called_once()
 
     def test_remove_then_restore_is_idempotent(self):
         # AC4: disable (remove) then re-enable (restore) yields the IDENTICAL

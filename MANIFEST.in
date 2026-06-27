@@ -1,0 +1,6 @@
+include LICENSE
+include README.md
+recursive-include netbox_opennms/templates *.html
+recursive-exclude netbox_opennms/tests *
+global-exclude *.pyc
+global-exclude __pycache__

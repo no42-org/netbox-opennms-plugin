@@ -4,7 +4,8 @@
 
 Connection plumbing + ``test_connection`` (Story 1.4) and the requisition write
 methods used by Sync (Story 1.7): ``post_foreign_source`` / ``post_requisition``
-/ ``import_requisition``. The port still grows (``list_locations`` — Story 4.1).
+/ ``import_requisition``, plus ``list_locations`` for the best-effort no-Minion
+warning (Story 4.1).
 """
 
 import logging
@@ -102,6 +103,49 @@ class OpenNMSClient:
         """Probe reachability + credentials via ``GET /rest/requisitions``."""
         self._request("GET", "/rest/requisitions")
         return True
+
+    def list_locations(self):
+        """Monitoring-location names known to OpenNMS (Story 4.1, FR-5/AD-2).
+
+        ``GET /api/v2/monitoringLocations`` (JSON). A location absent from this
+        set has no registered Minion, so a node assigned there is never polled.
+        Best-effort callers swallow ``OpenNMSError`` and degrade (AD-16); this
+        method itself just raises the typed taxonomy on failure.
+
+        Parsed defensively: the payload may be a bare list or ``{"location": [...]}``,
+        and an entry's name may be ``location-name`` (fallback ``id``/``name``).
+        """
+        response = self._request(
+            "GET",
+            "/api/v2/monitoringLocations",
+            headers={"Accept": "application/json"},
+            params={"limit": 0},
+        )
+        # A 2xx can still carry a non-JSON body (proxy/login HTML, empty body) or
+        # a JSON scalar — normalize those parse failures into the typed taxonomy
+        # so callers' OpenNMSError handling degrades them (AD-16), rather than a
+        # bare ValueError/AttributeError escaping.
+        try:
+            payload = response.json()
+            entries = (
+                payload if isinstance(payload, list) else payload.get("location", [])
+            )
+            names = set()
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+                name = (
+                    entry.get("location-name")
+                    or entry.get("id")
+                    or entry.get("name")
+                )
+                if name:
+                    names.add(name)
+        except (ValueError, AttributeError, TypeError) as exc:
+            raise OpenNMSError(
+                "OpenNMS returned an unparseable monitoringLocations response."
+            ) from exc
+        return names
 
     def post_foreign_source(self, xml_bytes):
         """Apply a foreign-source definition (auto-detection config) — AD-5/AD-11.

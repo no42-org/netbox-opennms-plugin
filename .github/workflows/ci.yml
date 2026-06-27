@@ -1,0 +1,68 @@
+# CI for netbox-opennms-plugin (Story 4.4). Jobs call Makefile targets only, so
+# local and CI stay identical; `make verify` brings Postgres + Redis via compose.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "0 3 * * *"  # nightly — runs the live integration job
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Lint + test (NetBox ${{ matrix.netbox }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        netbox: ["v4.6"]  # supported line; add tags here to widen the matrix
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+      - name: make verify
+        run: make verify
+        env:
+          NETBOX_VERSION: ${{ matrix.netbox }}
+
+  build:
+    name: Build + verify wheel ships templates
+    runs-on: ubuntu-latest
+    needs: verify
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+      - name: make build
+        run: make build
+      - name: Assert the wheel contains the templates
+        run: |
+          python3 - <<'PY'
+          import glob, sys, zipfile
+          wheel = sorted(glob.glob("dist/*.whl"))[-1]
+          names = set(zipfile.ZipFile(wheel).namelist())
+          required = [
+              "netbox_opennms/templates/netbox_opennms/monitoringprofile.html",
+              "netbox_opennms/templates/netbox_opennms/monitoringprofile_list.html",
+              "netbox_opennms/templates/netbox_opennms/connection_test.html",
+              "netbox_opennms/templates/netbox_opennms/inc/sync_status_panel.html",
+          ]
+          missing = [r for r in required if r not in names]
+          if missing:
+              sys.exit(f"wheel is missing templates: {missing}")
+          print(f"ok: all templates present in {wheel}")
+          PY
+
+  integration:
+    name: Live OpenNMS Horizon 35 round-trip
+    runs-on: ubuntu-latest
+    # Bound the run — OpenNMS boot is slow and the healthcheck can loop a while.
+    timeout-minutes: 30
+    # Not PR-gating: a live external service must not flake-block merges. Runs
+    # nightly and on demand.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+      - name: make integration
+        run: make integration

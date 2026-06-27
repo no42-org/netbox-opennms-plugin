@@ -86,6 +86,22 @@ def enabled_foreign_sources():
     return sorted(foreign_sources)
 
 
+def unknown_locations(client, profiles):
+    """Explicit profile locations OpenNMS doesn't know (Story 4.1, FR-5).
+
+    Pure given a ``client`` (no connection management, so it tests against a fake):
+    returns the sorted distinct ``profile.location`` values that are non-empty and
+    absent from ``client.list_locations()`` — each has no registered Minion, so the
+    node is never polled. Skips the port call entirely when no profile sets an
+    explicit location. Callers run this best-effort and swallow ``OpenNMSError``
+    (AD-16).
+    """
+    wanted = {profile.location for profile in profiles if profile.location}
+    if not wanted:
+        return []
+    return sorted(wanted - client.list_locations())
+
+
 class SyncForeignSourceJob(JobRunner):
     """Render-and-replace one Foreign Source against OpenNMS, serialized per FS."""
 
@@ -235,6 +251,18 @@ class SyncForeignSourceJob(JobRunner):
                 client.post_foreign_source(fs_xml)
                 client.post_requisition(requisition_xml)
                 client.import_requisition(foreign_source, rescan_existing=rescan)
+                # Best-effort advisory (FR-5/AD-16): warn if a chosen location has
+                # no Minion. Reuses the open client; a failure here must NEVER turn
+                # a succeeded import into a failure, so swallow everything (a
+                # malformed locations response raises ValueError, not OpenNMSError).
+                try:
+                    for location in unknown_locations(client, profiles):
+                        self.logger.warning(
+                            f"Location {location!r} is not a known OpenNMS "
+                            "monitoring location — no Minion will poll it."
+                        )
+                except Exception:
+                    pass
         except OpenNMSError as exc:
             self.logger.error(f"OpenNMS sync of {foreign_source} failed: {exc}")
             raise JobFailed() from exc

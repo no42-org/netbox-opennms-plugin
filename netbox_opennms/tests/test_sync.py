@@ -206,6 +206,34 @@ class MonitoringProfileSyncViewTest(TestCase):
         mock_enqueue.assert_called_once()
         self.assertEqual(response.status_code, 200)
 
+    @mock.patch("netbox_opennms.views.SyncForeignSourceJob.enqueue_sync")
+    @mock.patch("netbox_opennms.views.OpenNMSClient.from_config")
+    def test_sync_warns_unknown_location(self, mock_from_config, mock_enqueue):
+        # FR-5: a chosen location OpenNMS doesn't know → advisory warning, but the
+        # sync still proceeds (AD-16).
+        mock_enqueue.return_value = mock.Mock(pk=3)
+        client = mock_from_config.return_value.__enter__.return_value
+        client.list_locations.return_value = {"Default"}
+        MonitoringProfile.objects.filter(pk=self.profile.pk).update(location="edge-1")
+        self.client.force_login(self.superuser)
+        response = self.client.post(self._url(), follow=True)
+        mock_enqueue.assert_called_once()
+        self.assertContains(response, "no Minion will poll it")
+
+    @mock.patch("netbox_opennms.views.SyncForeignSourceJob.enqueue_sync")
+    @mock.patch(
+        "netbox_opennms.views.OpenNMSClient.from_config",
+        side_effect=Exception("OpenNMS down"),
+    )
+    def test_sync_location_check_degrades(self, mock_from_config, mock_enqueue):
+        # AD-16: if the location probe can't run, degrade silently — still enqueue.
+        mock_enqueue.return_value = mock.Mock(pk=3)
+        MonitoringProfile.objects.filter(pk=self.profile.pk).update(location="edge-1")
+        self.client.force_login(self.superuser)
+        response = self.client.post(self._url(), follow=True)
+        mock_enqueue.assert_called_once()
+        self.assertNotContains(response, "no Minion will poll it")
+
 
 class MonitoringProfileBulkSyncViewTest(TestCase):
     """Sync-all + Sync-selected bulk actions (Story 3.3)."""

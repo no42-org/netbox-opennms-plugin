@@ -109,6 +109,69 @@ class OpenNMSClientTest(SimpleTestCase):
             mock_request.call_args.kwargs["params"], {"rescanExisting": "false"}
         )
 
+    @mock.patch.object(requests.Session, "request")
+    def test_list_locations_parses_dict_form(self, mock_request):
+        mock_request.return_value = mock.Mock(
+            status_code=200,
+            ok=True,
+            json=mock.Mock(
+                return_value={
+                    "location": [
+                        {"location-name": "Default"},
+                        {"id": "edge-1"},  # id fallback
+                        {"name": "edge-2"},  # name fallback
+                        {"location-name": ""},  # empty dropped
+                        "not-a-dict",  # ignored
+                    ]
+                }
+            ),
+        )
+        self.assertEqual(
+            _client().list_locations(), {"Default", "edge-1", "edge-2"}
+        )
+        method, url = mock_request.call_args.args
+        self.assertEqual(method, "GET")
+        self.assertEqual(
+            url, "https://onms.example/opennms/api/v2/monitoringLocations"
+        )
+        self.assertEqual(mock_request.call_args.kwargs["params"], {"limit": 0})
+
+    @mock.patch.object(requests.Session, "request")
+    def test_list_locations_parses_bare_list(self, mock_request):
+        mock_request.return_value = mock.Mock(
+            status_code=200,
+            ok=True,
+            json=mock.Mock(return_value=[{"location-name": "Default"}]),
+        )
+        self.assertEqual(_client().list_locations(), {"Default"})
+
+    @mock.patch.object(requests.Session, "request")
+    def test_list_locations_http_error_raises(self, mock_request):
+        mock_request.return_value = mock.Mock(status_code=500, ok=False)
+        with self.assertRaises(OpenNMSError):
+            _client().list_locations()
+
+    @mock.patch.object(requests.Session, "request")
+    def test_list_locations_non_json_body_raises_opennms_error(self, mock_request):
+        # A 2xx with a non-JSON body (proxy/login HTML) must surface as the typed
+        # OpenNMSError so best-effort callers degrade — not a bare ValueError.
+        mock_request.return_value = mock.Mock(
+            status_code=200,
+            ok=True,
+            json=mock.Mock(side_effect=ValueError("no json")),
+        )
+        with self.assertRaises(OpenNMSError):
+            _client().list_locations()
+
+    @mock.patch.object(requests.Session, "request")
+    def test_list_locations_json_scalar_raises_opennms_error(self, mock_request):
+        # A JSON scalar (null/number/string) must not escape as AttributeError.
+        mock_request.return_value = mock.Mock(
+            status_code=200, ok=True, json=mock.Mock(return_value=None)
+        )
+        with self.assertRaises(OpenNMSError):
+            _client().list_locations()
+
     def test_from_config_requires_url(self):
         with mock.patch(
             "netbox_opennms.client.client.get_plugin_config", return_value=""

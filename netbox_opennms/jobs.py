@@ -15,6 +15,8 @@ error raises ``JobFailed`` → *failed*. A bare ``202`` from import is "accepted
 for import", never "provisioned" (v1 has no read-back).
 """
 
+from contextlib import ExitStack
+
 from core.choices import JobStatusChoices
 from core.exceptions import JobFailed
 from core.models import Job
@@ -39,8 +41,11 @@ def enabled_profiles_for(foreign_source):
     """Enabled MonitoringProfiles whose derived Foreign Source matches the arg.
 
     Derivation is delegated to the single owner ``foreign_source_for`` (AD-14).
-    v1 scans all enabled profiles (no stored Foreign Source column — that arrives
-    with ``last_synced_foreign_source`` in Story 3.2).
+    v1 scans all enabled profiles and derives each one's Foreign Source from its
+    *live* role+site. ``last_synced_foreign_source`` (Story 3.2) is the FS a node
+    was last imported into — the *old* value used to detect a move — NOT a
+    queryable substitute for this derived scan, so the full scan stays (reducing
+    it is bulk/observability scope, not this story).
     """
     profiles = []
     for profile in MonitoringProfile.objects.filter(enabled=True).prefetch_related(
@@ -103,69 +108,133 @@ class SyncForeignSourceJob(JobRunner):
         )
 
     def run(self, foreign_source, allow_empty=False, **kwargs):
-        # AD-6: serialize all work for this Foreign Source. wait=True blocks until
-        # acquired; the lock auto-releases at block exit.
-        with advisory_lock(f"netbox_opennms:fs:{foreign_source}"):
-            profiles = enabled_profiles_for(foreign_source)
+        profiles = enabled_profiles_for(foreign_source)
 
-            if not profiles and not allow_empty:
-                # A Sync must never mass-delete. An empty requisition would tell
-                # OpenNMS to remove every node in the Foreign Source — that is the
-                # deliberate Remove path (allow_empty, Story 3.1), not Sync. The
-                # trigger was enabled at enqueue; reaching here means it was
-                # disabled/deleted in the meantime — skip rather than wipe.
-                self.logger.info(
-                    f"nothing to sync for {foreign_source} (no enabled profiles) "
-                    "— skipped; use Remove to clear the Foreign Source."
-                )
-                return
-            # allow_empty + no profiles falls through: render the node-less
-            # requisition and import it, which deletes the FS's remaining nodes.
+        # AD-10 move detection: a profile whose stored last-synced Foreign Source
+        # differs from the FS it now derives to (role/site changed) has MOVED. Its
+        # old FS must be re-rendered without it, or the node is orphaned there and
+        # duplicated here. Collect those old FSs (a set — several nodes may share
+        # one), sorted for deterministic, deadlock-free lock acquisition.
+        old_foreign_sources = sorted(
+            {
+                profile.last_synced_foreign_source
+                for profile in profiles
+                if profile.last_synced_foreign_source
+                and profile.last_synced_foreign_source != foreign_source
+            }
+        )
 
-            # Re-validate intent as a safety net (FR-8): the view blocks on
-            # errors, but non-UI triggers must fail cleanly too, not push bad
-            # intent (AD-12).
-            validation = validate_foreign_source(foreign_source, profiles)
-            if validation.errors:
-                for error in validation.errors:
-                    self.logger.error(error)
-                raise JobFailed()
-
-            default_location = get_plugin_config(PLUGIN_NAME, "default_location")
-            if default_location:
-                try:
-                    validate_location_name(default_location)
-                except ValueError as exc:
-                    self.logger.error(f"Configured default_location is invalid: {exc}")
-                    raise JobFailed() from exc
+        # Validate config once for the whole job (it applies to every leg).
+        default_location = get_plugin_config(PLUGIN_NAME, "default_location")
+        if default_location:
             try:
-                fs_xml = render_foreign_source_definition(foreign_source)
-                requisition_xml = render_requisition(
-                    foreign_source, profiles, default_location=default_location
-                )
-            except RenderError as exc:
-                self.logger.error(f"Cannot render {foreign_source}: {exc}")
+                validate_location_name(default_location)
+            except ValueError as exc:
+                self.logger.error(f"Configured default_location is invalid: {exc}")
                 raise JobFailed() from exc
-
-            rescan = str(get_plugin_config(PLUGIN_NAME, "import_mode")).strip().lower()
-            if rescan not in ("true", "false", "dbonly"):
-                self.logger.error(
-                    f"Invalid import_mode {rescan!r} (expected true/false/dbonly)."
-                )
-                raise JobFailed()
-
-            try:
-                with OpenNMSClient.from_config() as client:
-                    # Order matters (AD-11): definition first, then requisition,
-                    # then import.
-                    client.post_foreign_source(fs_xml)
-                    client.post_requisition(requisition_xml)
-                    client.import_requisition(foreign_source, rescan_existing=rescan)
-            except OpenNMSError as exc:
-                self.logger.error(f"OpenNMS sync of {foreign_source} failed: {exc}")
-                raise JobFailed() from exc
-
-            self.logger.info(
-                f"succeeded-accepted: import of {foreign_source} accepted by "
-                "OpenNMS (HTTP 2xx/202 — submitted for import, not verified)."
+        rescan = str(get_plugin_config(PLUGIN_NAME, "import_mode")).strip().lower()
+        if rescan not in ("true", "false", "dbonly"):
+            self.logger.error(
+                f"Invalid import_mode {rescan!r} (expected true/false/dbonly)."
             )
+            raise JobFailed()
+
+        # AD-6: serialize over the whole SET of affected Foreign Sources (the new
+        # one plus any old ones a move touches), acquiring locks in sorted name
+        # order so a move and a concurrent sync of a shared FS cannot deadlock.
+        affected = sorted({foreign_source, *old_foreign_sources})
+        with ExitStack() as locks:
+            for fs in affected:
+                locks.enter_context(advisory_lock(f"netbox_opennms:fs:{fs}"))
+
+            # Old-FS legs FIRST (remove the moved node), each allowed to push an
+            # empty requisition because the moved node may have been the last one
+            # there — an intentional empty, like Remove (Story 3.1).
+            for old_fs in old_foreign_sources:
+                self._render_and_replace(
+                    old_fs,
+                    enabled_profiles_for(old_fs),
+                    allow_empty=True,
+                    default_location=default_location,
+                    rescan=rescan,
+                )
+
+            # New/current FS leg (add the node). Honors the caller's allow_empty
+            # so a plain Sync of an emptied FS still skips (Story 1.7), while a
+            # Remove (allow_empty=True) pushes the intentional empty requisition.
+            self._render_and_replace(
+                foreign_source,
+                profiles,
+                allow_empty=allow_empty,
+                default_location=default_location,
+                rescan=rescan,
+            )
+
+    def _render_and_replace(
+        self, foreign_source, profiles, allow_empty, default_location, rescan
+    ):
+        """Render-and-replace ONE Foreign Source (AD-5). Returns True if a push
+        happened, False if skipped (no profiles and not allow_empty).
+
+        Caller holds the advisory lock(s) and has already validated config; this
+        validates the FS's own intent (AD-12 safety net), renders, and pushes in
+        AD-11 order through the port.
+        """
+        if not profiles and not allow_empty:
+            # A Sync must never mass-delete. An empty requisition would tell
+            # OpenNMS to remove every node in the Foreign Source — that is the
+            # deliberate Remove/Move path (allow_empty), not Sync. The trigger was
+            # enabled at enqueue; reaching here means it was disabled/deleted in
+            # the meantime — skip rather than wipe live monitoring.
+            self.logger.info(
+                f"nothing to sync for {foreign_source} (no enabled profiles) "
+                "— skipped; use Remove to clear the Foreign Source."
+            )
+            return False
+
+        # Re-validate intent as a safety net (FR-8): the view blocks on errors,
+        # but non-UI triggers must fail cleanly too, not push bad intent (AD-12).
+        validation = validate_foreign_source(foreign_source, profiles)
+        if validation.errors:
+            for error in validation.errors:
+                self.logger.error(error)
+            raise JobFailed()
+
+        try:
+            fs_xml = render_foreign_source_definition(foreign_source)
+            requisition_xml = render_requisition(
+                foreign_source, profiles, default_location=default_location
+            )
+        except RenderError as exc:
+            self.logger.error(f"Cannot render {foreign_source}: {exc}")
+            raise JobFailed() from exc
+
+        try:
+            with OpenNMSClient.from_config() as client:
+                # Order matters (AD-11): definition first, then requisition, then
+                # import.
+                client.post_foreign_source(fs_xml)
+                client.post_requisition(requisition_xml)
+                client.import_requisition(foreign_source, rescan_existing=rescan)
+        except OpenNMSError as exc:
+            self.logger.error(f"OpenNMS sync of {foreign_source} failed: {exc}")
+            raise JobFailed() from exc
+
+        self.logger.info(
+            f"succeeded-accepted: import of {foreign_source} accepted by "
+            "OpenNMS (HTTP 2xx/202 — submitted for import, not verified)."
+        )
+
+        # AD-10: record where these nodes now live, ONLY after the import is
+        # accepted. Every successful leg does this — the new-FS leg so a future
+        # role/site change is detected as a move, AND the old-FS leg so a node
+        # first imported there via a side-effect move-leg is also tracked (else
+        # its own later move would go undetected and orphan it). A crash before
+        # this leaves the prior value, so the next Sync re-runs the move
+        # idempotently. Bulk update: job-owned bookkeeping, no signals.
+        if profiles:
+            MonitoringProfile.objects.filter(
+                pk__in=[profile.pk for profile in profiles]
+            ).update(last_synced_foreign_source=foreign_source)
+
+        return True

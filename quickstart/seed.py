@@ -2,13 +2,13 @@
 # SPDX-License-Identifier: MIT
 """Seed the quickstart NetBox with test Devices, VMs, and Monitoring Profiles.
 
-Run it inside the NetBox container (the ORM + plugin are available there):
+Run it with `quickstart/seed.sh`, or by hand inside the NetBox container (the ORM
++ plugin are available there) — from the quickstart/ directory:
 
     docker compose exec -T netbox \\
-      /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py shell < quickstart/seed.py
+      /opt/netbox/venv/bin/python manage.py shell < seed.py
 
-…or just `quickstart/seed.sh`. Idempotent — every object is get_or_create'd, so
-re-running is safe and won't duplicate.
+Idempotent — every object is get_or_create'd, so re-running is safe.
 
 It builds enough to exercise every plugin path: multiple sites/roles, devices
 with several interfaces + additional IPs, VMs (via a site-scoped cluster), a

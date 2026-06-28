@@ -9,7 +9,7 @@ dynamic = ["version"]
 description = "Provision NetBox devices and virtual machines into OpenNMS via the REST provisioning API."
 readme = "README.md"
 requires-python = ">=3.12"
-license = "Apache-2.0"
+license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "Ronny Trommer", email = "ronny@no42.org" }]
 keywords = ["netbox", "netbox-plugin", "opennms", "provisioning", "monitoring"]

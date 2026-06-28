@@ -1,5 +1,5 @@
 # Copyright 2026 Ronny Trommer <ronny@no42.org>
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: MIT
 """Tests for pre-push intent validation (FR-8)."""
 
 from dcim.models import (

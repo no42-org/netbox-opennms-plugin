@@ -1,5 +1,5 @@
 # Copyright 2026 Ronny Trommer <ronny@no42.org>
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: MIT
 """Smoke tests for plugin loading and configuration defaults.
 
 Run inside a configured NetBox environment, e.g.::

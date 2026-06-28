@@ -1,5 +1,5 @@
 # Copyright 2026 Ronny Trommer <ronny@no42.org>
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: MIT
 """OpenNMS REST client — the single port for all OpenNMS I/O (AD-2).
 
 Connection plumbing + ``test_connection`` (Story 1.4) and the requisition write

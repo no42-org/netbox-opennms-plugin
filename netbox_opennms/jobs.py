@@ -1,5 +1,5 @@
 # Copyright 2026 Ronny Trommer <ronny@no42.org>
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: MIT
 """Background jobs — render-and-replace a Foreign Source against OpenNMS (AD-4/5/6).
 
 ``SyncForeignSourceJob`` is the orchestration that turns rendered XML (the pure

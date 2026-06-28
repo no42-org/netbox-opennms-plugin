@@ -1,5 +1,5 @@
 # Copyright 2026 Ronny Trommer <ronny@no42.org>
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: MIT
 """Foreign Source name derivation — the single owner (AD-14).
 
 Every consumer (translation, jobs, views) must call ``foreign_source_for``;

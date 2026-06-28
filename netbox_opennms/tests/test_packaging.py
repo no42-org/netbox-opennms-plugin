@@ -1,5 +1,5 @@
 # Copyright 2026 Ronny Trommer <ronny@no42.org>
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: MIT
 """Packaging guards (Story 4.3) — keep the release honest."""
 
 from pathlib import Path
@@ -9,7 +9,7 @@ from django.test import SimpleTestCase
 import netbox_opennms
 
 PACKAGE_ROOT = Path(netbox_opennms.__file__).parent
-SPDX = "SPDX-License-Identifier: Apache-2.0"
+SPDX = "SPDX-License-Identifier: MIT"
 
 
 class LicenseHeaderTest(SimpleTestCase):

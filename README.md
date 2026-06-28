@@ -65,6 +65,13 @@ python manage.py migrate
 | `true` | Import and rescan existing nodes (re-run detectors/policies). |
 | `dbonly` | Update the OpenNMS database only; do not schedule a scan. |
 
+## Try it (Web UI)
+
+For a throwaway NetBox deployment with the plugin installed — to click **Sync to
+OpenNMS** in the browser and watch a node appear — see
+[`examples/quickstart/`](examples/quickstart/): `docker compose --profile opennms up -d`
+brings up NetBox (UI + worker) **and** a disposable OpenNMS Horizon 36.
+
 ## Running the sync worker
 
 Sync, Remove, and Move run as NetBox **background Jobs** — they never block the

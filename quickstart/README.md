@@ -39,10 +39,32 @@ Status** panel appears on Device/VM pages). Direct links:
 - Monitoring Profiles — http://localhost:8000/plugins/opennms/monitoring-profiles/
 - OpenNMS connection test — http://localhost:8000/plugins/opennms/connection-test/
 
+## Seed test data
+
+Once NetBox is up, load a set of sample Devices, VMs, and Monitoring Profiles so
+there's something to sync immediately:
+
+```bash
+./seed.sh
+# …or:  docker compose exec -T netbox \
+#         /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py shell < seed.py
+```
+
+It's **idempotent** (everything is `get_or_create`'d). It builds 3 sites × a few
+roles, devices with multiple interfaces + additional IPs, VMs on a site-scoped
+cluster, monitored services, and 8 Monitoring Profiles — including a multi-node
+Foreign Source mixing devices **and** VMs (`netbox.raleigh.router`), a profile
+with an OpenNMS-unknown location (trips the no-Minion warning), a disabled
+profile, and one unmonitored object. Edit [`seed.py`](./seed.py) to taste.
+
+After seeding, **Plugins → Monitoring Profiles** lists them; try **Sync all**, or
+change a device's site/role and re-sync to watch a Foreign Source *move*.
+
 ## Do a sync (Web UI)
 
-1. **Create the prerequisites** (Organization/DCIM): a Site, a Device Role, a
-   Manufacturer + Device Type, then a **Device** in that site/role.
+1. *(or run [`./seed.sh`](#seed-test-data) and skip to step 4)* **Create the
+   prerequisites** (Organization/DCIM): a Site, a Device Role, a Manufacturer +
+   Device Type, then a **Device** in that site/role.
 2. Add an **Interface** to the device and assign it an **IP address**.
 3. **Plugins → Monitoring Profiles → Add**: pick the device as the object, set its
    **Management IP** (optionally add monitored services / a location).

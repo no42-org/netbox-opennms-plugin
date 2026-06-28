@@ -6,11 +6,11 @@ Profile, click **Sync to OpenNMS**, and watch the node appear. Optionally boots 
 disposable OpenNMS Horizon 36 so the whole loop is self-contained.
 
 > ⚠️ For testing only — fixed throwaway secrets, no TLS, ephemeral data. Not for
-> production. For a real install see the repo [README](../../README.md).
+> production. For a real install see the repo [README](../README.md).
 
 ## Run it
 
-From this directory (`examples/quickstart/`):
+From this directory (`quickstart/`):
 
 ```bash
 # NetBox UI + background worker only (point the plugin at your own OpenNMS)
@@ -65,7 +65,7 @@ and trigger imports.
 
 ## How it's wired
 
-- The plugin is **mounted** from the repo root (`../../ → /source`) and added to
+- The plugin is **mounted** from the repo root (`../ → /source`) and added to
   `PYTHONPATH`, reusing the image's bundled `requests`/`lxml`. No rebuild on code
   changes — restart the `netbox` + `netbox-worker` containers to pick them up.
 - `netbox` runs the web UI (gunicorn); `netbox-worker` runs `manage.py rqworker`

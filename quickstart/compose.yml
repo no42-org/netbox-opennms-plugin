@@ -7,7 +7,7 @@
 # NetBox UI:  http://localhost:8000   (admin / admin)
 # OpenNMS UI: http://localhost:8980/opennms   (admin / admin, with --profile opennms)
 #
-# The plugin is mounted from the repo (../../) and put on PYTHONPATH, so the
+# The plugin is mounted from the repo (../) and put on PYTHONPATH, so the
 # image's bundled deps (requests, lxml) are reused — no rebuild. For a real
 # deployment you would `pip install netbox-opennms-plugin` into a custom image.
 name: netbox-opennms-example
@@ -65,7 +65,7 @@ services:
     ports:
       - "8000:8080"
     volumes:
-      - ../../:/source:ro
+      - ../:/source:ro
       - ./configuration/plugins.py:/etc/netbox/config/plugins.py:ro
       - netbox-media:/opt/netbox/netbox/media
     healthcheck:
@@ -83,7 +83,7 @@ services:
     environment:
       <<: *netbox-env
     volumes:
-      - ../../:/source:ro
+      - ../:/source:ro
       - ./configuration/plugins.py:/etc/netbox/config/plugins.py:ro
     # Skip the web init (the netbox service already migrated) — just run the queue
     # worker that executes Sync/Remove/Move jobs.

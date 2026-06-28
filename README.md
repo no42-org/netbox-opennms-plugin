@@ -69,7 +69,7 @@ python manage.py migrate
 
 For a throwaway NetBox deployment with the plugin installed — to click **Sync to
 OpenNMS** in the browser and watch a node appear — see
-[`examples/quickstart/`](examples/quickstart/): `docker compose --profile opennms up -d`
+[`quickstart/`](quickstart/): `docker compose --profile opennms up -d`
 brings up NetBox (UI + worker) **and** a disposable OpenNMS Horizon 36.
 
 ## Running the sync worker

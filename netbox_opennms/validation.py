@@ -1,5 +1,5 @@
 # Copyright 2026 Ronny Trommer <ronny@no42.org>
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: MIT
 """Pre-push intent validation (FR-8) — shared by the Sync view and the job.
 
 One routine so every consumer validates the same way: errors block a sync,

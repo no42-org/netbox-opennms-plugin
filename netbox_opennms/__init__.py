@@ -1,5 +1,5 @@
 # Copyright 2026 Ronny Trommer <ronny@no42.org>
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: MIT
 """NetBox plugin that provisions nodes into OpenNMS via the REST provisioning API."""
 
 from netbox.plugins import PluginConfig

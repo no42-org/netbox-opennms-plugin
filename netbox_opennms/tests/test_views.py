@@ -1,5 +1,5 @@
 # Copyright 2026 Ronny Trommer <ronny@no42.org>
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: MIT
 """UI view tests for MonitoringProfile."""
 
 from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Site

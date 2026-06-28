@@ -1,5 +1,5 @@
 # Copyright 2026 Ronny Trommer <ronny@no42.org>
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: MIT
 """Typed errors for OpenNMS REST interactions (AD-12).
 
 Callers map these to honest outcomes; the connection test surfaces the failure

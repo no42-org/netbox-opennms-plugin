@@ -1,5 +1,5 @@
 # Copyright 2026 Ronny Trommer <ronny@no42.org>
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: MIT
 """Render OpenNMS requisition + foreign-source-definition XML (pure, AD-3, AD-5).
 
 This is the render half of render-and-replace. Posting/importing is Story 1.7.

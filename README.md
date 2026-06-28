@@ -19,7 +19,7 @@ re-syncing is idempotent and never duplicates a node.
 | NetBox | 4.6.1+ |
 | Python | 3.12+ |
 | OpenNMS | Horizon 36 |
-| License | Apache-2.0 |
+| License | MIT |
 
 ## Installation
 
@@ -140,4 +140,4 @@ if you run `makemigrations` outside the harness.
 
 ## License
 
-Apache-2.0 — see [LICENSE](./LICENSE). Every source file carries an SPDX header.
+MIT — see [LICENSE](./LICENSE). Every source file carries an SPDX header.

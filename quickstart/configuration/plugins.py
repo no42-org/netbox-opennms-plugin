@@ -1,5 +1,5 @@
 # Copyright 2026 Ronny Trommer <ronny@no42.org>
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: MIT
 # Example plugin config for the quickstart deployment, mounted into NetBox at
 # /etc/netbox/config/plugins.py. Edit opennms_url/credentials to point at your
 # own OpenNMS, or use the bundled one (`docker compose --profile opennms up`).

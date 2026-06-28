@@ -1,5 +1,5 @@
 # Copyright 2026 Ronny Trommer <ronny@no42.org>
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: MIT
 """Detail-page extensions for monitored objects (Story 4.2 observability).
 
 Adds the OpenNMS last-sync panel to a Device's / VirtualMachine's detail page so

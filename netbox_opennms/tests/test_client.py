@@ -180,6 +180,53 @@ class OpenNMSClientTest(SimpleTestCase):
         with self.assertRaises(OpenNMSError):
             _client().list_locations()
 
+    @mock.patch.object(requests.Session, "request")
+    def test_list_requisition_names(self, mock_request):
+        mock_request.return_value = mock.Mock(
+            status_code=200,
+            ok=True,
+            json=mock.Mock(
+                return_value={
+                    "model-import": [
+                        {"foreign-source": "netbox.raleigh.router"},
+                        {"foreign-source": "netbox.durham.router"},
+                        {"no-foreign-source": "ignored"},
+                    ]
+                }
+            ),
+        )
+        self.assertEqual(
+            _client().list_requisition_names(),
+            {"netbox.raleigh.router", "netbox.durham.router"},
+        )
+
+    @mock.patch.object(requests.Session, "request")
+    def test_list_requisition_names_unparseable_raises(self, mock_request):
+        mock_request.return_value = mock.Mock(
+            status_code=200, ok=True, json=mock.Mock(side_effect=ValueError("x"))
+        )
+        with self.assertRaises(OpenNMSError):
+            _client().list_requisition_names()
+
+    @mock.patch.object(requests.Session, "request")
+    def test_delete_requisition_removes_deployed_then_pending(self, mock_request):
+        mock_request.return_value = mock.Mock(status_code=202, ok=True)
+        _client().delete_requisition("netbox.x.y")
+        urls = [c.args[1] for c in mock_request.call_args_list]
+        methods = {c.args[0] for c in mock_request.call_args_list}
+        self.assertEqual(methods, {"DELETE"})
+        # Deployed copy first (it's what GET /rest/requisitions lists), then pending.
+        self.assertTrue(urls[0].endswith("/rest/requisitions/deployed/netbox.x.y"))
+        self.assertTrue(urls[1].endswith("/rest/requisitions/netbox.x.y"))
+
+    @mock.patch.object(requests.Session, "request")
+    def test_delete_foreign_source(self, mock_request):
+        mock_request.return_value = mock.Mock(status_code=202, ok=True)
+        _client().delete_foreign_source("netbox.x.y")
+        method, url = mock_request.call_args.args
+        self.assertEqual(method, "DELETE")
+        self.assertTrue(url.endswith("/rest/foreignSources/netbox.x.y"))
+
     def test_from_config_requires_url(self):
         with mock.patch(
             "netbox_opennms.client.client.get_plugin_config", return_value=""

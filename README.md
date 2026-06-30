@@ -54,6 +54,13 @@ PLUGINS_CONFIG = {
         # rescanExisting value passed to the import step: one of
         # "true" | "false" | "dbonly".
         "import_mode": "false",
+        # Periodic drift reconciler (hourly): clears OpenNMS `netbox.*` Foreign
+        # Sources that NetBox no longer governs — when the last member leaves a
+        # scope (object deleted, role/site changed, or its assignment removed),
+        # the Foreign Source is no longer governed and its stale nodes would
+        # otherwise linger. Touches only the plugin's own namespace. "true" /
+        # "false"; needs an RQ worker.
+        "reconcile_orphans": "true",
     },
 }
 ```

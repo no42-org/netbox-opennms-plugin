@@ -3,84 +3,50 @@
 {% extends 'generic/object.html' %}
 {% load helpers %}
 
-{% block extra_controls %}
-  {% if perms.netbox_opennms.change_monitoringprofile %}
-    <form method="post" action="{% url 'plugins:netbox_opennms:monitoringprofile_sync' pk=object.pk %}" class="d-inline">
-      {% csrf_token %}
-      <button type="submit" class="btn btn-sm btn-primary"{% if not object.enabled %} disabled{% endif %}>
-        <i class="mdi mdi-sync"></i> Sync to OpenNMS
-      </button>
-    </form>
-    <form method="post" action="{% url 'plugins:netbox_opennms:monitoringprofile_remove' pk=object.pk %}" class="d-inline">
-      {% csrf_token %}
-      <button type="submit" class="btn btn-sm btn-danger">
-        <i class="mdi mdi-trash-can-outline"></i> Remove from OpenNMS
-      </button>
-    </form>
-    <small class="d-block text-muted mt-1">
-      Sync republishes the entire Foreign Source — every enabled Device/VM in this
-      role + site group, not just this object.
-    </small>
-  {% endif %}
-{% endblock %}
-
 {% block content %}
-  {% if no_worker_warning %}
-    <div class="alert alert-warning" role="alert">
-      <i class="mdi mdi-alert"></i> No background worker is running — Sync jobs will
-      stay pending until an RQ worker is started.
-    </div>
-  {% endif %}
   <div class="row">
     <div class="col col-md-6">
       <div class="card">
         <h2 class="card-header">Monitoring Profile</h2>
         <table class="table table-hover attr-table">
-          <tr>
-            <th scope="row">Object</th>
-            <td>{{ object.assigned_object|linkify }}</td>
-          </tr>
-          <tr>
-            <th scope="row">Type</th>
-            <td>{{ object.assigned_object_type }}</td>
-          </tr>
-          <tr>
-            <th scope="row">Management IP</th>
-            <td>{{ object.management_ip|linkify|placeholder }}</td>
-          </tr>
-          <tr>
-            <th scope="row">Additional IPs</th>
-            <td>
-              {% for ip in object.additional_ips.all %}
-                {{ ip|linkify }}{% if not forloop.last %}, {% endif %}
-              {% empty %}
-                {{ ''|placeholder }}
-              {% endfor %}
-            </td>
-          </tr>
-          <tr>
-            <th scope="row">Location</th>
-            <td>{{ object.location|placeholder }}</td>
-          </tr>
-          <tr>
-            <th scope="row">Enabled</th>
-            <td>{% checkmark object.enabled %}</td>
-          </tr>
-          <tr>
-            <th scope="row">Monitored Services</th>
-            <td>
-              {% for service in object.services.all %}
-                {{ service.name }} on {{ service.ip_address|linkify }}<br>
-              {% empty %}
-                {{ ''|placeholder }}
-              {% endfor %}
-            </td>
-          </tr>
+          <tr><th scope="row">Name</th><td>{{ object.name }}</td></tr>
+          <tr><th scope="row">Description</th><td>{{ object.description|placeholder }}</td></tr>
+          <tr><th scope="row">Scan interval</th><td>{{ object.scan_interval }}</td></tr>
+          <tr><th scope="row">Default interfaces</th><td>{{ object.get_default_interfaces_display }}</td></tr>
         </table>
       </div>
     </div>
     <div class="col col-md-6">
-      {% include 'netbox_opennms/inc/sync_status_panel.html' %}
+      <div class="card">
+        <h2 class="card-header">Detectors</h2>
+        <table class="table table-hover attr-table">
+          {% for detector in object.detectors.all %}
+            <tr><td>{{ detector.name }}</td><td><code>{{ detector.rule_class }}</code></td></tr>
+          {% empty %}
+            <tr><td colspan="2">{{ ''|placeholder }}</td></tr>
+          {% endfor %}
+        </table>
+      </div>
+      <div class="card">
+        <h2 class="card-header">Policies</h2>
+        <table class="table table-hover attr-table">
+          {% for policy in object.policies.all %}
+            <tr><td>{{ policy.name }}</td><td><code>{{ policy.rule_class }}</code></td></tr>
+          {% empty %}
+            <tr><td colspan="2">{{ ''|placeholder }}</td></tr>
+          {% endfor %}
+        </table>
+      </div>
+      <div class="card">
+        <h2 class="card-header">Assignments</h2>
+        <table class="table table-hover attr-table">
+          {% for assignment in object.assignments.all %}
+            <tr><td>{{ assignment|linkify }}</td></tr>
+          {% empty %}
+            <tr><td>{{ ''|placeholder }}</td></tr>
+          {% endfor %}
+        </table>
+      </div>
     </div>
   </div>
 {% endblock %}

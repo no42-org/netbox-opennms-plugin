@@ -7,11 +7,9 @@ an operator sees provisioning status without opening the Monitoring Profile.
 NetBox auto-discovers ``template_extensions`` — no PluginConfig change.
 """
 
-from django.contrib.contenttypes.models import ContentType
 from netbox.plugins import PluginTemplateExtension
 
 from .jobs import sync_status_for
-from .models import MonitoringProfile
 
 PANEL = "netbox_opennms/inc/sync_status_panel.html"
 
@@ -24,15 +22,12 @@ class _SyncStatusPanel(PluginTemplateExtension):
         # detail page, so degrade to nothing on any unexpected error.
         try:
             obj = self.context["object"]
-            content_type = ContentType.objects.get_for_model(obj)
-            profile = MonitoringProfile.objects.filter(
-                assigned_object_type=content_type, assigned_object_id=obj.pk
-            ).first()
-            if profile is None:
+            status = sync_status_for(obj)
+            # Show the panel only when the object is in a monitored scope or has a
+            # sync history; an unmonitored object gets nothing.
+            if status is None or not (status["governed"] or status["job"]):
                 return ""
-            return self.render(
-                PANEL, extra_context={"sync_status": sync_status_for(obj)}
-            )
+            return self.render(PANEL, extra_context={"sync_status": status})
         except Exception:
             return ""
 

@@ -17,11 +17,22 @@ menu_items = (
         ),
     ),
     PluginMenuItem(
-        link="plugins:netbox_opennms:monitoredservice_list",
-        link_text="Monitored Services",
+        link="plugins:netbox_opennms:monitoringassignment_list",
+        link_text="Monitoring Assignments",
         buttons=(
             PluginMenuButton(
-                link="plugins:netbox_opennms:monitoredservice_add",
+                link="plugins:netbox_opennms:monitoringassignment_add",
+                title="Add",
+                icon_class="mdi mdi-plus-thick",
+            ),
+        ),
+    ),
+    PluginMenuItem(
+        link="plugins:netbox_opennms:monitoringoverride_list",
+        link_text="Monitoring Overrides",
+        buttons=(
+            PluginMenuButton(
+                link="plugins:netbox_opennms:monitoringoverride_add",
                 title="Add",
                 icon_class="mdi mdi-plus-thick",
             ),

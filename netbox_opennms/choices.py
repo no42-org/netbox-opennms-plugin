@@ -6,12 +6,12 @@ from utilities.choices import ChoiceSet
 
 
 class ServiceChoices(ChoiceSet):
-    """OpenNMS service names monitored on an interface (AD-11 — explicit only).
+    """OpenNMS service names for an explicit per-object service override (Epic 5).
 
-    ``key`` makes the list admin-extensible without code: set
-    ``FIELD_CHOICES['netbox_opennms.MonitoredService.name']`` to replace the
-    defaults, or ``'netbox_opennms.MonitoredService.name+'`` to append. The
-    chosen names must match OpenNMS's poller/service config server-side.
+    Detectors on the Monitoring Profile are the default service source; an explicit
+    ``MonitoredService`` is a Monitoring Override exception. ``key`` keeps the list
+    admin-extensible (``FIELD_CHOICES['netbox_opennms.MonitoredService.name']``);
+    the names must match OpenNMS's poller/service config server-side.
     """
 
     key = "MonitoredService.name"
@@ -24,4 +24,53 @@ class ServiceChoices(ChoiceSet):
         ("SSH", "SSH"),
         ("DNS", "DNS"),
         ("NTP", "NTP"),
+    ]
+
+
+class DetectorPresetChoices(ChoiceSet):
+    """Provisioning detector presets a Monitoring Profile can select (Epic 5).
+
+    Each key resolves (via ``presets.DETECTOR_PRESETS``) to an OpenNMS detector
+    class + default parameters. Blank preset = freeform detector (user supplies the
+    class). Admin-extensible via
+    ``FIELD_CHOICES['netbox_opennms.MonitoringDetector.preset']``.
+    """
+
+    key = "MonitoringDetector.preset"
+
+    CHOICES = [
+        ("icmp", "ICMP"),
+        ("snmp", "SNMP"),
+        ("http", "HTTP"),
+        ("https", "HTTPS"),
+        ("ssh", "SSH"),
+        ("dns", "DNS"),
+        ("tcp", "TCP"),
+    ]
+
+
+class PolicyPresetChoices(ChoiceSet):
+    """Provisioning policy presets a Monitoring Profile can select (Epic 5).
+
+    Resolve via ``presets.POLICY_PRESETS``; blank = freeform policy class.
+    """
+
+    key = "MonitoringPolicy.preset"
+
+    CHOICES = [
+        ("set-category", "Set node category"),
+        ("manage-ip-interfaces", "Manage IP interfaces"),
+        ("snmp-collection", "SNMP interface collection"),
+    ]
+
+
+class InterfaceScopeChoices(ChoiceSet):
+    """Which of a node's NetBox IPs become OpenNMS interfaces by default (Epic 5)."""
+
+    PRIMARY = "primary"
+    ALL = "all"
+
+    CHOICES = [
+        (PRIMARY, "Primary IP only"),
+        (ALL, "All of the object's IPs"),
     ]

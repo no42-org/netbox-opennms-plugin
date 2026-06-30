@@ -1,67 +1,50 @@
 # Copyright 2026 Ronny Trommer <ronny@no42.org>
 # SPDX-License-Identifier: MIT
-"""Render OpenNMS requisition + foreign-source-definition XML (pure, AD-3, AD-5).
+"""Render OpenNMS requisition + foreign-source-definition XML (pure, AD-3/AD-5).
 
-This is the render half of render-and-replace. Posting/importing is Story 1.7.
-The functions are deterministic and side-effect-free (no network, no DB writes);
-they read the passed objects' attributes only. ``date_stamp`` is a parameter so
-output is reproducible (the sync job supplies the timestamp).
+The render half of render-and-replace. Deterministic and side-effect-free (no
+network, no DB writes): the requisition reads pre-resolved ``NodeSpec`` objects
+(the ``membership`` layer owns the ORM lookups), and the foreign-source
+definition reads a ``MonitoringProfile``'s detectors/policies. ``date_stamp`` is
+a parameter so output is reproducible.
+
+Epic 5 reverses AD-11: the definition now emits the profile's detectors so
+OpenNMS auto-discovers services, instead of shipping an empty ``<detectors/>``.
 """
 
-from collections import defaultdict
-
 from lxml import etree
-
-from ..derivation import foreign_id_for
 
 MODEL_IMPORT_NS = "http://xmlns.opennms.org/xsd/config/model-import"
 FOREIGN_SOURCE_NS = "http://xmlns.opennms.org/xsd/config/foreign-source"
 
 
 class RenderError(Exception):
-    """A profile can't be rendered into requisition XML (a required field is None).
+    """A Foreign Source can't be rendered into valid XML (a required value is None).
 
-    The renderer assumes validated profiles (Story 1.3/2.4), but a field can still
-    go missing after the fact — ``management_ip`` is ``SET_NULL`` so deleting the
-    IP leaves an enabled profile with ``management_ip=None``; ``Device.name`` is
-    nullable; ``assigned_object`` can be cleared by a raw delete. Rather than
-    emit malformed XML (or raise an opaque ``AttributeError``/``TypeError``), the
-    renderer raises this naming the offending profile + missing field, so the 1.7
-    sync job can catch it and fail that sync cleanly.
+    The renderer assumes resolved nodes (the ``membership`` layer skips members
+    without a name or management IP), but a ``NodeSpec`` can still arrive
+    malformed via a direct call. Rather than emit malformed XML (or raise an
+    opaque ``AttributeError``), the renderer raises this so the sync job can fail
+    that sync cleanly.
     """
 
 
-def _bare_ip(ip):
-    """The bare IP (no CIDR mask) for an interface ``ip-addr``.
-
-    ``IPAddress.address`` may be a ``netaddr`` network or a plain string
-    (in-memory, pre-DB-roundtrip); stripping the mask off the string form
-    handles both.
-    """
-    return str(ip.address).split("/")[0]
+def _add_parameters(parent, parameters):
+    """Append ``<parameter key="…" value="…"/>`` children, sorted by key (AD-3)."""
+    for key in sorted(parameters or {}):
+        param = etree.SubElement(parent, f"{{{FOREIGN_SOURCE_NS}}}parameter")
+        param.set("key", key)
+        param.set("value", str(parameters[key]))
 
 
-def _management_ip(profile):
-    """The bare management IP for the primary interface."""
-    return _bare_ip(profile.management_ip)
-
-
-def _add_services(interface_el, names):
-    """Append ``<monitored-service service-name="…">`` children, sorted (AD-3)."""
-    for name in sorted(names):
-        service = etree.SubElement(
-            interface_el, f"{{{MODEL_IMPORT_NS}}}monitored-service"
-        )
-        service.set("service-name", name)
-
-
-def render_requisition(foreign_source, profiles, date_stamp=None, default_location=""):
+def render_requisition(foreign_source, nodes, date_stamp=None, default_location=""):
     """Render the complete ``model-import`` requisition for one Foreign Source.
 
-    ``foreign_source`` is the already-derived name (from ``foreign_source_for`` —
-    not re-derived here, AD-14). ``profiles`` are the enabled MonitoringProfiles
-    grouped under it. Each yields one node with a stable type-qualified Foreign
-    ID and its management IP as the primary (``P``) interface. Returns bytes.
+    ``foreign_source`` is the already-derived name (AD-14); ``nodes`` are the
+    resolved ``NodeSpec`` objects (``membership.resolve``). Each yields one node
+    with its management IP as the primary (``P``) interface and any extra IPs as
+    non-primary (``N``). A node's location falls back to ``default_location``
+    (passed in for purity). Returns bytes.
     """
     root = etree.Element(
         f"{{{MODEL_IMPORT_NS}}}model-import", nsmap={None: MODEL_IMPORT_NS}
@@ -70,96 +53,81 @@ def render_requisition(foreign_source, profiles, date_stamp=None, default_locati
     if date_stamp is not None:
         root.set("date-stamp", date_stamp)
 
-    for profile in profiles:
-        target = profile.assigned_object
-        if target is None:
+    for node in nodes:
+        if not node.node_label:
+            raise RenderError(f"node {node.foreign_id!r} has no node-label.")
+        if not node.interfaces:
             raise RenderError(
-                f"MonitoringProfile pk={profile.pk} has no assigned object; "
-                "cannot render a node."
+                f"node {node.node_label!r} has no interface (a management IP is "
+                "required)."
             )
-        try:
-            foreign_id = foreign_id_for(target)
-        except TypeError as exc:
-            # limit_choices_to is form-only, so an ORM/REST/import-created profile
-            # can point at a non-Device/VM. Convert the type signal into the same
-            # clean contract so the 1.7 sync fails the sync, not the whole batch.
-            raise RenderError(
-                f"MonitoringProfile pk={profile.pk} target is not a Device or "
-                "VirtualMachine; cannot render a node."
-            ) from exc
-        if not target.name:
-            raise RenderError(
-                f"MonitoringProfile pk={profile.pk} target has no name; "
-                "node-label is required."
-            )
-        if profile.management_ip is None:
-            raise RenderError(
-                f"MonitoringProfile pk={profile.pk} ({target.name}) has no "
-                "management IP; a primary interface is required."
-            )
+        el = etree.SubElement(root, f"{{{MODEL_IMPORT_NS}}}node")
+        el.set("node-label", node.node_label)
+        el.set("foreign-id", node.foreign_id)
 
-        node = etree.SubElement(root, f"{{{MODEL_IMPORT_NS}}}node")
-        node.set("node-label", target.name)
-        node.set("foreign-id", foreign_id)
-
-        # Monitoring location: the profile's, else the configured default (passed
-        # in for purity, AD-3). Empty means OpenNMS's built-in Default location.
-        location = profile.location or default_location
+        location = node.location or default_location
         if location:
-            node.set("location", location)
+            el.set("location", location)
 
-        # Services grouped by the interface IP they run on (AD-15).
-        services_by_ip = defaultdict(list)
-        for service in profile.services.all():
-            services_by_ip[service.ip_address_id].append(service.name)
-
-        # The single interface-set authority (AD-15): the management IP is the
-        # lone primary ("P"); additional IPs are non-primary ("N"). An IP appears
-        # at most once per node, keyed by bare address, so a duplicate address
-        # (including the management IP re-listed as additional) merges onto the
-        # existing interface rather than emitting a second element or dropping its
-        # services. Additional IPs are sorted by bare address for determinism.
-        primary_ip = _management_ip(profile)
-        interfaces = [(primary_ip, "P", [profile.management_ip_id])]
-        index = {primary_ip: 0}
-        for ip in sorted(profile.additional_ips.all(), key=_bare_ip):
-            bare = _bare_ip(ip)
-            if bare in index:
-                interfaces[index[bare]][2].append(ip.pk)
-            else:
-                index[bare] = len(interfaces)
-                interfaces.append((bare, "N", [ip.pk]))
-
-        for bare, snmp_primary, ip_pks in interfaces:
-            interface = etree.SubElement(node, f"{{{MODEL_IMPORT_NS}}}interface")
-            interface.set("ip-addr", bare)
-            interface.set("snmp-primary", snmp_primary)
-            names = set()
-            for ip_pk in ip_pks:
-                names.update(services_by_ip.get(ip_pk, []))
-            _add_services(interface, names)
+        # Primary interface first, then the rest by bare IP for determinism.
+        ordered = sorted(node.interfaces, key=lambda i: (not i.primary, i.ip))
+        for interface in ordered:
+            iface_el = etree.SubElement(el, f"{{{MODEL_IMPORT_NS}}}interface")
+            iface_el.set("ip-addr", interface.ip)
+            iface_el.set("snmp-primary", "P" if interface.primary else "N")
+            for name in sorted(interface.services):
+                service = etree.SubElement(
+                    iface_el, f"{{{MODEL_IMPORT_NS}}}monitored-service"
+                )
+                service.set("service-name", name)
 
     return etree.tostring(root, xml_declaration=True, encoding="UTF-8")
 
 
-def render_foreign_source_definition(name, date_stamp=None):
-    """Render a foreign-source definition with auto-detection disabled (AD-11).
+def render_foreign_source_definition(foreign_source, profile, date_stamp=None):
+    """Render a foreign-source definition named ``foreign_source`` from a profile.
 
-    Empty ``<detectors/>`` (no service auto-detection — explicit services are
-    authoritative) and ``<scan-interval>0s</scan-interval>`` (no periodic rescan).
-    OpenNMS parses scan-interval as a duration, so the zero needs an explicit
-    unit (a bare ``0`` can fail the duration parser). Returns bytes.
+    Emits ``<scan-interval>`` plus the profile's detectors (OpenNMS auto-discovers
+    the matching services) and policies (categories, interface management). This
+    reverses v1's AD-11 empty ``<detectors/>``: detection is now the default
+    service source.
+
+    The definition's ``name`` MUST be the Foreign Source (the requisition's
+    ``foreign-source``), not the profile name — OpenNMS links a definition to a
+    requisition by name, and a mismatch silently falls back to OpenNMS's built-in
+    default detectors. Returns bytes.
     """
     root = etree.Element(
         f"{{{FOREIGN_SOURCE_NS}}}foreign-source", nsmap={None: FOREIGN_SOURCE_NS}
     )
-    root.set("name", name)
+    root.set("name", foreign_source)
     if date_stamp is not None:
         root.set("date-stamp", date_stamp)
 
     scan_interval = etree.SubElement(root, f"{{{FOREIGN_SOURCE_NS}}}scan-interval")
-    scan_interval.text = "0s"
-    etree.SubElement(root, f"{{{FOREIGN_SOURCE_NS}}}detectors")
-    etree.SubElement(root, f"{{{FOREIGN_SOURCE_NS}}}policies")
+    scan_interval.text = profile.scan_interval or "1d"
+
+    detectors = etree.SubElement(root, f"{{{FOREIGN_SOURCE_NS}}}detectors")
+    for detector in profile.detectors.all():
+        if not detector.rule_class:
+            raise RenderError(
+                f"detector {detector.name!r} on profile {profile.name!r} has no "
+                "class."
+            )
+        el = etree.SubElement(detectors, f"{{{FOREIGN_SOURCE_NS}}}detector")
+        el.set("name", detector.name)
+        el.set("class", detector.rule_class)
+        _add_parameters(el, detector.parameters)
+
+    policies = etree.SubElement(root, f"{{{FOREIGN_SOURCE_NS}}}policies")
+    for policy in profile.policies.all():
+        if not policy.rule_class:
+            raise RenderError(
+                f"policy {policy.name!r} on profile {profile.name!r} has no class."
+            )
+        el = etree.SubElement(policies, f"{{{FOREIGN_SOURCE_NS}}}policy")
+        el.set("name", policy.name)
+        el.set("class", policy.rule_class)
+        _add_parameters(el, policy.parameters)
 
     return etree.tostring(root, xml_declaration=True, encoding="UTF-8")

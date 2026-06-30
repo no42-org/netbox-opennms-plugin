@@ -1,10 +1,9 @@
 # Copyright 2026 Ronny Trommer <ronny@no42.org>
 # SPDX-License-Identifier: MIT
-"""UI views for plugin models."""
+"""UI views for plugin models (Epic 5)."""
 
 from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin, PermissionRequiredMixin
-from django.db import transaction
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils.http import url_has_allowed_host_and_scheme
@@ -14,16 +13,21 @@ from utilities.rqworker import any_workers_for_queue
 
 from . import filtersets, forms, tables
 from .client import OpenNMSClient, OpenNMSError
-from .derivation import foreign_source_for
 from .jobs import (
     SyncForeignSourceJob,
     enabled_foreign_sources,
-    enabled_profiles_for,
-    sync_status_for,
     unknown_locations,
 )
-from .models import MonitoredService, MonitoringProfile
-from .validation import validate_foreign_source
+from .membership import governing_assignment, resolve
+from .models import (
+    MonitoredService,
+    MonitoringAssignment,
+    MonitoringDetector,
+    MonitoringOverride,
+    MonitoringPolicy,
+    MonitoringProfile,
+)
+from .validation import validate_resolution
 
 # Sync jobs are enqueued without an instance, so they run on the default RQ
 # queue (get_queue_for_model(None) -> RQ_QUEUE_DEFAULT). FR-13 / AD-16.
@@ -31,29 +35,23 @@ SYNC_QUEUE = "default"
 
 
 def _no_worker_running():
-    """True if no live RQ worker is servicing the Sync queue (best-effort, AD-16).
-
-    Never raises into the page/action (AD-16). If the liveness probe itself fails
-    (broker unreachable), warn rather than stay silent — we can't confirm a worker
-    is running, and that uncertainty is exactly what FR-13 surfaces.
-    """
+    """True if no live RQ worker is servicing the Sync queue (best-effort, AD-16)."""
     try:
         return not any_workers_for_queue(SYNC_QUEUE)
     except Exception:
         return True
 
 
-def _location_warnings(profiles):
+def _location_warnings(locations):
     """Best-effort warnings for chosen locations with no Minion (FR-5/AD-16).
 
-    Mirrors ``_no_worker_running``'s swallow-everything contract: opens the port,
-    asks OpenNMS which monitoring locations exist, and returns a warning string per
-    explicit profile location it doesn't know. ANY failure (OpenNMS unreachable,
-    auth, malformed response) degrades to ``[]`` — the check never blocks Sync.
+    Opens the port, asks OpenNMS which monitoring locations exist, and returns a
+    warning string per location it doesn't know. ANY failure degrades to ``[]`` —
+    the check never blocks Sync.
     """
     try:
         with OpenNMSClient.from_config() as client:
-            missing = unknown_locations(client, profiles)
+            missing = unknown_locations(client, locations)
     except Exception:
         return []
     return [
@@ -63,25 +61,49 @@ def _location_warnings(profiles):
     ]
 
 
+def _enqueue_foreign_source(request, foreign_source, allow_empty=False):
+    """Validate a Foreign Source's resolved intent and enqueue a sync (FR-8).
+
+    Errors block; warnings (member skips, unknown locations) are surfaced and the
+    sync still proceeds. Returns the Job, or ``None`` when validation blocked it.
+    """
+    try:
+        resolution = resolve(foreign_source)
+    except ValueError as exc:
+        # A tampered/garbled ``foreign_source`` POST value (not netbox.site.role).
+        messages.error(request, f"Invalid Foreign Source {foreign_source!r}: {exc}")
+        return None
+    result = validate_resolution(resolution)
+    for warning in result.warnings:
+        messages.warning(request, warning)
+    if result.errors:
+        for error in result.errors:
+            messages.error(request, error)
+        return None
+
+    locations = set()
+    if resolution is not None:
+        locations.add(resolution.assignment.location)
+        locations.update(node.location for node in resolution.nodes)
+    for warning in _location_warnings(locations):
+        messages.warning(request, warning)
+
+    return SyncForeignSourceJob.enqueue_sync(
+        foreign_source, user=request.user, allow_empty=allow_empty
+    )
+
+
+# --- Monitoring Profile (template) -----------------------------------------
+
+
 class MonitoringProfileView(generic.ObjectView):
     queryset = MonitoringProfile.objects.all()
-
-    def get_extra_context(self, request, instance):
-        # Surface the no-worker warning on the detail page (AC2); derived live so
-        # it clears automatically once a worker starts (AC3). The last-sync panel
-        # (Story 4.2) reads the latest Job for the object's Foreign Source.
-        return {
-            "no_worker_warning": _no_worker_running(),
-            "sync_status": sync_status_for(instance.assigned_object),
-        }
 
 
 class MonitoringProfileListView(generic.ObjectListView):
     queryset = MonitoringProfile.objects.all()
     table = tables.MonitoringProfileTable
     filterset = filtersets.MonitoringProfileFilterSet
-    # Adds the "Sync all" / "Sync selected" buttons (Story 3.3).
-    template_name = "netbox_opennms/monitoringprofile_list.html"
 
 
 class MonitoringProfileEditView(generic.ObjectEditView):
@@ -98,12 +120,156 @@ class MonitoringProfileBulkDeleteView(generic.BulkDeleteView):
     table = tables.MonitoringProfileTable
 
 
+# --- Monitoring Detector ----------------------------------------------------
+
+
+class MonitoringDetectorView(generic.ObjectView):
+    queryset = MonitoringDetector.objects.all()
+
+
+class MonitoringDetectorListView(generic.ObjectListView):
+    queryset = MonitoringDetector.objects.select_related("profile")
+    table = tables.MonitoringDetectorTable
+    filterset = filtersets.MonitoringDetectorFilterSet
+
+
+class MonitoringDetectorEditView(generic.ObjectEditView):
+    queryset = MonitoringDetector.objects.all()
+    form = forms.MonitoringDetectorForm
+
+
+class MonitoringDetectorDeleteView(generic.ObjectDeleteView):
+    queryset = MonitoringDetector.objects.all()
+
+
+class MonitoringDetectorBulkDeleteView(generic.BulkDeleteView):
+    queryset = MonitoringDetector.objects.all()
+    table = tables.MonitoringDetectorTable
+
+
+# --- Monitoring Policy ------------------------------------------------------
+
+
+class MonitoringPolicyView(generic.ObjectView):
+    queryset = MonitoringPolicy.objects.all()
+
+
+class MonitoringPolicyListView(generic.ObjectListView):
+    queryset = MonitoringPolicy.objects.select_related("profile")
+    table = tables.MonitoringPolicyTable
+    filterset = filtersets.MonitoringPolicyFilterSet
+
+
+class MonitoringPolicyEditView(generic.ObjectEditView):
+    queryset = MonitoringPolicy.objects.all()
+    form = forms.MonitoringPolicyForm
+
+
+class MonitoringPolicyDeleteView(generic.ObjectDeleteView):
+    queryset = MonitoringPolicy.objects.all()
+
+
+class MonitoringPolicyBulkDeleteView(generic.BulkDeleteView):
+    queryset = MonitoringPolicy.objects.all()
+    table = tables.MonitoringPolicyTable
+
+
+# --- Monitoring Assignment --------------------------------------------------
+
+
+class MonitoringAssignmentView(generic.ObjectView):
+    queryset = MonitoringAssignment.objects.select_related("profile", "site", "role")
+
+    def get_extra_context(self, request, instance):
+        return {"no_worker_warning": _no_worker_running()}
+
+
+class MonitoringAssignmentListView(generic.ObjectListView):
+    queryset = MonitoringAssignment.objects.select_related("profile", "site", "role")
+    table = tables.MonitoringAssignmentTable
+    filterset = filtersets.MonitoringAssignmentFilterSet
+
+
+class MonitoringAssignmentEditView(generic.ObjectEditView):
+    queryset = MonitoringAssignment.objects.all()
+    form = forms.MonitoringAssignmentForm
+
+
+class MonitoringAssignmentDeleteView(generic.ObjectDeleteView):
+    queryset = MonitoringAssignment.objects.all()
+
+
+class MonitoringAssignmentBulkDeleteView(generic.BulkDeleteView):
+    queryset = MonitoringAssignment.objects.all()
+    table = tables.MonitoringAssignmentTable
+
+
+class MonitoringAssignmentSyncView(PermissionRequiredMixin, View):
+    """Enqueue a Sync for every Foreign Source this assignment governs (AD-4/5).
+
+    A (site, role) assignment governs one Foreign Source; a site-level assignment
+    fans out to one per role present in the site (the more-specific assignment
+    wins, so this never double-syncs a Foreign Source owned by another).
+    """
+
+    permission_required = "netbox_opennms.change_monitoringassignment"
+
+    def post(self, request, pk):
+        assignment = get_object_or_404(MonitoringAssignment, pk=pk)
+        foreign_sources = [
+            fs
+            for fs in enabled_foreign_sources()
+            if governing_assignment(fs) == assignment
+        ]
+        submitted = 0
+        for foreign_source in foreign_sources:
+            if _enqueue_foreign_source(request, foreign_source) is not None:
+                submitted += 1
+        if submitted:
+            messages.success(request, f"Submitted {submitted} Foreign Source sync(s).")
+        elif not foreign_sources:
+            messages.info(request, "This assignment governs no monitored objects yet.")
+        return redirect(assignment.get_absolute_url())
+
+
+# --- Monitoring Override ----------------------------------------------------
+
+
+class MonitoringOverrideView(generic.ObjectView):
+    queryset = MonitoringOverride.objects.all()
+
+
+class MonitoringOverrideListView(generic.ObjectListView):
+    queryset = MonitoringOverride.objects.select_related(
+        "assigned_object_type", "management_ip"
+    )
+    table = tables.MonitoringOverrideTable
+    filterset = filtersets.MonitoringOverrideFilterSet
+
+
+class MonitoringOverrideEditView(generic.ObjectEditView):
+    queryset = MonitoringOverride.objects.all()
+    form = forms.MonitoringOverrideForm
+
+
+class MonitoringOverrideDeleteView(generic.ObjectDeleteView):
+    queryset = MonitoringOverride.objects.all()
+
+
+class MonitoringOverrideBulkDeleteView(generic.BulkDeleteView):
+    queryset = MonitoringOverride.objects.all()
+    table = tables.MonitoringOverrideTable
+
+
+# --- Monitored Service ------------------------------------------------------
+
+
 class MonitoredServiceView(generic.ObjectView):
     queryset = MonitoredService.objects.all()
 
 
 class MonitoredServiceListView(generic.ObjectListView):
-    queryset = MonitoredService.objects.select_related("profile", "ip_address")
+    queryset = MonitoredService.objects.select_related("override", "ip_address")
     table = tables.MonitoredServiceTable
     filterset = filtersets.MonitoredServiceFilterSet
 
@@ -122,126 +288,46 @@ class MonitoredServiceBulkDeleteView(generic.BulkDeleteView):
     table = tables.MonitoredServiceTable
 
 
-class MonitoringProfileSyncView(PermissionRequiredMixin, View):
-    """Enqueue a background Sync for a profile's whole Foreign Source (AD-4/5).
+# --- Sync actions -----------------------------------------------------------
 
-    Gated by the change permission (NFR-3 wants a distinct Sync permission; a
-    dedicated action permission is a tracked follow-up). The view only enqueues —
-    all OpenNMS I/O happens in the job (AD-4).
+
+class ForeignSourceSyncView(PermissionRequiredMixin, View):
+    """Enqueue a Sync (or Remove) for one Foreign Source named in the POST.
+
+    Render-and-replace is per whole Foreign Source (AD-5). A Remove
+    (``allow_empty``) pushes the intentional empty requisition that clears the
+    Foreign Source; a plain Sync refuses an empty one (it would mass-delete).
     """
 
-    permission_required = "netbox_opennms.change_monitoringprofile"
+    permission_required = "netbox_opennms.change_monitoringassignment"
 
-    def post(self, request, pk):
-        profile = get_object_or_404(MonitoringProfile, pk=pk)
-        target = profile.assigned_object
-        if not profile.enabled:
-            messages.error(
-                request, "This profile is disabled — enable it before syncing."
-            )
-            return redirect(profile.get_absolute_url())
-        if target is None:
-            messages.error(
-                request, "This profile has no assigned object and cannot be synced."
-            )
-            return redirect(profile.get_absolute_url())
+    def post(self, request):
+        foreign_source = request.POST.get("foreign_source", "").strip()
+        allow_empty = bool(request.POST.get("remove"))
+        return_url = request.POST.get("return_url")
+        if not return_url or not url_has_allowed_host_and_scheme(
+            return_url, allowed_hosts={request.get_host()}
+        ):
+            return_url = reverse("plugins:netbox_opennms:sync_preview")
+        if not foreign_source:
+            messages.error(request, "No Foreign Source given.")
+            return redirect(return_url)
 
-        try:
-            foreign_source = foreign_source_for(target)
-        except TypeError:
-            # Non-Device/VM target (limit_choices_to is form-only) — fail cleanly.
-            messages.error(
+        job = _enqueue_foreign_source(request, foreign_source, allow_empty=allow_empty)
+        if job is not None:
+            verb = "Remove" if allow_empty else "Sync"
+            messages.success(
                 request,
-                "This profile's object is not a Device or VirtualMachine "
-                "and cannot be synced.",
+                f"{verb} submitted for Foreign Source {foreign_source} "
+                f"(job #{job.pk}).",
             )
-            return redirect(profile.get_absolute_url())
-
-        # Validate the whole Foreign Source's intent before enqueuing (FR-8):
-        # errors block the sync; warnings are informational.
-        profiles = enabled_profiles_for(foreign_source)
-        result = validate_foreign_source(foreign_source, profiles)
-        for warning in result.warnings:
-            messages.warning(request, warning)
-        if result.errors:
-            for error in result.errors:
-                messages.error(request, error)
-            return redirect(profile.get_absolute_url())
-
-        # Best-effort no-Minion-at-location advisory (FR-5/AD-16) — never blocks.
-        for warning in _location_warnings(profiles):
-            messages.warning(request, warning)
-
-        job = SyncForeignSourceJob.enqueue_sync(foreign_source, user=request.user)
-        messages.success(
-            request,
-            f"Sync submitted for Foreign Source {foreign_source} (job #{job.pk}).",
-        )
-        # The no-worker warning is surfaced by the detail page's banner (shown on
-        # the redirect target and on every view) — no duplicate flash here.
-        return redirect(profile.get_absolute_url())
+        return redirect(return_url)
 
 
-class MonitoringProfileRemoveView(PermissionRequiredMixin, View):
-    """Remove a node from OpenNMS: clear intent (disable) + render-and-replace.
+class MonitoringSyncAllView(PermissionRequiredMixin, View):
+    """Enqueue a Sync for every governed Foreign Source with members (FR-9)."""
 
-    Disabling the profile drops it from the FS render, so the node is deleted on
-    import (AD-5). Uses the same job as Sync with allow_empty=True so removing the
-    last node pushes the (intentional) empty requisition.
-
-    Unlike Sync, this skips the *view's* pre-flight validation so the action isn't
-    blocked at submit time by the whole-FS gate. Removing the LAST node always
-    succeeds (an empty Foreign Source validates clean). A non-last remove still
-    re-renders the surviving siblings (render-and-replace can't push a partial
-    FS), so an invalid/un-renderable sibling will fail that job — the outcome
-    lives on the Job (AD-12 honest status), not a request-time error.
-    """
-
-    permission_required = "netbox_opennms.change_monitoringprofile"
-
-    def post(self, request, pk):
-        profile = get_object_or_404(MonitoringProfile, pk=pk)
-        target = profile.assigned_object
-        if target is None:
-            messages.error(
-                request, "This profile has no assigned object and cannot be removed."
-            )
-            return redirect(profile.get_absolute_url())
-        try:
-            foreign_source = foreign_source_for(target)
-        except TypeError:
-            messages.error(
-                request,
-                "This profile's object is not a Device or VirtualMachine.",
-            )
-            return redirect(profile.get_absolute_url())
-
-        # Clear intent and enqueue atomically: if the enqueue raises, the disable
-        # rolls back so we never strand a disabled profile with no job.
-        with transaction.atomic():
-            profile.enabled = False
-            profile.save()
-            job = SyncForeignSourceJob.enqueue_sync(
-                foreign_source, user=request.user, allow_empty=True
-            )
-        messages.success(
-            request,
-            f"Remove submitted for Foreign Source {foreign_source} (job #{job.pk}).",
-        )
-        return redirect(profile.get_absolute_url())
-
-
-class MonitoringProfileSyncAllView(PermissionRequiredMixin, View):
-    """Enqueue a Sync for every Foreign Source that has an enabled profile (FR-9).
-
-    Fans out one ``SyncForeignSourceJob`` per distinct Foreign Source (AD-5:
-    render-and-replace is per whole Foreign Source). Like Remove, it skips the
-    Sync view's pre-flight validation so one broken Foreign Source can't block the
-    rest of the batch — each job validates itself and reports honest status
-    (AD-12). ``enqueue_sync`` coalesces redundant pending jobs per FS (AD-6).
-    """
-
-    permission_required = "netbox_opennms.change_monitoringprofile"
+    permission_required = "netbox_opennms.change_monitoringassignment"
 
     def post(self, request):
         foreign_sources = enabled_foreign_sources()
@@ -249,74 +335,40 @@ class MonitoringProfileSyncAllView(PermissionRequiredMixin, View):
             SyncForeignSourceJob.enqueue_sync(foreign_source, user=request.user)
         if foreign_sources:
             messages.success(
-                request,
-                f"Submitted {len(foreign_sources)} Foreign Source sync(s).",
+                request, f"Submitted {len(foreign_sources)} Foreign Source sync(s)."
             )
         else:
-            messages.info(request, "Nothing enabled to sync.")
-        return redirect("plugins:netbox_opennms:monitoringprofile_list")
+            messages.info(request, "Nothing assigned to sync.")
+        return redirect("plugins:netbox_opennms:sync_preview")
 
 
-class MonitoringProfileBulkSyncView(PermissionRequiredMixin, View):
-    """Sync the Foreign Sources of the selected profiles (per-FS bulk, FR-9).
+class SyncPreviewView(LoginRequiredMixin, View):
+    """The preview-and-sync overview: every governed Foreign Source + its members.
 
-    Groups the selected profiles by their derived Foreign Source and enqueues ONE
-    job per distinct Foreign Source (not one per profile) — render-and-replace is
-    per whole Foreign Source (AD-5), so three devices in the same role+site
-    collapse to a single requisition push. Non-Device/VM or unassigned selections
-    are skipped cleanly. No pre-flight validation (each job self-validates, AD-12).
+    A read-only aggregate for now (the paginated, status-filtered detail and
+    bulk-adjust are Story 5.5). Resolves each Foreign Source so the operator sees
+    the node count and any skip warnings before pressing Sync.
     """
 
-    permission_required = "netbox_opennms.change_monitoringprofile"
+    template_name = "netbox_opennms/sync_preview.html"
 
-    def post(self, request):
-        return_url = request.POST.get("return_url")
-        if not return_url or not url_has_allowed_host_and_scheme(
-            return_url, allowed_hosts={request.get_host()}
-        ):
-            return_url = reverse("plugins:netbox_opennms:monitoringprofile_list")
-
-        # Only enabled profiles are syncable intent — match Sync-all and the
-        # single Sync view (which refuses disabled profiles).
-        enabled = MonitoringProfile.objects.filter(enabled=True)
-        if request.POST.get("_all"):
-            # NetBox's "select all N matching query" toggle. The dedicated bulk
-            # endpoint doesn't receive the list's filter query, so this acts on
-            # every enabled profile (== Sync all) rather than silently syncing
-            # only the checked page (deferred: filter-scoped bulk sync).
-            profiles = enabled
-        else:
-            # Drop non-numeric pks defensively (crafted POST) instead of 500ing.
-            pks = [pk for pk in request.POST.getlist("pk") if pk.isdigit()]
-            profiles = enabled.filter(pk__in=pks)
-
-        foreign_sources = set()
-        matched = 0
-        for profile in profiles:
-            target = profile.assigned_object
-            if target is None:
-                continue
-            try:
-                foreign_sources.add(foreign_source_for(target))
-            except TypeError:
-                # Non-Device/VM target (limit_choices_to is form-only) — skip it.
-                continue
-            matched += 1
-
-        for foreign_source in sorted(foreign_sources):
-            SyncForeignSourceJob.enqueue_sync(foreign_source, user=request.user)
-
-        if foreign_sources:
-            messages.success(
-                request,
-                f"Submitted {len(foreign_sources)} Foreign Source sync(s) for "
-                f"{matched} profile(s).",
+    def get(self, request):
+        rows = []
+        for foreign_source in enabled_foreign_sources():
+            resolution = resolve(foreign_source)
+            rows.append(
+                {
+                    "foreign_source": foreign_source,
+                    "assignment": resolution.assignment if resolution else None,
+                    "node_count": len(resolution.nodes) if resolution else 0,
+                    "warnings": resolution.warnings if resolution else [],
+                }
             )
-        else:
-            messages.warning(
-                request, "No syncable, enabled Device/VM profiles were selected."
-            )
-        return redirect(return_url)
+        return render(
+            request,
+            self.template_name,
+            {"rows": rows, "no_worker_warning": _no_worker_running()},
+        )
 
 
 class OpenNMSConnectionTestView(LoginRequiredMixin, View):

@@ -44,7 +44,9 @@ jobs:
           names = set(zipfile.ZipFile(wheel).namelist())
           required = [
               "netbox_opennms/templates/netbox_opennms/monitoringprofile.html",
-              "netbox_opennms/templates/netbox_opennms/monitoringprofile_list.html",
+              "netbox_opennms/templates/netbox_opennms/monitoringassignment.html",
+              "netbox_opennms/templates/netbox_opennms/monitoringoverride.html",
+              "netbox_opennms/templates/netbox_opennms/sync_preview.html",
               "netbox_opennms/templates/netbox_opennms/connection_test.html",
               "netbox_opennms/templates/netbox_opennms/inc/sync_status_panel.html",
           ]

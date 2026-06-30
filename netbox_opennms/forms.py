@@ -21,6 +21,7 @@ from .models import (
     MonitoringOverride,
     MonitoringPolicy,
     MonitoringProfile,
+    object_ip_pks,
 )
 
 
@@ -158,6 +159,23 @@ class MonitoringOverrideForm(NetBoxModelForm):
         )
         if duplicate:
             raise ValidationError(_("This object already has a Monitoring Override."))
+
+        # Additional IPs are extra interfaces of THIS object (AD-15); the
+        # management IP may legitimately be off-interface, so it is not checked.
+        additional = self.cleaned_data.get("additional_ips")
+        if additional:
+            owned = object_ip_pks(target)
+            foreign = [ip for ip in additional if ip.pk not in owned]
+            if foreign:
+                raise ValidationError(
+                    {
+                        "additional_ips": _(
+                            "These IPs are not assigned to the selected object: "
+                            "%(ips)s"
+                        )
+                        % {"ips": ", ".join(str(ip) for ip in foreign)}
+                    }
+                )
         return self.cleaned_data
 
 

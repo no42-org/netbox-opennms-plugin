@@ -101,17 +101,26 @@ class MonitoringDetector(_ProvisioningRule):
         verbose_name = "monitoring detector"
         verbose_name_plural = "monitoring detectors"
 
-    def clean(self):
-        super().clean()
-        # A preset fills the class (and seeds defaults) so the rule is self-contained.
+    def _apply_preset(self):
+        # A preset fills the class (and seeds defaults) so the rule is
+        # self-contained. Done in both clean() and save() so the resolved class is
+        # persisted on EVERY path — the API/bulk paths don't run clean().
         if self.preset and not self.rule_class:
             cls, defaults = resolve_detector(self.preset)
             self.rule_class = cls or ""
             self.parameters = {**defaults, **(self.parameters or {})}
+
+    def clean(self):
+        super().clean()
+        self._apply_preset()
         if not self.rule_class:
             raise ValidationError(
                 {"rule_class": "Choose a preset or enter a detector class."}
             )
+
+    def save(self, *args, **kwargs):
+        self._apply_preset()
+        super().save(*args, **kwargs)
 
     def get_absolute_url(self):
         return reverse("plugins:netbox_opennms:monitoringdetector", args=[self.pk])
@@ -136,16 +145,23 @@ class MonitoringPolicy(_ProvisioningRule):
         verbose_name = "monitoring policy"
         verbose_name_plural = "monitoring policies"
 
-    def clean(self):
-        super().clean()
+    def _apply_preset(self):
         if self.preset and not self.rule_class:
             cls, defaults = resolve_policy(self.preset)
             self.rule_class = cls or ""
             self.parameters = {**defaults, **(self.parameters or {})}
+
+    def clean(self):
+        super().clean()
+        self._apply_preset()
         if not self.rule_class:
             raise ValidationError(
                 {"rule_class": "Choose a preset or enter a policy class."}
             )
+
+    def save(self, *args, **kwargs):
+        self._apply_preset()
+        super().save(*args, **kwargs)
 
     def get_absolute_url(self):
         return reverse("plugins:netbox_opennms:monitoringpolicy", args=[self.pk])
@@ -177,11 +193,21 @@ class MonitoringAssignment(NetBoxModel):
 
     class Meta:
         ordering = ("site", "role")
+        # Two partial constraints, not one ``nulls_distinct=False`` — the latter is
+        # PostgreSQL 15+ only and is SILENTLY IGNORED on PG14 (a NetBox-supported
+        # version), which would let two site-level rows coexist. This pair is
+        # portable to PG12+: one unique (site, role) for concrete roles, and at
+        # most one role-NULL (site-level) row per site.
         constraints = [
             models.UniqueConstraint(
                 fields=("site", "role"),
-                name="%(app_label)s_%(class)s_unique_scope",
-                nulls_distinct=False,
+                condition=models.Q(role__isnull=False),
+                name="%(app_label)s_%(class)s_unique_site_role",
+            ),
+            models.UniqueConstraint(
+                fields=("site",),
+                condition=models.Q(role__isnull=True),
+                name="%(app_label)s_%(class)s_unique_site_level",
             ),
         ]
         verbose_name = "monitoring assignment"

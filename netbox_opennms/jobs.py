@@ -10,10 +10,14 @@ Source from its current members (AD-5), and serializes per Foreign Source via a
 Postgres advisory lock so two syncs cannot race (AD-6).
 
 Epic 5: membership is a live NetBox query (site+role), not per-object profiles,
-so a moved object simply belongs to a different Foreign Source on the next sync.
-Re-rendering the object's *old* Foreign Source to drop it is a 'sync all'
-/ preview concern (it re-renders every governed Foreign Source), not per-job
-move-tracking.
+so a moved/added/removed object re-resolves its scope on the next sync. A
+non-last departure is reconciled automatically — re-syncing the surviving
+members render-and-replaces the Foreign Source without the gone node. The one
+gap: when the LAST member leaves a Foreign Source (object deleted, role/site
+changed, or its assignment removed), that Foreign Source is no longer governed,
+so neither Sync-All nor per-assignment Sync lists it, and its stale OpenNMS nodes
+linger until a manual Remove. A periodic drift reconciler closes this window and
+is tracked as deferred work (carried from v1).
 
 Outcome maps to the NetBox ``Job`` lifecycle (AD-12): a clean return is
 *succeeded-accepted*; a render or port error raises ``JobFailed`` → *failed*. A

@@ -17,6 +17,7 @@ from ..models import (
     MonitoringOverride,
     MonitoringPolicy,
     MonitoringProfile,
+    object_ip_pks,
 )
 
 
@@ -187,6 +188,20 @@ class MonitoringOverrideSerializer(NetBoxModelSerializer):
                 raise serializers.ValidationError(
                     "This object already has a Monitoring Override."
                 )
+
+            # Additional IPs must be the object's own interfaces (AD-15) — mirror
+            # the form's guard on the API path.
+            additional = data.get("additional_ips")
+            if additional:
+                owned = object_ip_pks(model.objects.get(pk=object_id))
+                foreign = [ip for ip in additional if ip.pk not in owned]
+                if foreign:
+                    raise serializers.ValidationError(
+                        {
+                            "additional_ips": "These IPs are not assigned to the "
+                            "object: " + ", ".join(str(ip) for ip in foreign)
+                        }
+                    )
         return data
 
 

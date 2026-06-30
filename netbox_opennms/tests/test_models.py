@@ -53,6 +53,16 @@ class ProfileAndRuleTest(TestCase):
         detector.clean()
         self.assertEqual(detector.parameters["timeout"], "9000")
 
+    def test_detector_save_persists_preset_class(self):
+        # save() resolves the preset (not just clean()), so the API/bulk paths
+        # that skip clean() still persist a non-empty rule_class.
+        detector = MonitoringDetector.objects.create(
+            profile=self.profile, name="ICMP", preset="icmp"
+        )
+        detector.refresh_from_db()
+        self.assertTrue(detector.rule_class.endswith("IcmpDetector"))
+        self.assertIn("timeout", detector.parameters)
+
     def test_detector_without_preset_or_class_is_invalid(self):
         detector = MonitoringDetector(profile=self.profile, name="x")
         with self.assertRaises(ValidationError):

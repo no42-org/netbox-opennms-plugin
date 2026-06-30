@@ -67,7 +67,12 @@ def _enqueue_foreign_source(request, foreign_source, allow_empty=False):
     Errors block; warnings (member skips, unknown locations) are surfaced and the
     sync still proceeds. Returns the Job, or ``None`` when validation blocked it.
     """
-    resolution = resolve(foreign_source)
+    try:
+        resolution = resolve(foreign_source)
+    except ValueError as exc:
+        # A tampered/garbled ``foreign_source`` POST value (not netbox.site.role).
+        messages.error(request, f"Invalid Foreign Source {foreign_source!r}: {exc}")
+        return None
     result = validate_resolution(resolution)
     for warning in result.warnings:
         messages.warning(request, warning)

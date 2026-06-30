@@ -1,8 +1,8 @@
 # Copyright 2026 Ronny Trommer <ronny@no42.org>
 # SPDX-License-Identifier: MIT
-"""Forms for plugin models."""
+"""Forms for plugin models (Epic 5)."""
 
-from dcim.models import Device
+from dcim.models import Device, DeviceRole, Site
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.utils.translation import gettext_lazy as _
@@ -16,24 +16,76 @@ from virtualization.models import VirtualMachine
 
 from .models import (
     MonitoredService,
+    MonitoringAssignment,
+    MonitoringDetector,
+    MonitoringOverride,
+    MonitoringPolicy,
     MonitoringProfile,
-    object_ip_pks,
-    profile_ip_pks,
 )
 
 
 class MonitoringProfileForm(NetBoxModelForm):
-    """Create/edit a Monitoring Profile.
+    """Create/edit a Monitoring Profile (a reusable detector/policy template)."""
 
-    NetBox core has no unified GenericForeignKey form field, so the target is
-    selected through two optional fields (Device / Virtual Machine) of which
-    exactly one must be set; ``clean`` maps the choice onto ``assigned_object``.
-    """
+    class Meta:
+        model = MonitoringProfile
+        fields = (
+            "name",
+            "description",
+            "scan_interval",
+            "default_interfaces",
+            "tags",
+        )
+
+
+class MonitoringDetectorForm(NetBoxModelForm):
+    """Add/edit a detector on a profile (a preset, or a freeform class)."""
+
+    profile = DynamicModelChoiceField(
+        queryset=MonitoringProfile.objects.all(), label=_("Monitoring Profile")
+    )
+
+    class Meta:
+        model = MonitoringDetector
+        fields = ("profile", "name", "preset", "rule_class", "parameters", "tags")
+
+
+class MonitoringPolicyForm(NetBoxModelForm):
+    """Add/edit a policy on a profile (a preset, or a freeform class)."""
+
+    profile = DynamicModelChoiceField(
+        queryset=MonitoringProfile.objects.all(), label=_("Monitoring Profile")
+    )
+
+    class Meta:
+        model = MonitoringPolicy
+        fields = ("profile", "name", "preset", "rule_class", "parameters", "tags")
+
+
+class MonitoringAssignmentForm(NetBoxModelForm):
+    """Bind a profile to a (site[, role]) scope."""
+
+    profile = DynamicModelChoiceField(
+        queryset=MonitoringProfile.objects.all(), label=_("Monitoring Profile")
+    )
+    site = DynamicModelChoiceField(queryset=Site.objects.all(), label=_("Site"))
+    role = DynamicModelChoiceField(
+        queryset=DeviceRole.objects.all(),
+        required=False,
+        label=_("Role"),
+        help_text=_("Leave blank to apply to every role in the site."),
+    )
+
+    class Meta:
+        model = MonitoringAssignment
+        fields = ("profile", "site", "role", "location", "tags")
+
+
+class MonitoringOverrideForm(NetBoxModelForm):
+    """Per-object exception. The target is one of Device / Virtual Machine."""
 
     device = DynamicModelChoiceField(
-        queryset=Device.objects.all(),
-        required=False,
-        label=_("Device"),
+        queryset=Device.objects.all(), required=False, label=_("Device")
     )
     virtual_machine = DynamicModelChoiceField(
         queryset=VirtualMachine.objects.all(),
@@ -44,7 +96,11 @@ class MonitoringProfileForm(NetBoxModelForm):
         queryset=IPAddress.objects.all(),
         required=False,
         label=_("Management IP"),
-        help_text=_("Defaults to the object's primary IP if left blank."),
+        query_params={
+            "device_id": "$device",
+            "virtual_machine_id": "$virtual_machine",
+        },
+        help_text=_("Overrides the object's primary IP if set."),
     )
     additional_ips = DynamicModelMultipleChoiceField(
         queryset=IPAddress.objects.all(),
@@ -54,18 +110,17 @@ class MonitoringProfileForm(NetBoxModelForm):
             "device_id": "$device",
             "virtual_machine_id": "$virtual_machine",
         },
-        help_text=_("Other IPs of this object to monitor as non-primary interfaces."),
     )
 
     class Meta:
-        model = MonitoringProfile
+        model = MonitoringOverride
         fields = (
             "device",
             "virtual_machine",
+            "exclude",
             "management_ip",
             "additional_ips",
             "location",
-            "enabled",
             "tags",
         )
 
@@ -78,8 +133,6 @@ class MonitoringProfileForm(NetBoxModelForm):
                 initial.setdefault("device", obj)
             elif isinstance(obj, VirtualMachine):
                 initial.setdefault("virtual_machine", obj)
-            if not instance.management_ip_id and obj is not None and obj.primary_ip:
-                initial.setdefault("management_ip", obj.primary_ip)
         kwargs["initial"] = initial
         super().__init__(*args, **kwargs)
 
@@ -92,12 +145,11 @@ class MonitoringProfileForm(NetBoxModelForm):
         target = device or virtual_machine
         self.instance.assigned_object = target
 
-        # The unique constraint references assigned_object_type/_id, which are
-        # not form fields, so Django's validate_unique would skip it — surface a
-        # clean error here instead of a database IntegrityError.
+        # The unique constraint references assigned_object_type/_id (not form
+        # fields), so surface a clean duplicate error instead of an IntegrityError.
         content_type = ContentType.objects.get_for_model(target)
         duplicate = (
-            MonitoringProfile.objects.filter(
+            MonitoringOverride.objects.filter(
                 assigned_object_type=content_type,
                 assigned_object_id=target.pk,
             )
@@ -105,75 +157,22 @@ class MonitoringProfileForm(NetBoxModelForm):
             .exists()
         )
         if duplicate:
-            raise ValidationError(_("This object already has a Monitoring Profile."))
-
-        # Resolve the management IP: explicit choice, else the object's primary
-        # IP. Write it back to cleaned_data so the model instance is constructed
-        # with the resolved value (management_ip is a form field, so setting it
-        # on self.instance directly would be overwritten by _post_clean).
-        management_ip = self.cleaned_data.get("management_ip") or target.primary_ip
-        if management_ip is None:
-            raise ValidationError(
-                {
-                    "management_ip": _(
-                        "No management IP set and the object has no primary IP."
-                    )
-                }
-            )
-        self.cleaned_data["management_ip"] = management_ip
-
-        # Additional IPs must belong to the monitored object (AD-15) and must not
-        # duplicate the management IP (which is the primary "P" interface).
-        additional = self.cleaned_data.get("additional_ips")
-        if additional:
-            # Drop the management IP first — it's the lone primary (no duplicate
-            # P+N), and it may legitimately be off the object's interfaces
-            # (Story 1.3), so excluding it before the membership check avoids a
-            # false "not assigned" error.
-            additional = [ip for ip in additional if ip.pk != management_ip.pk]
-            owned = object_ip_pks(target)
-            foreign = [ip for ip in additional if ip.pk not in owned]
-            if foreign:
-                raise ValidationError(
-                    {
-                        "additional_ips": _(
-                            "These IPs are not assigned to the selected object: %(ips)s"
-                        )
-                        % {"ips": ", ".join(str(ip) for ip in foreign)}
-                    }
-                )
-            self.cleaned_data["additional_ips"] = additional
+            raise ValidationError(_("This object already has a Monitoring Override."))
         return self.cleaned_data
 
 
 class MonitoredServiceForm(NetBoxModelForm):
-    """Add/edit a service monitored on one interface of a profile."""
+    """Add/edit an explicit service on one of an override's interfaces."""
 
-    profile = DynamicModelChoiceField(
-        queryset=MonitoringProfile.objects.all(),
-        label=_("Monitoring Profile"),
+    override = DynamicModelChoiceField(
+        queryset=MonitoringOverride.objects.all(), label=_("Monitoring Override")
     )
     ip_address = DynamicModelChoiceField(
         queryset=IPAddress.objects.all(),
         label=_("Interface IP"),
-        help_text=_("Must be the profile's management IP or an additional IP."),
+        help_text=_("Must be the override's management IP or an additional IP."),
     )
 
     class Meta:
         model = MonitoredService
-        fields = ("profile", "ip_address", "name", "tags")
-
-    def clean(self):
-        super().clean()
-        profile = self.cleaned_data.get("profile")
-        ip_address = self.cleaned_data.get("ip_address")
-        if profile and ip_address and ip_address.pk not in profile_ip_pks(profile):
-            raise ValidationError(
-                {
-                    "ip_address": _(
-                        "The IP must be the profile's management IP or one of "
-                        "its additional IPs."
-                    )
-                }
-            )
-        return self.cleaned_data
+        fields = ("override", "ip_address", "name", "tags")

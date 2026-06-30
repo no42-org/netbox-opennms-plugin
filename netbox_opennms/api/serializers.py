@@ -1,6 +1,6 @@
 # Copyright 2026 Ronny Trommer <ronny@no42.org>
 # SPDX-License-Identifier: MIT
-"""REST API serializers."""
+"""REST API serializers (Epic 5)."""
 
 from django.contrib.contenttypes.models import ContentType
 from netbox.api.fields import ContentTypeField
@@ -12,20 +12,26 @@ from ..derivation import validate_location_name
 from ..models import (
     ASSIGNMENT_MODELS,
     MonitoredService,
+    MonitoringAssignment,
+    MonitoringDetector,
+    MonitoringOverride,
+    MonitoringPolicy,
     MonitoringProfile,
-    object_ip_pks,
-    profile_ip_pks,
 )
+
+
+def _validate_location(value):
+    try:
+        validate_location_name(value)
+    except ValueError as exc:
+        raise serializers.ValidationError(str(exc)) from exc
+    return value
 
 
 class MonitoringProfileSerializer(NetBoxModelSerializer):
     url = serializers.HyperlinkedIdentityField(
         view_name="plugins-api:netbox_opennms-api:monitoringprofile-detail"
     )
-    assigned_object_type = ContentTypeField(
-        queryset=ContentType.objects.filter(ASSIGNMENT_MODELS)
-    )
-    assigned_object = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = MonitoringProfile
@@ -33,27 +39,123 @@ class MonitoringProfileSerializer(NetBoxModelSerializer):
             "id",
             "url",
             "display",
-            "assigned_object_type",
-            "assigned_object_id",
-            "assigned_object",
-            "management_ip",
-            "additional_ips",
-            "location",
-            "enabled",
+            "name",
+            "description",
+            "scan_interval",
+            "default_interfaces",
             "tags",
             "custom_fields",
             "created",
             "last_updated",
         )
-        brief_fields = ("id", "url", "display", "enabled")
+        brief_fields = ("id", "url", "display", "name")
+
+
+class MonitoringDetectorSerializer(NetBoxModelSerializer):
+    url = serializers.HyperlinkedIdentityField(
+        view_name="plugins-api:netbox_opennms-api:monitoringdetector-detail"
+    )
+
+    class Meta:
+        model = MonitoringDetector
+        fields = (
+            "id",
+            "url",
+            "display",
+            "profile",
+            "name",
+            "preset",
+            "rule_class",
+            "parameters",
+            "tags",
+            "custom_fields",
+            "created",
+            "last_updated",
+        )
+        brief_fields = ("id", "url", "display", "name")
+
+
+class MonitoringPolicySerializer(NetBoxModelSerializer):
+    url = serializers.HyperlinkedIdentityField(
+        view_name="plugins-api:netbox_opennms-api:monitoringpolicy-detail"
+    )
+
+    class Meta:
+        model = MonitoringPolicy
+        fields = (
+            "id",
+            "url",
+            "display",
+            "profile",
+            "name",
+            "preset",
+            "rule_class",
+            "parameters",
+            "tags",
+            "custom_fields",
+            "created",
+            "last_updated",
+        )
+        brief_fields = ("id", "url", "display", "name")
+
+
+class MonitoringAssignmentSerializer(NetBoxModelSerializer):
+    url = serializers.HyperlinkedIdentityField(
+        view_name="plugins-api:netbox_opennms-api:monitoringassignment-detail"
+    )
+
+    class Meta:
+        model = MonitoringAssignment
+        fields = (
+            "id",
+            "url",
+            "display",
+            "profile",
+            "site",
+            "role",
+            "location",
+            "tags",
+            "custom_fields",
+            "created",
+            "last_updated",
+        )
+        brief_fields = ("id", "url", "display", "profile", "site", "role")
 
     def validate_location(self, value):
-        # Serializers don't run Model.clean(); enforce the AD-9 name rule here.
-        try:
-            validate_location_name(value)
-        except ValueError as exc:
-            raise serializers.ValidationError(str(exc)) from exc
-        return value
+        return _validate_location(value)
+
+
+class MonitoringOverrideSerializer(NetBoxModelSerializer):
+    url = serializers.HyperlinkedIdentityField(
+        view_name="plugins-api:netbox_opennms-api:monitoringoverride-detail"
+    )
+    assigned_object_type = ContentTypeField(
+        queryset=ContentType.objects.filter(ASSIGNMENT_MODELS)
+    )
+    assigned_object = serializers.SerializerMethodField(read_only=True)
+
+    class Meta:
+        model = MonitoringOverride
+        fields = (
+            "id",
+            "url",
+            "display",
+            "assigned_object_type",
+            "assigned_object_id",
+            "assigned_object",
+            "exclude",
+            "management_ip",
+            "additional_ips",
+            "location",
+            "tags",
+            "custom_fields",
+            "created",
+            "last_updated",
+        )
+        brief_fields = ("id", "url", "display", "exclude")
+
+    def validate_location(self, value):
+        return _validate_location(value)
 
     def get_assigned_object(self, obj):
         if obj.assigned_object is None:
@@ -76,37 +178,15 @@ class MonitoringProfileSerializer(NetBoxModelSerializer):
                 raise serializers.ValidationError(
                     {"assigned_object_id": "The referenced object does not exist."}
                 )
-            duplicate = MonitoringProfile.objects.filter(
-                assigned_object_type=content_type,
-                assigned_object_id=object_id,
+            duplicate = MonitoringOverride.objects.filter(
+                assigned_object_type=content_type, assigned_object_id=object_id
             )
             if self.instance is not None:
                 duplicate = duplicate.exclude(pk=self.instance.pk)
             if duplicate.exists():
                 raise serializers.ValidationError(
-                    "This object already has a Monitoring Profile."
+                    "This object already has a Monitoring Override."
                 )
-
-            # Additional IPs must belong to the object and must not duplicate the
-            # management IP (AD-15) — mirror the form's guard on the API path.
-            additional = data.get("additional_ips")
-            if additional:
-                target = model.objects.get(pk=object_id)
-                owned = object_ip_pks(target)
-                management_ip = data.get("management_ip") or getattr(
-                    self.instance, "management_ip", None
-                )
-                management_pk = management_ip.pk if management_ip is not None else None
-                filtered = [ip for ip in additional if ip.pk != management_pk]
-                foreign = [ip for ip in filtered if ip.pk not in owned]
-                if foreign:
-                    raise serializers.ValidationError(
-                        {
-                            "additional_ips": "These IPs are not assigned to the "
-                            "object: " + ", ".join(str(ip) for ip in foreign)
-                        }
-                    )
-                data["additional_ips"] = filtered
         return data
 
 
@@ -121,7 +201,7 @@ class MonitoredServiceSerializer(NetBoxModelSerializer):
             "id",
             "url",
             "display",
-            "profile",
+            "override",
             "ip_address",
             "name",
             "tags",
@@ -130,22 +210,3 @@ class MonitoredServiceSerializer(NetBoxModelSerializer):
             "last_updated",
         )
         brief_fields = ("id", "url", "display", "name")
-
-    def validate(self, data):
-        data = super().validate(data)
-        profile = data.get("profile") or getattr(self.instance, "profile", None)
-        ip_address = data.get("ip_address") or getattr(
-            self.instance, "ip_address", None
-        )
-        if (
-            profile is not None
-            and ip_address is not None
-            and ip_address.pk not in profile_ip_pks(profile)
-        ):
-            raise serializers.ValidationError(
-                {
-                    "ip_address": "The IP must be the profile's management IP or "
-                    "one of its additional IPs."
-                }
-            )
-        return data

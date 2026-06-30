@@ -2,28 +2,86 @@
 # SPDX-License-Identifier: MIT
 """Filter sets for plugin models."""
 
+from django.db.models import Q
 from netbox.filtersets import NetBoxModelFilterSet
 
-from .models import MonitoredService, MonitoringProfile
+from .models import (
+    MonitoredService,
+    MonitoringAssignment,
+    MonitoringDetector,
+    MonitoringOverride,
+    MonitoringPolicy,
+    MonitoringProfile,
+)
 
 
 class MonitoringProfileFilterSet(NetBoxModelFilterSet):
     class Meta:
         model = MonitoringProfile
-        fields = ("id", "enabled", "assigned_object_type", "assigned_object_id")
+        fields = ("id", "name", "scan_interval", "default_interfaces")
 
     def search(self, queryset, name, value):
-        # No free-text field on this model: a text query matches nothing rather
-        # than silently returning every profile.
         if value:
-            return queryset.none()
+            return queryset.filter(
+                Q(name__icontains=value) | Q(description__icontains=value)
+            )
+        return queryset
+
+
+class MonitoringDetectorFilterSet(NetBoxModelFilterSet):
+    class Meta:
+        model = MonitoringDetector
+        fields = ("id", "profile", "name", "preset", "rule_class")
+
+    def search(self, queryset, name, value):
+        if value:
+            return queryset.filter(name__icontains=value)
+        return queryset
+
+
+class MonitoringPolicyFilterSet(NetBoxModelFilterSet):
+    class Meta:
+        model = MonitoringPolicy
+        fields = ("id", "profile", "name", "preset", "rule_class")
+
+    def search(self, queryset, name, value):
+        if value:
+            return queryset.filter(name__icontains=value)
+        return queryset
+
+
+class MonitoringAssignmentFilterSet(NetBoxModelFilterSet):
+    class Meta:
+        model = MonitoringAssignment
+        fields = ("id", "profile", "site", "role", "location")
+
+    def search(self, queryset, name, value):
+        if value:
+            return queryset.filter(location__icontains=value)
+        return queryset
+
+
+class MonitoringOverrideFilterSet(NetBoxModelFilterSet):
+    class Meta:
+        model = MonitoringOverride
+        fields = (
+            "id",
+            "assigned_object_type",
+            "assigned_object_id",
+            "exclude",
+            "location",
+        )
+
+    def search(self, queryset, name, value):
+        if value:
+            return queryset.filter(location__icontains=value)
         return queryset
 
 
 class MonitoredServiceFilterSet(NetBoxModelFilterSet):
     class Meta:
         model = MonitoredService
-        fields = ("id", "profile", "ip_address", "name")
+        fields = ("id", "override", "ip_address", "name")
 
     def search(self, queryset, name, value):
         if value:

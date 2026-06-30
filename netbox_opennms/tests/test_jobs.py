@@ -17,8 +17,9 @@ from dcim.models import (
 from django.test import TestCase
 from ipam.models import IPAddress
 
-from netbox_opennms.client import OpenNMSHTTPError
+from netbox_opennms.client import OpenNMSError, OpenNMSHTTPError
 from netbox_opennms.jobs import (
+    ReconcileOrphansJob,
     SyncForeignSourceJob,
     enabled_foreign_sources,
     unknown_locations,
@@ -243,6 +244,64 @@ class SyncForeignSourceJobTest(TestCase):
         )
         self._runner().run(foreign_source=FS)
         client.import_requisition.assert_called_once()
+
+    @mock.patch("netbox_opennms.jobs.advisory_lock")
+    @mock.patch("netbox_opennms.jobs.OpenNMSClient.from_config")
+    def test_ungoverned_remove_purges_shell(self, mock_from_config, _lock):
+        # A Remove of an UNGOVERNED FS (reconciler/manual purge) clears the nodes
+        # AND deletes the requisition + foreign-source shell so it can't recur.
+        client = mock_from_config.return_value.__enter__.return_value
+        client.import_requisition.return_value = mock.Mock(status_code=202)
+        self._runner().run(foreign_source="netbox.durham.router", allow_empty=True)
+        client.delete_requisition.assert_called_once_with("netbox.durham.router")
+        client.delete_foreign_source.assert_called_once_with("netbox.durham.router")
+
+    @mock.patch("netbox_opennms.jobs.advisory_lock")
+    @mock.patch("netbox_opennms.jobs.OpenNMSClient.from_config")
+    def test_governed_remove_keeps_shell(self, mock_from_config, _lock):
+        # A Remove of a still-GOVERNED FS (assignment exists, members emptied)
+        # clears the nodes but keeps the shell — the scope is still intended.
+        client = mock_from_config.return_value.__enter__.return_value
+        client.import_requisition.return_value = mock.Mock(status_code=202)
+        Device.objects.filter(pk=self.device.pk).delete()
+        self._runner().run(foreign_source=FS, allow_empty=True)
+        client.delete_requisition.assert_not_called()
+        client.delete_foreign_source.assert_not_called()
+
+    @mock.patch("netbox_opennms.jobs.OpenNMSClient.from_config")
+    def test_reconcile_enqueues_remove_for_orphans(self, mock_from_config):
+        client = mock_from_config.return_value.__enter__.return_value
+        client.list_requisition_names.return_value = {
+            FS,  # governed (assignment + member) → kept
+            "netbox.durham.router",  # ours, ungoverned → orphan
+            "external.thing",  # not our namespace → ignored
+        }
+        with mock.patch.object(SyncForeignSourceJob, "enqueue_sync") as enqueue:
+            ReconcileOrphansJob(job=mock.Mock()).run()
+        enqueue.assert_called_once_with("netbox.durham.router", allow_empty=True)
+
+    @mock.patch("netbox_opennms.jobs.get_plugin_config")
+    def test_reconcile_disabled_skips(self, mock_cfg):
+        mock_cfg.return_value = "false"
+        with mock.patch.object(SyncForeignSourceJob, "enqueue_sync") as enqueue:
+            ReconcileOrphansJob(job=mock.Mock()).run()
+        enqueue.assert_not_called()
+
+    @mock.patch("netbox_opennms.jobs.OpenNMSClient.from_config")
+    def test_reconcile_swallows_opennms_error(self, mock_from_config):
+        mock_from_config.side_effect = OpenNMSError("down")
+        ReconcileOrphansJob(job=mock.Mock()).run()  # must not raise
+
+    def test_reconcile_registered_as_recurring_system_job(self):
+        from netbox.registry import registry
+
+        from netbox_opennms.jobs import RECONCILE_INTERVAL_MINUTES
+
+        self.assertIn(ReconcileOrphansJob, registry["system_jobs"])
+        self.assertEqual(
+            registry["system_jobs"][ReconcileOrphansJob]["interval"],
+            RECONCILE_INTERVAL_MINUTES,
+        )
 
     def test_enabled_foreign_sources(self):
         # Distinct governed FSs with members; a different site is its own FS.

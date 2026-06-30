@@ -46,6 +46,10 @@ class NetBoxOpenNMSConfig(PluginConfig):
         "default_location": "",
         # rescanExisting value used by the import step (Story 1.7).
         "import_mode": "false",
+        # Periodic drift reconciler: clear OpenNMS netbox.* Foreign Sources that
+        # NetBox no longer governs (last member left / moved / unassigned). "true"
+        # / "false". Touches only the plugin's own namespace.
+        "reconcile_orphans": "true",
     }
 
     def ready(self):

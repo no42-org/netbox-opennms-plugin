@@ -29,7 +29,7 @@ from core.exceptions import JobFailed
 from core.models import Job
 from django.contrib.contenttypes.models import ContentType
 from django_pglocks import advisory_lock
-from netbox.jobs import JobRunner
+from netbox.jobs import JobRunner, system_job
 from netbox.plugins import get_plugin_config
 
 from .client import OpenNMSClient, OpenNMSError
@@ -48,6 +48,10 @@ from .translation import (
 from .validation import validate_resolution
 
 PLUGIN_NAME = "netbox_opennms"
+# How often the drift reconciler runs (minutes). A literal — @system_job is
+# evaluated at import, before plugin config is available; operators disable the
+# pass entirely via the ``reconcile_orphans`` config flag, not the cadence.
+RECONCILE_INTERVAL_MINUTES = 60
 
 
 def enabled_foreign_sources():
@@ -215,6 +219,20 @@ class SyncForeignSourceJob(JobRunner):
                         )
                 except Exception:
                     pass
+                # An ungoverned Remove (the drift reconciler, or a manual purge of
+                # an orphaned Foreign Source): the nodes are now cleared, so also
+                # drop the requisition + foreign-source shell — else the empty
+                # requisition lingers in OpenNMS's list and the reconciler keeps
+                # re-finding it every interval. Best-effort: a 404/transient here
+                # must not fail an otherwise-successful Remove.
+                if resolution is None and allow_empty:
+                    try:
+                        client.delete_requisition(foreign_source)
+                        client.delete_foreign_source(foreign_source)
+                    except OpenNMSError as exc:
+                        self.logger.warning(
+                            f"could not purge orphan shell {foreign_source}: {exc}"
+                        )
         except OpenNMSError as exc:
             self.logger.error(f"OpenNMS sync of {foreign_source} failed: {exc}")
             raise JobFailed() from exc
@@ -295,3 +313,58 @@ def sync_status_for(target):
         "job": job,
         "outcome": sync_outcome(job, is_removal=is_removal, governed=governed),
     }
+
+
+def orphaned_foreign_sources(client):
+    """Foreign Sources OpenNMS still holds that NetBox no longer governs.
+
+    The reconciliation core (pure given a ``client``, so it tests against a fake):
+    OpenNMS's ``netbox.*`` requisitions minus the set NetBox currently governs
+    (``monitored_foreign_sources`` — assignment + ≥1 member). Scoped to the
+    ``netbox.`` namespace so a non-managed requisition is never touched. Catches
+    every drift cause uniformly: last-member departure, role/site move (the old
+    Foreign Source), and assignment removal.
+    """
+    deployed = {
+        fs for fs in client.list_requisition_names() if fs.startswith("netbox.")
+    }
+    return sorted(deployed - set(monitored_foreign_sources()))
+
+
+@system_job(interval=RECONCILE_INTERVAL_MINUTES)
+class ReconcileOrphansJob(JobRunner):
+    """Periodically clear OpenNMS Foreign Sources NetBox no longer governs.
+
+    Membership is a live query, so when the last member leaves a scope (object
+    deleted, role/site changed, assignment removed) the Foreign Source drops out
+    of ``monitored_foreign_sources()`` and its stale OpenNMS nodes would linger
+    forever, still alerting. This drift reconciler enqueues an ``allow_empty``
+    Remove for each orphan (which clears the nodes AND deletes the now-empty
+    shell, so it doesn't recur). Opt-out via ``reconcile_orphans`` config.
+
+    Best-effort: an OpenNMS outage logs and returns (no raise), so a transient
+    failure doesn't mark the recurring system job failed.
+    """
+
+    class Meta:
+        name = "OpenNMS reconcile orphans"
+
+    def run(self, *args, **kwargs):
+        if str(get_plugin_config(PLUGIN_NAME, "reconcile_orphans")).lower() != "true":
+            self.logger.info("reconcile_orphans disabled — skipping.")
+            return
+        try:
+            with OpenNMSClient.from_config() as client:
+                orphans = orphaned_foreign_sources(client)
+        except OpenNMSError as exc:
+            self.logger.warning(f"reconcile skipped — OpenNMS error: {exc}")
+            return
+        if not orphans:
+            self.logger.info("reconcile: no orphaned Foreign Sources.")
+            return
+        for foreign_source in orphans:
+            SyncForeignSourceJob.enqueue_sync(foreign_source, allow_empty=True)
+            self.logger.info(
+                f"reconcile: enqueued Remove for orphaned Foreign Source "
+                f"{foreign_source}."
+            )

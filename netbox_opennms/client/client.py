@@ -187,3 +187,53 @@ class OpenNMSClient:
             f"/rest/requisitions/{quote(foreign_source, safe='')}/import",
             params={"rescanExisting": rescan_existing},
         )
+
+    def list_requisition_names(self):
+        """Foreign Source names of every requisition OpenNMS holds (drift recon).
+
+        ``GET /rest/requisitions`` → ``{"model-import": [{"foreign-source": …}, …]}``.
+        The reconciler compares this against the Foreign Sources NetBox still
+        governs to find orphans. Parsed defensively into the typed taxonomy on a
+        non-JSON/unexpected body (AD-16), like ``list_locations``.
+        """
+        response = self._request(
+            "GET",
+            "/rest/requisitions",
+            headers={"Accept": "application/json"},
+            params={"limit": 0},
+        )
+        try:
+            payload = response.json()
+            entries = (
+                payload
+                if isinstance(payload, list)
+                else payload.get("model-import", [])
+            )
+            names = set()
+            for entry in entries:
+                if isinstance(entry, dict) and entry.get("foreign-source"):
+                    names.add(entry["foreign-source"])
+        except (ValueError, AttributeError, TypeError) as exc:
+            raise OpenNMSError(
+                "OpenNMS returned an unparseable requisitions response."
+            ) from exc
+        return names
+
+    def delete_requisition(self, foreign_source):
+        """Delete a requisition by Foreign Source — the DEPLOYED copy then pending.
+
+        ``GET /rest/requisitions`` lists the *deployed* requisition, so removing a
+        Foreign Source from the list (and stopping the drift reconciler re-finding
+        it) requires ``DELETE /rest/requisitions/deployed/{fs}``; deleting the base
+        (pending) path alone leaves the deployed copy listed. The pending delete
+        follows so a later re-create starts clean. Both are idempotent in OpenNMS.
+        """
+        fs = quote(foreign_source, safe="")
+        self._request("DELETE", f"/rest/requisitions/deployed/{fs}")
+        return self._request("DELETE", f"/rest/requisitions/{fs}")
+
+    def delete_foreign_source(self, foreign_source):
+        """Delete a foreign-source definition by name (the detectors/policies shell)."""
+        return self._request(
+            "DELETE", f"/rest/foreignSources/{quote(foreign_source, safe='')}"
+        )

@@ -177,6 +177,34 @@ class OpenNMSRoundTripTest(TestCase):
         finally:
             self._delete_foreign_source()
 
+    def test_reconcile_wire_contract(self):
+        # The drift reconciler's contract: list the netbox.* requisitions OpenNMS
+        # holds (GET /rest/requisitions JSON shape) and delete the requisition +
+        # foreign-source shell of an orphan. Validates list_requisition_names +
+        # delete_requisition + delete_foreign_source against real H36.
+        profile = self._profile_with_icmp()
+        self._device_node(profile)
+        nodes = resolve(FS).nodes
+        try:
+            with self._client() as client:
+                fs_xml = render_foreign_source_definition(FS, profile)
+                client.post_foreign_source(fs_xml)
+                client.post_requisition(render_requisition(FS, nodes))
+                client.import_requisition(FS, rescan_existing="true")
+                self.assertIn(FS, client.list_requisition_names())
+                client.delete_requisition(FS)
+                client.delete_foreign_source(FS)
+                # The orphan shell is gone, so the reconciler won't re-find it.
+                gone = False
+                for _ in range(10):
+                    if FS not in client.list_requisition_names():
+                        gone = True
+                        break
+                    time.sleep(2)
+                self.assertTrue(gone, "requisition still listed after delete")
+        finally:
+            self._delete_foreign_source()
+
     def test_all_presets_accepted_and_round_trip(self):
         profile = MonitoringProfile.objects.create(name="CI All presets")
         for key in DETECTOR_PRESETS:

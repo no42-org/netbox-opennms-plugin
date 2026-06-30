@@ -70,10 +70,40 @@ class ProfileAndRuleTest(TestCase):
 
     def test_policy_preset_fills_class(self):
         policy = MonitoringPolicy(
-            profile=self.profile, name="cat", preset="set-category"
+            profile=self.profile,
+            name="cat",
+            preset="set-category",
+            parameters={"category": "Routers"},
         )
         policy.clean()
         self.assertTrue(policy.rule_class.endswith("NodeCategorySettingPolicy"))
+
+    def test_tcp_preset_requires_port(self):
+        # TcpDetector has no default port — clean() rejects the bare preset.
+        bad = MonitoringDetector(profile=self.profile, name="tcp", preset="tcp")
+        with self.assertRaises(ValidationError):
+            bad.clean()
+        ok = MonitoringDetector(
+            profile=self.profile,
+            name="tcp2",
+            preset="tcp",
+            parameters={"port": "8080"},
+        )
+        ok.clean()  # with the required port — valid
+
+    def test_set_category_preset_requires_category(self):
+        bad = MonitoringPolicy(
+            profile=self.profile, name="cat", preset="set-category"
+        )
+        with self.assertRaises(ValidationError):
+            bad.clean()
+        ok = MonitoringPolicy(
+            profile=self.profile,
+            name="cat2",
+            preset="set-category",
+            parameters={"category": "Routers"},
+        )
+        ok.clean()
 
     def test_detector_unique_per_profile_name(self):
         MonitoringDetector.objects.create(

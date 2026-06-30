@@ -24,13 +24,37 @@ from .choices import (
     ServiceChoices,
 )
 from .derivation import validate_location_name
-from .presets import resolve_detector, resolve_policy
+from .presets import (
+    detector_required_params,
+    policy_required_params,
+    resolve_detector,
+    resolve_policy,
+)
 
 # A Monitoring Override may attach to a Device or a VirtualMachine.
 ASSIGNMENT_MODELS = models.Q(
     models.Q(app_label="dcim", model="device")
     | models.Q(app_label="virtualization", model="virtualmachine")
 )
+
+
+def _require_preset_params(rule, required):
+    """Raise if a preset's class-required params are unset (e.g. tcp ``port``).
+
+    Some preset classes have no sensible default for a parameter (TcpDetector's
+    port, NodeCategorySettingPolicy's category), so a user who picks the preset
+    and skips the field would render a no-op/server-rejected rule. Caught here
+    rather than at push time.
+    """
+    params = rule.parameters or {}
+    missing = [key for key in required if not str(params.get(key, "")).strip()]
+    if missing:
+        raise ValidationError(
+            {
+                "parameters": f"The {rule.preset!r} preset requires: "
+                f"{', '.join(missing)}."
+            }
+        )
 
 
 class MonitoringProfile(NetBoxModel):
@@ -117,6 +141,7 @@ class MonitoringDetector(_ProvisioningRule):
             raise ValidationError(
                 {"rule_class": "Choose a preset or enter a detector class."}
             )
+        _require_preset_params(self, detector_required_params(self.preset))
 
     def save(self, *args, **kwargs):
         self._apply_preset()
@@ -158,6 +183,7 @@ class MonitoringPolicy(_ProvisioningRule):
             raise ValidationError(
                 {"rule_class": "Choose a preset or enter a policy class."}
             )
+        _require_preset_params(self, policy_required_params(self.preset))
 
     def save(self, *args, **kwargs):
         self._apply_preset()

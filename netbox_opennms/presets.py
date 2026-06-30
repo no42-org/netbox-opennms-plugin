@@ -57,6 +57,8 @@ DETECTOR_PRESETS = {
         "class": f"{_DETECTOR}.simple.TcpDetector",
         "parameters": {"banner": "*"},
         "schema": [("port", "Port", ""), ("banner", "Banner regex", "*")],
+        # TcpDetector has no default port — the user MUST supply which port to probe.
+        "required": ["port"],
     },
 }
 
@@ -67,6 +69,8 @@ POLICY_PRESETS = {
         "class": f"{_POLICY}.NodeCategorySettingPolicy",
         "parameters": {"matchBehavior": "ALL_PARAMETERS"},
         "schema": [("category", "Category", ""), _MATCH],
+        # The category to assign is node/site-specific — no default; require it.
+        "required": ["category"],
     },
     "manage-ip-interfaces": {
         "class": f"{_POLICY}.MatchingIpInterfacePolicy",
@@ -97,3 +101,15 @@ def resolve_policy(preset):
     """The (class, default-parameters) for a policy preset key, or (None, {})."""
     spec = POLICY_PRESETS.get(preset)
     return (spec["class"], dict(spec["parameters"])) if spec else (None, {})
+
+
+def detector_required_params(preset):
+    """Param keys a detector preset's class needs but can't default (or ``[]``)."""
+    spec = DETECTOR_PRESETS.get(preset)
+    return list(spec.get("required", [])) if spec else []
+
+
+def policy_required_params(preset):
+    """Param keys a policy preset's class needs but can't default (or ``[]``)."""
+    spec = POLICY_PRESETS.get(preset)
+    return list(spec.get("required", [])) if spec else []

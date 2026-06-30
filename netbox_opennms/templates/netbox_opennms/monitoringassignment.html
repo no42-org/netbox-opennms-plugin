@@ -1,0 +1,37 @@
+{# Copyright 2026 Ronny Trommer <ronny@no42.org> #}
+{# SPDX-License-Identifier: MIT #}
+{% extends 'generic/object.html' %}
+{% load helpers %}
+
+{% block extra_controls %}
+  {% if perms.netbox_opennms.change_monitoringassignment %}
+    <form method="post" action="{% url 'plugins:netbox_opennms:monitoringassignment_sync' pk=object.pk %}" class="d-inline">
+      {% csrf_token %}
+      <button type="submit" class="btn btn-sm btn-primary">
+        <i class="mdi mdi-sync"></i> Sync to OpenNMS
+      </button>
+    </form>
+  {% endif %}
+{% endblock %}
+
+{% block content %}
+  {% if no_worker_warning %}
+    <div class="alert alert-warning" role="alert">
+      <i class="mdi mdi-alert"></i> No background worker is running — Sync jobs will
+      stay pending until an RQ worker is started.
+    </div>
+  {% endif %}
+  <div class="row">
+    <div class="col col-md-6">
+      <div class="card">
+        <h2 class="card-header">Monitoring Assignment</h2>
+        <table class="table table-hover attr-table">
+          <tr><th scope="row">Profile</th><td>{{ object.profile|linkify }}</td></tr>
+          <tr><th scope="row">Site</th><td>{{ object.site|linkify }}</td></tr>
+          <tr><th scope="row">Role</th><td>{{ object.role|linkify|placeholder }}</td></tr>
+          <tr><th scope="row">Location</th><td>{{ object.location|placeholder }}</td></tr>
+        </table>
+      </div>
+    </div>
+  </div>
+{% endblock %}

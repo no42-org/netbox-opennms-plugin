@@ -1,279 +1,159 @@
 # Copyright 2026 Ronny Trommer <ronny@no42.org>
 # SPDX-License-Identifier: MIT
-"""Tests for the pure requisition/foreign-source XML renderers (AD-3)."""
+"""Tests for the pure render layer (Epic 5): requisition + foreign-source def."""
 
-from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Site
-from django.test import TestCase
-from ipam.models import IPAddress
+from django.test import SimpleTestCase, TestCase
 from lxml import etree
-from virtualization.models import Cluster, ClusterType, VirtualMachine
 
-from netbox_opennms.derivation import foreign_id_for
-from netbox_opennms.models import MonitoredService, MonitoringProfile
+from netbox_opennms.membership import InterfaceSpec, NodeSpec
+from netbox_opennms.models import (
+    MonitoringDetector,
+    MonitoringPolicy,
+    MonitoringProfile,
+)
 from netbox_opennms.translation import (
     RenderError,
     render_foreign_source_definition,
     render_requisition,
 )
 
-MODEL_IMPORT_NS = "http://xmlns.opennms.org/xsd/config/model-import"
-FOREIGN_SOURCE_NS = "http://xmlns.opennms.org/xsd/config/foreign-source"
+MI = "{http://xmlns.opennms.org/xsd/config/model-import}"
+FS = "{http://xmlns.opennms.org/xsd/config/foreign-source}"
 
 
-def _q(ns, tag):
-    return f"{{{ns}}}{tag}"
+class RenderRequisitionTest(SimpleTestCase):
+    """render_requisition is pure — it reads NodeSpec objects, no DB."""
 
-
-class RenderRequisitionTest(TestCase):
-    @classmethod
-    def setUpTestData(cls):
-        site = Site.objects.create(name="Raleigh", slug="raleigh")
-        role = DeviceRole.objects.create(name="Router", slug="router")
-        manufacturer = Manufacturer.objects.create(name="Acme", slug="acme")
-        device_type = DeviceType.objects.create(
-            manufacturer=manufacturer, model="Model 1", slug="model-1"
+    def _node(self, **kw):
+        kw.setdefault("node_label", "rtr-1")
+        kw.setdefault("foreign_id", "device-1")
+        kw.setdefault("location", "")
+        kw.setdefault(
+            "interfaces", [InterfaceSpec("10.0.0.1", True, services=["ICMP"])]
         )
-        cls.device = Device.objects.create(
-            name="rtr-1", device_type=device_type, role=role, site=site
-        )
-        ip = IPAddress.objects.create(address="10.0.0.1/24")
-        cls.profile = MonitoringProfile.objects.create(
-            assigned_object=cls.device, management_ip=ip
-        )
+        return NodeSpec(**kw)
 
-        cluster = Cluster.objects.create(
-            name="c1", type=ClusterType.objects.create(name="t1", slug="t1")
-        )
-        cls.vm = VirtualMachine.objects.create(name="vm-1", cluster=cluster, role=role)
-        vm_ip = IPAddress.objects.create(address="10.0.0.2/24")
-        cls.vm_profile = MonitoringProfile.objects.create(
-            assigned_object=cls.vm, management_ip=vm_ip
-        )
-
-    def test_single_device_requisition(self):
-        xml = render_requisition("netbox.raleigh.router", [self.profile])
+    def test_node_label_foreign_id_and_primary_interface(self):
+        xml = render_requisition("netbox.raleigh.router", [self._node()])
         root = etree.fromstring(xml)
-        self.assertEqual(root.tag, _q(MODEL_IMPORT_NS, "model-import"))
         self.assertEqual(root.get("foreign-source"), "netbox.raleigh.router")
-        nodes = root.findall(_q(MODEL_IMPORT_NS, "node"))
-        self.assertEqual(len(nodes), 1)
-        self.assertEqual(nodes[0].get("node-label"), "rtr-1")
-        self.assertEqual(nodes[0].get("foreign-id"), f"device-{self.device.pk}")
-        iface = nodes[0].find(_q(MODEL_IMPORT_NS, "interface"))
-        # IP only — no CIDR mask
+        node = root.find(f"{MI}node")
+        self.assertEqual(node.get("node-label"), "rtr-1")
+        self.assertEqual(node.get("foreign-id"), "device-1")
+        iface = node.find(f"{MI}interface")
         self.assertEqual(iface.get("ip-addr"), "10.0.0.1")
         self.assertEqual(iface.get("snmp-primary"), "P")
+        service = iface.find(f"{MI}monitored-service")
+        self.assertEqual(service.get("service-name"), "ICMP")
 
-    def test_multiple_profiles_render_as_distinct_nodes(self):
-        # FS-level render (what the job pushes): two profiles in one Foreign
-        # Source → two <node> with distinct foreign-ids in one <model-import>.
-        site = Site.objects.get(slug="raleigh")
-        role = DeviceRole.objects.get(slug="router")
-        device_type = DeviceType.objects.get(slug="model-1")
-        rtr2 = Device.objects.create(
-            name="rtr-2", device_type=device_type, role=role, site=site
-        )
-        profile2 = MonitoringProfile.objects.create(
-            assigned_object=rtr2,
-            management_ip=IPAddress.objects.create(address="10.0.0.9/24"),
-        )
-
-        xml = render_requisition("netbox.raleigh.router", [self.profile, profile2])
-        root = etree.fromstring(xml)
-        nodes = root.findall(_q(MODEL_IMPORT_NS, "node"))
-        self.assertEqual(len(nodes), 2)
-        self.assertEqual(
-            {n.get("node-label") for n in nodes}, {"rtr-1", "rtr-2"}
-        )
-        self.assertEqual(
-            {n.get("foreign-id") for n in nodes},
-            {f"device-{self.device.pk}", f"device-{rtr2.pk}"},
-        )
-
-    def _interfaces(self, xml):
-        root = etree.fromstring(xml)
-        node = root.find(_q(MODEL_IMPORT_NS, "node"))
-        return node.findall(_q(MODEL_IMPORT_NS, "interface"))
-
-    def test_additional_ips_render_as_secondary_interfaces(self):
-        self.profile.additional_ips.set(
-            [
-                IPAddress.objects.create(address="10.0.0.5/24"),
-                IPAddress.objects.create(address="10.0.0.6/24"),
+    def test_primary_first_then_additional_sorted_non_primary(self):
+        node = self._node(
+            interfaces=[
+                InterfaceSpec("10.0.0.9", False),
+                InterfaceSpec("10.0.0.1", True),
+                InterfaceSpec("10.0.0.5", False),
             ]
         )
-        ifaces = self._interfaces(render_requisition("netbox.x.y", [self.profile]))
-        primary = [i for i in ifaces if i.get("snmp-primary") == "P"]
-        secondary = [i for i in ifaces if i.get("snmp-primary") == "N"]
-        self.assertEqual([i.get("ip-addr") for i in primary], ["10.0.0.1"])
+        xml = render_requisition("netbox.raleigh.router", [node])
+        ifaces = etree.fromstring(xml).find(f"{MI}node").findall(f"{MI}interface")
         self.assertEqual(
-            {i.get("ip-addr") for i in secondary}, {"10.0.0.5", "10.0.0.6"}
+            [(i.get("ip-addr"), i.get("snmp-primary")) for i in ifaces],
+            [("10.0.0.1", "P"), ("10.0.0.5", "N"), ("10.0.0.9", "N")],
         )
 
-    def test_management_ip_never_renders_as_additional(self):
-        # AD-15: the management IP added to additional_ips must not become an "N".
-        self.profile.additional_ips.set([self.profile.management_ip])
-        ifaces = self._interfaces(render_requisition("netbox.x.y", [self.profile]))
-        self.assertEqual(len(ifaces), 1)
-        self.assertEqual(ifaces[0].get("snmp-primary"), "P")
-
-    def test_additional_ips_deduped_by_address(self):
-        self.profile.additional_ips.set(
-            [
-                IPAddress.objects.create(address="10.0.0.5/24"),
-                IPAddress.objects.create(address="10.0.0.5/24"),
-            ]
+    def test_location_uses_node_then_default(self):
+        with_loc = render_requisition("fs", [self._node(location="edge-1")])
+        self.assertEqual(
+            etree.fromstring(with_loc).find(f"{MI}node").get("location"), "edge-1"
         )
-        ifaces = self._interfaces(render_requisition("netbox.x.y", [self.profile]))
-        secondary = [i for i in ifaces if i.get("snmp-primary") == "N"]
-        self.assertEqual([i.get("ip-addr") for i in secondary], ["10.0.0.5"])
+        fallback = render_requisition(
+            "fs", [self._node(location="")], default_location="core"
+        )
+        self.assertEqual(
+            etree.fromstring(fallback).find(f"{MI}node").get("location"), "core"
+        )
 
-    def test_no_additional_ips_single_primary(self):
-        ifaces = self._interfaces(render_requisition("netbox.x.y", [self.profile]))
-        self.assertEqual(len(ifaces), 1)
-        self.assertEqual(ifaces[0].get("snmp-primary"), "P")
+    def test_no_location_attribute_when_blank(self):
+        xml = render_requisition("fs", [self._node(location="")])
+        self.assertIsNone(etree.fromstring(xml).find(f"{MI}node").get("location"))
 
-    def _services(self, interface):
-        return [
+    def test_empty_nodes_is_node_less(self):
+        xml = render_requisition("fs", [])
+        self.assertNotIn(b"<node", xml)
+
+    def test_services_sorted(self):
+        node = self._node(
+            interfaces=[InterfaceSpec("10.0.0.1", True, services=["SSH", "ICMP"])]
+        )
+        xml = render_requisition("fs", [node])
+        names = [
             s.get("service-name")
-            for s in interface.findall(_q(MODEL_IMPORT_NS, "monitored-service"))
+            for s in etree.fromstring(xml).iter(f"{MI}monitored-service")
         ]
+        self.assertEqual(names, ["ICMP", "SSH"])
 
-    def test_services_render_under_correct_interface_sorted(self):
-        extra_ip = IPAddress.objects.create(address="10.0.0.5/24")
-        self.profile.additional_ips.set([extra_ip])
-        # created out of order to prove deterministic sorting
-        MonitoredService.objects.create(
-            profile=self.profile, ip_address=self.profile.management_ip, name="SNMP"
-        )
-        MonitoredService.objects.create(
-            profile=self.profile, ip_address=self.profile.management_ip, name="ICMP"
-        )
-        MonitoredService.objects.create(
-            profile=self.profile, ip_address=extra_ip, name="HTTP"
-        )
-        ifaces = self._interfaces(render_requisition("netbox.x.y", [self.profile]))
-        primary = next(i for i in ifaces if i.get("snmp-primary") == "P")
-        secondary = next(i for i in ifaces if i.get("snmp-primary") == "N")
-        self.assertEqual(self._services(primary), ["ICMP", "SNMP"])
-        self.assertEqual(self._services(secondary), ["HTTP"])
-
-    def test_no_services_bare_interface(self):
-        ifaces = self._interfaces(render_requisition("netbox.x.y", [self.profile]))
-        self.assertEqual(self._services(ifaces[0]), [])
-
-    def test_duplicate_address_merges_services_onto_one_interface(self):
-        # A second IPAddress with the management IP's address (re-listed as
-        # additional) must merge onto the single interface, carrying its
-        # services — not emit a second interface or drop the services.
-        dup = IPAddress.objects.create(address="10.0.0.1/24")
-        self.profile.additional_ips.set([dup])
-        MonitoredService.objects.create(
-            profile=self.profile, ip_address=dup, name="HTTP"
-        )
-        ifaces = self._interfaces(render_requisition("netbox.x.y", [self.profile]))
-        self.assertEqual(len(ifaces), 1)
-        self.assertEqual(ifaces[0].get("snmp-primary"), "P")
-        self.assertEqual(self._services(ifaces[0]), ["HTTP"])
-
-    def test_location_from_profile(self):
-        self.profile.location = "RDU.1-edge"
-        root = etree.fromstring(render_requisition("netbox.x.y", [self.profile]))
-        node = root.find(_q(MODEL_IMPORT_NS, "node"))
-        self.assertEqual(node.get("location"), "RDU.1-edge")
-
-    def test_location_falls_back_to_default(self):
-        root = etree.fromstring(
-            render_requisition("netbox.x.y", [self.profile], default_location="HQ")
-        )
-        node = root.find(_q(MODEL_IMPORT_NS, "node"))
-        self.assertEqual(node.get("location"), "HQ")
-
-    def test_no_location_attribute_when_unset(self):
-        root = etree.fromstring(render_requisition("netbox.x.y", [self.profile]))
-        node = root.find(_q(MODEL_IMPORT_NS, "node"))
-        self.assertIsNone(node.get("location"))
-
-    def test_profile_location_overrides_default(self):
-        self.profile.location = "PROFILE"
-        root = etree.fromstring(
-            render_requisition("netbox.x.y", [self.profile], default_location="DEFAULT")
-        )
-        node = root.find(_q(MODEL_IMPORT_NS, "node"))
-        self.assertEqual(node.get("location"), "PROFILE")
-
-    def test_date_stamp_optional(self):
-        without = etree.fromstring(render_requisition("netbox.x.y", [self.profile]))
-        self.assertIsNone(without.get("date-stamp"))
-        withd = etree.fromstring(
-            render_requisition(
-                "netbox.x.y", [self.profile], date_stamp="2026-06-26T10:00:00"
-            )
-        )
-        self.assertEqual(withd.get("date-stamp"), "2026-06-26T10:00:00")
-
-    def test_device_and_vm_no_foreign_id_collision(self):
-        xml = render_requisition(
-            "netbox.raleigh.router", [self.profile, self.vm_profile]
-        )
-        root = etree.fromstring(xml)
-        fids = {n.get("foreign-id") for n in root.findall(_q(MODEL_IMPORT_NS, "node"))}
-        self.assertEqual(len(fids), 2)
-        self.assertIn(f"device-{self.device.pk}", fids)
-        self.assertIn(f"vm-{self.vm.pk}", fids)
-
-    def test_foreign_id_distinct_when_pks_equal(self):
-        # AD-8: Device and VM PKs come from separate sequences, so a Device and a
-        # VM can legitimately share a PK. The type prefix — not the PK — is what
-        # keeps their node identity distinct. Force the exact collision case.
-        self.vm.pk = self.device.pk
-        self.assertEqual(self.device.pk, self.vm.pk)
-        self.assertNotEqual(foreign_id_for(self.device), foreign_id_for(self.vm))
-        self.assertEqual(foreign_id_for(self.device), f"device-{self.device.pk}")
-        self.assertEqual(foreign_id_for(self.vm), f"vm-{self.vm.pk}")
-
-    def test_foreign_id_type_qualified(self):
-        self.assertEqual(foreign_id_for(self.device), f"device-{self.device.pk}")
-        self.assertEqual(foreign_id_for(self.vm), f"vm-{self.vm.pk}")
-        with self.assertRaises(TypeError):
-            foreign_id_for(object())
-
-    def test_missing_management_ip_raises_render_error(self):
-        self.profile.management_ip = None
+    def test_render_error_no_label(self):
         with self.assertRaises(RenderError):
-            render_requisition("netbox.x.y", [self.profile])
+            render_requisition("fs", [self._node(node_label="")])
 
-    def test_unnamed_target_raises_render_error(self):
-        # pin the GFK to the device instance we mutate (setUpTestData isolation
-        # hands each test its own deepcopy, so the cached target is a different
-        # object than self.device unless we reassign it here)
-        self.profile.assigned_object = self.device
-        self.device.name = None
+    def test_render_error_no_interface(self):
         with self.assertRaises(RenderError):
-            render_requisition("netbox.x.y", [self.profile])
-
-    def test_missing_assigned_object_raises_render_error(self):
-        self.profile.assigned_object = None
-        with self.assertRaises(RenderError):
-            render_requisition("netbox.x.y", [self.profile])
-
-    def test_non_device_vm_target_raises_render_error(self):
-        # limit_choices_to is form-only, so a profile can point at a non-Device/VM
-        # via ORM/REST/import. The renderer must fail cleanly with RenderError, not
-        # leak the TypeError from foreign_id_for (which the 1.7 sync won't catch).
-        self.profile.assigned_object = Site.objects.create(name="Other", slug="other")
-        with self.assertRaises(RenderError):
-            render_requisition("netbox.x.y", [self.profile])
+            render_requisition("fs", [self._node(interfaces=[])])
 
 
 class RenderForeignSourceDefinitionTest(TestCase):
-    def test_auto_detection_disabled(self):
-        xml = render_foreign_source_definition("netbox.raleigh.router")
-        root = etree.fromstring(xml)
-        self.assertEqual(root.tag, _q(FOREIGN_SOURCE_NS, "foreign-source"))
-        self.assertEqual(root.get("name"), "netbox.raleigh.router")
-        scan = root.find(_q(FOREIGN_SOURCE_NS, "scan-interval"))
-        # explicit unit — a bare "0" can fail OpenNMS's duration parser
-        self.assertEqual(scan.text, "0s")
-        detectors = root.find(_q(FOREIGN_SOURCE_NS, "detectors"))
-        self.assertEqual(len(detectors), 0)
+    """render_foreign_source_definition reads a profile's detectors/policies."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.profile = MonitoringProfile.objects.create(
+            name="Network device", scan_interval="30m"
+        )
+        MonitoringDetector.objects.create(
+            profile=cls.profile,
+            name="ICMP",
+            rule_class="org.opennms.netmgt.provision.detector.icmp.IcmpDetector",
+            parameters={"timeout": "2000", "retries": "1"},
+        )
+        MonitoringPolicy.objects.create(
+            profile=cls.profile,
+            name="Categorise",
+            rule_class="org.opennms.netmgt.provision.persist.policies."
+            "NodeCategorySettingPolicy",
+            parameters={"category": "Routers"},
+        )
+
+    def test_scan_interval_and_name(self):
+        root = etree.fromstring(render_foreign_source_definition(self.profile))
+        self.assertEqual(root.get("name"), "Network device")
+        self.assertEqual(root.find(f"{FS}scan-interval").text, "30m")
+
+    def test_detector_emits_class_and_sorted_parameters(self):
+        root = etree.fromstring(render_foreign_source_definition(self.profile))
+        detector = root.find(f"{FS}detectors/{FS}detector")
+        self.assertEqual(detector.get("name"), "ICMP")
+        self.assertEqual(
+            detector.get("class"),
+            "org.opennms.netmgt.provision.detector.icmp.IcmpDetector",
+        )
+        params = [
+            (p.get("key"), p.get("value")) for p in detector.findall(f"{FS}parameter")
+        ]
+        self.assertEqual(params, [("retries", "1"), ("timeout", "2000")])
+
+    def test_policy_emitted(self):
+        root = etree.fromstring(render_foreign_source_definition(self.profile))
+        policy = root.find(f"{FS}policies/{FS}policy")
+        self.assertEqual(policy.get("name"), "Categorise")
+        self.assertEqual(policy.find(f"{FS}parameter").get("key"), "category")
+
+    def test_detectors_present_reverses_ad11(self):
+        # Epic 5 reversal: detection is on, so <detectors> is non-empty.
+        root = etree.fromstring(render_foreign_source_definition(self.profile))
+        self.assertEqual(len(root.find(f"{FS}detectors")), 1)
+
+    def test_render_error_detector_without_class(self):
+        bare = MonitoringProfile.objects.create(name="Bare")
+        MonitoringDetector.objects.create(profile=bare, name="x", rule_class="")
+        with self.assertRaises(RenderError):
+            render_foreign_source_definition(bare)

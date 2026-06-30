@@ -94,15 +94,6 @@ def _enqueue_foreign_source(request, foreign_source, allow_empty=False):
 class MonitoringProfileView(generic.ObjectView):
     queryset = MonitoringProfile.objects.all()
 
-    def get_extra_context(self, request, instance):
-        return {
-            "detector_table": tables.MonitoringDetectorTable(instance.detectors.all()),
-            "policy_table": tables.MonitoringPolicyTable(instance.policies.all()),
-            "assignment_table": tables.MonitoringAssignmentTable(
-                instance.assignments.all()
-            ),
-        }
-
 
 class MonitoringProfileListView(generic.ObjectListView):
     queryset = MonitoringProfile.objects.all()
@@ -241,9 +232,6 @@ class MonitoringAssignmentSyncView(PermissionRequiredMixin, View):
 
 class MonitoringOverrideView(generic.ObjectView):
     queryset = MonitoringOverride.objects.all()
-
-    def get_extra_context(self, request, instance):
-        return {"service_table": tables.MonitoredServiceTable(instance.services.all())}
 
 
 class MonitoringOverrideListView(generic.ObjectListView):

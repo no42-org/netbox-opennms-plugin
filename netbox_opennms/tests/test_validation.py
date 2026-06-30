@@ -1,107 +1,46 @@
 # Copyright 2026 Ronny Trommer <ronny@no42.org>
 # SPDX-License-Identifier: MIT
-"""Tests for pre-push intent validation (FR-8)."""
+"""Tests for pre-push resolution validation (Epic 5)."""
 
-from dcim.models import (
-    Device,
-    DeviceRole,
-    DeviceType,
-    Interface,
-    Manufacturer,
-    Site,
-)
-from django.test import TestCase
-from ipam.models import IPAddress
-from virtualization.models import (
-    Cluster,
-    ClusterType,
-    VirtualMachine,
-    VMInterface,
-)
+from django.test import SimpleTestCase
 
-from netbox_opennms.models import MonitoredService, MonitoringProfile
-from netbox_opennms.validation import validate_profile
+from netbox_opennms.membership import NodeSpec, Resolution
+from netbox_opennms.validation import validate_resolution
 
 
-class ValidateProfileTest(TestCase):
-    @classmethod
-    def setUpTestData(cls):
-        site = Site.objects.create(name="Raleigh", slug="raleigh")
-        role = DeviceRole.objects.create(name="Router", slug="router")
-        mfr = Manufacturer.objects.create(name="Acme", slug="acme")
-        dt = DeviceType.objects.create(manufacturer=mfr, model="M1", slug="m1")
-        cls.device = Device.objects.create(
-            name="rtr-1", device_type=dt, role=role, site=site
-        )
-        iface = Interface.objects.create(device=cls.device, name="eth0", type="virtual")
-        cls.mgmt = IPAddress.objects.create(
-            address="10.0.0.1/24", assigned_object=iface
-        )
-        cls.extra = IPAddress.objects.create(
-            address="10.0.0.2/24", assigned_object=iface
-        )
-        cls.profile = MonitoringProfile.objects.create(
-            assigned_object=cls.device, management_ip=cls.mgmt
-        )
-        cls.cluster = Cluster.objects.create(
-            name="c1", type=ClusterType.objects.create(name="t1", slug="t1")
-        )
+class _Assignment:
+    def __init__(self, location=""):
+        self.location = location
 
-    def test_valid_profile_has_no_errors_or_warnings(self):
-        result = validate_profile(self.profile)
-        self.assertEqual(result.errors, [])
-        self.assertEqual(result.warnings, [])
+
+class ValidateResolutionTest(SimpleTestCase):
+    def test_none_resolution_is_clean(self):
+        result = validate_resolution(None)
         self.assertTrue(result.ok)
+        self.assertEqual(result.errors, [])
 
-    def test_missing_management_ip_is_error(self):
-        self.profile.management_ip = None
-        result = validate_profile(self.profile)
+    def test_warnings_forwarded(self):
+        resolution = Resolution(
+            "fs", _Assignment(), nodes=[], warnings=["rtr-x: no management IP"]
+        )
+        result = validate_resolution(resolution)
+        self.assertTrue(result.ok)
+        self.assertEqual(result.warnings, ["rtr-x: no management IP"])
+
+    def test_invalid_assignment_location_is_error(self):
+        resolution = Resolution("fs", _Assignment(location="bad name"), nodes=[])
+        result = validate_resolution(resolution)
         self.assertFalse(result.ok)
-        self.assertTrue(any("management IP" in e for e in result.errors))
+        self.assertTrue(any("invalid assignment location" in e for e in result.errors))
 
-    def test_invalid_location_is_error(self):
-        self.profile.location = "bad name"
-        result = validate_profile(self.profile)
-        self.assertTrue(any("location" in e for e in result.errors))
+    def test_invalid_node_location_is_error(self):
+        node = NodeSpec("rtr-1", "device-1", location="bad name", interfaces=[])
+        resolution = Resolution("fs", _Assignment(), nodes=[node])
+        result = validate_resolution(resolution)
+        self.assertFalse(result.ok)
+        self.assertTrue(any("rtr-1: invalid location" in e for e in result.errors))
 
-    def test_off_object_management_ip_is_error(self):
-        off = IPAddress.objects.create(address="10.9.9.7/24")  # on no interface
-        self.profile.management_ip = off
-        result = validate_profile(self.profile)
-        self.assertTrue(
-            any("management IP" in e and "not assigned" in e for e in result.errors)
-        )
-
-    def test_off_object_additional_ip_is_error(self):
-        off = IPAddress.objects.create(address="10.9.9.9/24")  # on no interface
-        self.profile.additional_ips.set([off])
-        result = validate_profile(self.profile)
-        self.assertTrue(any("not assigned to the object" in e for e in result.errors))
-
-    def test_off_profile_service_ip_is_error(self):
-        off = IPAddress.objects.create(address="10.9.9.8/24")
-        MonitoredService.objects.create(
-            profile=self.profile, ip_address=off, name="ICMP"
-        )
-        result = validate_profile(self.profile)
-        self.assertTrue(any("monitored IP" in e for e in result.errors))
-
-    def test_non_device_vm_target_is_error(self):
-        site = Site.objects.get(slug="raleigh")
-        self.profile.assigned_object = site
-        result = validate_profile(self.profile)
-        self.assertTrue(any("Device or VirtualMachine" in e for e in result.errors))
-
-    def test_missing_site_and_role_is_warning(self):
-        vm = VirtualMachine.objects.create(name="vm-1", cluster=self.cluster)
-        vm_iface = VMInterface.objects.create(virtual_machine=vm, name="eth0")
-        vm_ip = IPAddress.objects.create(
-            address="10.0.0.20/24", assigned_object=vm_iface
-        )
-        profile = MonitoringProfile.objects.create(
-            assigned_object=vm, management_ip=vm_ip
-        )
-        result = validate_profile(profile)
-        self.assertTrue(result.ok)  # warnings don't block
-        self.assertTrue(any("no-site" in w for w in result.warnings))
-        self.assertTrue(any("no-role" in w for w in result.warnings))
+    def test_valid_location_ok(self):
+        node = NodeSpec("rtr-1", "device-1", location="edge-1", interfaces=[])
+        resolution = Resolution("fs", _Assignment(location="core"), nodes=[node])
+        self.assertTrue(validate_resolution(resolution).ok)

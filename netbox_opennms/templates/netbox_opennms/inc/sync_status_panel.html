@@ -1,13 +1,29 @@
 {# Copyright 2026 Ronny Trommer <ronny@no42.org> #}
 {# SPDX-License-Identifier: MIT #}
-{# Last-sync panel (Story 4.2). Expects `sync_status` in context: a dict with
-   `job`, `outcome` (label, color), `foreign_source` — or None/no job. Shared by
-   the Monitoring Profile detail page and the Device/VM template extension. #}
+{# Last-sync panel (Story 4.2, Epic 5). Expects `sync_status` in context: a dict
+   with `foreign_source`, `assignment`, `governed`, `excluded`, `job`,
+   `outcome` (label, color) — or None. Shown on the Device/VM detail page. #}
 {% load helpers %}
 <div class="card">
   <h2 class="card-header">OpenNMS Sync Status</h2>
   <table class="table table-hover attr-table">
-    {% if sync_status and sync_status.job %}
+    <tr>
+      <th scope="row">Foreign Source</th>
+      <td><code>{{ sync_status.foreign_source }}</code></td>
+    </tr>
+    <tr>
+      <th scope="row">Monitored</th>
+      <td>
+        {% if sync_status.excluded %}
+          <span class="text-muted">Excluded by override</span>
+        {% elif sync_status.governed %}
+          {% checkmark True %} via {{ sync_status.assignment|linkify }}
+        {% else %}
+          <span class="text-muted">No monitoring assignment</span>
+        {% endif %}
+      </td>
+    </tr>
+    {% if sync_status.job %}
       <tr>
         <th scope="row">Last sync</th>
         <td>
@@ -16,27 +32,10 @@
         </td>
       </tr>
       <tr>
-        <th scope="row">Foreign Source</th>
-        <td>{{ sync_status.foreign_source }}</td>
-      </tr>
-      {% if sync_status.move_pending %}
-        <tr>
-          <th scope="row">Move pending</th>
-          <td class="text-warning">
-            Role/site changed — the node moves to <strong>{{ sync_status.foreign_source }}</strong>
-            on the next sync (currently in {{ sync_status.last_synced_foreign_source }}).
-          </td>
-        </tr>
-      {% endif %}
-      <tr>
         <th scope="row">When</th>
         <td>{{ sync_status.job.completed|default:sync_status.job.created }}</td>
       </tr>
       {% if perms.core.view_job %}
-        <tr>
-          <th scope="row">Triggered by</th>
-          <td>{{ sync_status.job.user|placeholder }}</td>
-        </tr>
         {% if sync_status.job.error %}
           <tr>
             <th scope="row">Error</th>

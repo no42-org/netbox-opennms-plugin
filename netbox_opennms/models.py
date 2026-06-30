@@ -114,9 +114,7 @@ class MonitoringDetector(_ProvisioningRule):
             )
 
     def get_absolute_url(self):
-        return reverse(
-            "plugins:netbox_opennms:monitoringprofile", args=[self.profile_id]
-        )
+        return reverse("plugins:netbox_opennms:monitoringdetector", args=[self.pk])
 
 
 class MonitoringPolicy(_ProvisioningRule):
@@ -150,9 +148,7 @@ class MonitoringPolicy(_ProvisioningRule):
             )
 
     def get_absolute_url(self):
-        return reverse(
-            "plugins:netbox_opennms:monitoringprofile", args=[self.profile_id]
-        )
+        return reverse("plugins:netbox_opennms:monitoringpolicy", args=[self.pk])
 
 
 class MonitoringAssignment(NetBoxModel):
@@ -301,9 +297,7 @@ class MonitoredService(NetBoxModel):
         return f"{self.name} on {self.ip_address}"
 
     def get_absolute_url(self):
-        return reverse(
-            "plugins:netbox_opennms:monitoringoverride", args=[self.override_id]
-        )
+        return reverse("plugins:netbox_opennms:monitoredservice", args=[self.pk])
 
     def clean(self):
         super().clean()

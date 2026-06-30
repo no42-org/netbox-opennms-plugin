@@ -1,9 +1,6 @@
 # Copyright 2026 Ronny Trommer <ronny@no42.org>
 # SPDX-License-Identifier: MIT
-"""Tests for last-sync observability (Story 4.2) — Jobs surfaced as state."""
-
-from datetime import timedelta
-from unittest import mock
+"""Tests for last-sync observability (Epic 5) — Jobs + membership as state."""
 
 from core.choices import JobStatusChoices
 from core.models import Job
@@ -16,25 +13,19 @@ from dcim.models import (
     Site,
 )
 from django.contrib.auth import get_user_model
-from django.test import TestCase
-from django.urls import reverse
-from django.utils import timezone
+from django.test import RequestFactory, TestCase
 from ipam.models import IPAddress
-from virtualization.models import (
-    Cluster,
-    ClusterType,
-    VirtualMachine,
-    VMInterface,
-)
 
-from netbox_opennms.derivation import foreign_source_for
 from netbox_opennms.jobs import (
     SyncForeignSourceJob,
-    latest_sync_job,
     sync_outcome,
     sync_status_for,
 )
-from netbox_opennms.models import MonitoringProfile
+from netbox_opennms.models import (
+    MonitoringAssignment,
+    MonitoringOverride,
+    MonitoringProfile,
+)
 from netbox_opennms.template_content import (
     DeviceSyncStatusPanel,
     VirtualMachineSyncStatusPanel,
@@ -47,204 +38,104 @@ FS = "netbox.raleigh.router"
 class ObservabilityTest(TestCase):
     @classmethod
     def setUpTestData(cls):
-        site = Site.objects.create(name="Raleigh", slug="raleigh")
-        role = DeviceRole.objects.create(name="Router", slug="router")
+        cls.site = Site.objects.create(name="Raleigh", slug="raleigh")
+        cls.role = DeviceRole.objects.create(name="Router", slug="router")
         mfr = Manufacturer.objects.create(name="Acme", slug="acme")
-        dt = DeviceType.objects.create(manufacturer=mfr, model="M1", slug="m1")
-        cls.device = Device.objects.create(
-            name="rtr-1", device_type=dt, role=role, site=site
+        cls.dt = DeviceType.objects.create(manufacturer=mfr, model="M1", slug="m1")
+        cls.profile = MonitoringProfile.objects.create(name="Network device")
+        cls.assignment = MonitoringAssignment.objects.create(
+            profile=cls.profile, site=cls.site, role=cls.role
         )
-        iface = Interface.objects.create(device=cls.device, name="eth0", type="virtual")
-        ip = IPAddress.objects.create(address="10.0.0.1/24", assigned_object=iface)
-        cls.profile = MonitoringProfile.objects.create(
-            assigned_object=cls.device, management_ip=ip
-        )
-        cls.bare_device = Device.objects.create(
-            name="rtr-bare", device_type=dt, role=role, site=site
-        )
+        cls.device = cls._device("rtr-1", "10.0.0.1/24")
         cls.user = User.objects.create_superuser(username="super", password="pw")
 
-    def _job(self, status, allow_empty=False, error="", foreign_source=FS):
-        # Create via the real enqueue path (sets all required Job fields), then
-        # flip to a terminal/other status for the test.
-        job = SyncForeignSourceJob.enqueue_sync(
-            foreign_source, user=self.user, allow_empty=allow_empty
+    @classmethod
+    def _device(cls, name, ip, role=None, site=None):
+        device = Device.objects.create(
+            name=name, device_type=cls.dt, role=role or cls.role, site=site or cls.site
         )
-        fields = {"status": status, "error": error}
-        if status in JobStatusChoices.TERMINAL_STATE_CHOICES:
-            fields["completed"] = timezone.now()
-        Job.objects.filter(pk=job.pk).update(**fields)
-        job.refresh_from_db()
-        return job
+        iface = Interface.objects.create(device=device, name="eth0", type="virtual")
+        address = IPAddress.objects.create(address=ip, assigned_object=iface)
+        device.primary_ip4 = address
+        device.save()
+        return device
 
-    # --- helpers -----------------------------------------------------------
-
-    def test_job_name_matches_enqueue(self):
-        job = SyncForeignSourceJob.enqueue_sync(FS, user=self.user)
-        self.assertEqual(job.name, SyncForeignSourceJob.job_name(FS))
+    def _completed_job(self, foreign_source=FS, allow_empty=False):
+        job = SyncForeignSourceJob.enqueue_sync(foreign_source, allow_empty=allow_empty)
         Job.objects.filter(pk=job.pk).update(status=JobStatusChoices.STATUS_COMPLETED)
-        remove = SyncForeignSourceJob.enqueue_sync(
-            FS, user=self.user, allow_empty=True
-        )
-        self.assertEqual(
-            remove.name, SyncForeignSourceJob.job_name(FS, allow_empty=True)
-        )
-        self.assertTrue(remove.name.endswith(" (remove)"))
+        return Job.objects.get(pk=job.pk)
 
-    def test_latest_sync_job_none_when_never_synced(self):
-        self.assertIsNone(latest_sync_job(FS))
+    # --- sync_status_for ----------------------------------------------------
 
-    def test_latest_sync_job_returns_newest_and_scopes_to_fs(self):
-        old = self._job(JobStatusChoices.STATUS_FAILED)
-        Job.objects.filter(pk=old.pk).update(
-            created=timezone.now() - timedelta(hours=1)
+    def test_governed_device(self):
+        status = sync_status_for(self.device)
+        self.assertEqual(status["foreign_source"], FS)
+        self.assertTrue(status["governed"])
+        self.assertEqual(status["assignment"], self.assignment)
+        self.assertIsNone(status["job"])
+
+    def test_excluded_override(self):
+        MonitoringOverride.objects.create(assigned_object=self.device, exclude=True)
+        status = sync_status_for(self.device)
+        self.assertTrue(status["excluded"])
+        self.assertFalse(status["governed"])
+
+    def test_ungoverned_device(self):
+        other = self._device(
+            "srv-1",
+            "10.0.0.2/24",
+            role=DeviceRole.objects.create(name="Server", slug="server"),
         )
-        new = self._job(JobStatusChoices.STATUS_COMPLETED)
-        # A Job for a DIFFERENT Foreign Source must not match.
-        SyncForeignSourceJob.enqueue_sync("netbox.durham.router", user=self.user)
-        self.assertEqual(latest_sync_job(FS).pk, new.pk)
+        status = sync_status_for(other)
+        self.assertFalse(status["governed"])
+        self.assertIsNone(status["assignment"])
 
-    def test_sync_outcome_mapping(self):
-        self.assertIsNone(sync_outcome(None))
-        for status in (
-            JobStatusChoices.STATUS_PENDING,
-            JobStatusChoices.STATUS_SCHEDULED,
-            JobStatusChoices.STATUS_RUNNING,
-        ):
-            self.assertEqual(sync_outcome(mock.Mock(status=status))[0], "submitted")
-        self.assertEqual(
-            sync_outcome(mock.Mock(status=JobStatusChoices.STATUS_COMPLETED))[0],
-            "succeeded-accepted",
-        )
-        for status in (
-            JobStatusChoices.STATUS_ERRORED,
-            JobStatusChoices.STATUS_FAILED,
-        ):
-            self.assertEqual(sync_outcome(mock.Mock(status=status))[0], "failed")
-        # A completed Remove, or a disabled profile, reads as "removed" (the node
-        # is excluded from the requisition), not green "succeeded-accepted".
-        completed = mock.Mock(status=JobStatusChoices.STATUS_COMPLETED)
-        self.assertEqual(sync_outcome(completed, is_removal=True)[0], "removed")
-        self.assertEqual(sync_outcome(completed, enabled=False)[0], "removed")
+    def test_completed_job_outcome(self):
+        self._completed_job()
+        status = sync_status_for(self.device)
+        self.assertEqual(status["outcome"], ("succeeded-accepted", "green"))
 
-    def test_sync_status_for_non_device_vm_is_none(self):
-        site = Site.objects.get(slug="raleigh")
-        self.assertIsNone(sync_status_for(site))
+    def test_none_target(self):
         self.assertIsNone(sync_status_for(None))
 
-    # --- profile detail page ----------------------------------------------
+    # --- sync_outcome -------------------------------------------------------
 
-    def _profile_url(self):
-        return reverse(
-            "plugins:netbox_opennms:monitoringprofile", args=[self.profile.pk]
+    def test_sync_outcome_states(self):
+        self.assertIsNone(sync_outcome(None))
+        from unittest import mock
+
+        submitted = mock.Mock(status=JobStatusChoices.STATUS_PENDING)
+        self.assertEqual(sync_outcome(submitted)[0], "submitted")
+        done = mock.Mock(status=JobStatusChoices.STATUS_COMPLETED)
+        self.assertEqual(sync_outcome(done)[0], "succeeded-accepted")
+        self.assertEqual(sync_outcome(done, governed=False)[0], "removed")
+        self.assertEqual(sync_outcome(done, is_removal=True)[0], "removed")
+        failed = mock.Mock(status=JobStatusChoices.STATUS_ERRORED)
+        self.assertEqual(sync_outcome(failed)[0], "failed")
+
+    # --- template extension panel ------------------------------------------
+
+    def _panel_html(self, panel_cls, obj):
+        request = RequestFactory().get("/")
+        request.user = self.user
+        panel = panel_cls({"object": obj, "request": request})
+        return panel.right_page()
+
+    def test_panel_renders_for_governed(self):
+        html = self._panel_html(DeviceSyncStatusPanel, self.device)
+        self.assertIn("OpenNMS Sync Status", html)
+        self.assertIn(FS, html)
+
+    def test_panel_empty_for_ungoverned(self):
+        other = self._device(
+            "srv-2",
+            "10.0.0.3/24",
+            role=DeviceRole.objects.create(name="Server", slug="server"),
         )
+        self.assertEqual(self._panel_html(DeviceSyncStatusPanel, other), "")
 
-    def test_profile_detail_shows_succeeded(self):
-        self._job(JobStatusChoices.STATUS_COMPLETED)
-        self.client.force_login(self.user)
-        response = self.client.get(self._profile_url())
-        self.assertContains(response, "OpenNMS Sync Status")
-        self.assertContains(response, "succeeded-accepted")
-
-    def test_profile_detail_shows_failure_with_error(self):
-        self._job(JobStatusChoices.STATUS_FAILED, error="boom detail")
-        self.client.force_login(self.user)
-        response = self.client.get(self._profile_url())
-        self.assertContains(response, "failed")
-        self.assertContains(response, "boom detail")
-
-    def test_profile_detail_never_synced(self):
-        self.client.force_login(self.user)
-        response = self.client.get(self._profile_url())
-        self.assertContains(response, "Never synced")
-
-    def test_profile_detail_shows_triggering_user(self):
-        self._job(JobStatusChoices.STATUS_COMPLETED)
-        self.client.force_login(self.user)  # superuser → has core.view_job
-        response = self.client.get(self._profile_url())
-        self.assertContains(response, self.user.username)
-
-    # --- move / remove / disabled correctness (review patches) -------------
-
-    def test_status_reflects_old_fs_and_flags_move_pending(self):
-        # Node was synced under an OLD Foreign Source; its role/site now derives a
-        # different FS. The panel must show the OLD FS's outcome (where the node
-        # actually lives) + a move-pending flag — not "Never synced".
-        old_fs = "netbox.durham.router"
-        MonitoringProfile.objects.filter(pk=self.profile.pk).update(
-            last_synced_foreign_source=old_fs
-        )
-        job = self._job(
-            JobStatusChoices.STATUS_COMPLETED, foreign_source=old_fs
-        )
-        status = sync_status_for(self.device)
-        self.assertTrue(status["move_pending"])
-        self.assertEqual(status["job"].pk, job.pk)
-        self.assertEqual(status["outcome"][0], "succeeded-accepted")
-
-    def test_completed_remove_shows_removed(self):
-        self._job(JobStatusChoices.STATUS_COMPLETED, allow_empty=True)
-        MonitoringProfile.objects.filter(pk=self.profile.pk).update(enabled=False)
-        self.assertEqual(sync_status_for(self.device)["outcome"][0], "removed")
-
-    def test_disabled_profile_shows_removed(self):
-        self._job(JobStatusChoices.STATUS_COMPLETED)
-        MonitoringProfile.objects.filter(pk=self.profile.pk).update(enabled=False)
-        self.assertEqual(sync_status_for(self.device)["outcome"][0], "removed")
-
-    # --- Device / VM template extension -----------------------------------
-
-    def test_device_detail_shows_panel(self):
-        self._job(JobStatusChoices.STATUS_COMPLETED)
-        self.client.force_login(self.user)
-        response = self.client.get(self.device.get_absolute_url())
-        self.assertContains(response, "OpenNMS Sync Status")
-        self.assertContains(response, "succeeded-accepted")
-
-    def test_device_without_profile_renders_no_panel(self):
-        self.client.force_login(self.user)
-        response = self.client.get(self.bare_device.get_absolute_url())
-        self.assertEqual(response.status_code, 200)
-        self.assertNotContains(response, "OpenNMS Sync Status")
-
-    def test_extension_right_page_for_monitored_object(self):
-        self._job(JobStatusChoices.STATUS_COMPLETED)
-        html = DeviceSyncStatusPanel({"object": self.device}).right_page()
-        self.assertIn("succeeded-accepted", html)
-
-    def test_extension_right_page_empty_when_unmonitored(self):
-        self.assertEqual(
-            DeviceSyncStatusPanel({"object": self.bare_device}).right_page(), ""
-        )
-
-    def test_vm_extension_class_targets_virtualmachine(self):
+    def test_panel_model_targets(self):
+        self.assertEqual(DeviceSyncStatusPanel.models, ["dcim.device"])
         self.assertEqual(
             VirtualMachineSyncStatusPanel.models, ["virtualization.virtualmachine"]
-        )
-
-    def test_vm_extension_renders_panel(self):
-        # Exercise the VM path end-to-end: foreign_source_for(vm) + the content-type
-        # lookup + the shared partial render.
-        role = DeviceRole.objects.get(slug="router")
-        ctype = ClusterType.objects.create(name="CT", slug="ct")
-        cluster = Cluster.objects.create(name="C1", type=ctype)
-        vm = VirtualMachine.objects.create(name="vm-1", cluster=cluster, role=role)
-        iface = VMInterface.objects.create(virtual_machine=vm, name="eth0")
-        ip = IPAddress.objects.create(address="10.1.0.1/24", assigned_object=iface)
-        MonitoringProfile.objects.create(assigned_object=vm, management_ip=ip)
-        self._job(
-            JobStatusChoices.STATUS_COMPLETED,
-            foreign_source=foreign_source_for(vm),
-        )
-
-        html = VirtualMachineSyncStatusPanel({"object": vm}).right_page()
-        self.assertIn("succeeded-accepted", html)
-
-    def test_vm_extension_empty_when_unmonitored(self):
-        role = DeviceRole.objects.get(slug="router")
-        ctype = ClusterType.objects.create(name="CT2", slug="ct2")
-        cluster = Cluster.objects.create(name="C2", type=ctype)
-        vm = VirtualMachine.objects.create(name="vm-2", cluster=cluster, role=role)
-        self.assertEqual(
-            VirtualMachineSyncStatusPanel({"object": vm}).right_page(), ""
         )

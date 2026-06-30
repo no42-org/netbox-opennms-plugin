@@ -19,6 +19,7 @@ from netbox_opennms.translation import (
 
 MI = "{http://xmlns.opennms.org/xsd/config/model-import}"
 FS = "{http://xmlns.opennms.org/xsd/config/foreign-source}"
+FSNAME = "netbox.raleigh.router"
 
 
 class RenderRequisitionTest(SimpleTestCase):
@@ -124,12 +125,12 @@ class RenderForeignSourceDefinitionTest(TestCase):
         )
 
     def test_scan_interval_and_name(self):
-        root = etree.fromstring(render_foreign_source_definition(self.profile))
-        self.assertEqual(root.get("name"), "Network device")
+        root = etree.fromstring(render_foreign_source_definition(FSNAME, self.profile))
+        self.assertEqual(root.get("name"), FSNAME)
         self.assertEqual(root.find(f"{FS}scan-interval").text, "30m")
 
     def test_detector_emits_class_and_sorted_parameters(self):
-        root = etree.fromstring(render_foreign_source_definition(self.profile))
+        root = etree.fromstring(render_foreign_source_definition(FSNAME, self.profile))
         detector = root.find(f"{FS}detectors/{FS}detector")
         self.assertEqual(detector.get("name"), "ICMP")
         self.assertEqual(
@@ -142,18 +143,18 @@ class RenderForeignSourceDefinitionTest(TestCase):
         self.assertEqual(params, [("retries", "1"), ("timeout", "2000")])
 
     def test_policy_emitted(self):
-        root = etree.fromstring(render_foreign_source_definition(self.profile))
+        root = etree.fromstring(render_foreign_source_definition(FSNAME, self.profile))
         policy = root.find(f"{FS}policies/{FS}policy")
         self.assertEqual(policy.get("name"), "Categorise")
         self.assertEqual(policy.find(f"{FS}parameter").get("key"), "category")
 
     def test_detectors_present_reverses_ad11(self):
         # Epic 5 reversal: detection is on, so <detectors> is non-empty.
-        root = etree.fromstring(render_foreign_source_definition(self.profile))
+        root = etree.fromstring(render_foreign_source_definition(FSNAME, self.profile))
         self.assertEqual(len(root.find(f"{FS}detectors")), 1)
 
     def test_render_error_detector_without_class(self):
         bare = MonitoringProfile.objects.create(name="Bare")
         MonitoringDetector.objects.create(profile=bare, name="x", rule_class="")
         with self.assertRaises(RenderError):
-            render_foreign_source_definition(bare)
+            render_foreign_source_definition(FSNAME, bare)

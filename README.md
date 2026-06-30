@@ -5,12 +5,19 @@ virtual machines into [OpenNMS](https://www.opennms.com/) (Horizon 36) via the
 OpenNMS REST provisioning API. NetBox is the source of truth; OpenNMS monitoring
 is a derived artifact kept in sync from NetBox intent.
 
-You attach a **Monitoring Profile** to a Device or VM (its management IP, extra
-interfaces, monitored services, and an optional monitoring location), then
-**Sync** — the plugin renders the complete OpenNMS *requisition* for that
-object's Foreign Source (grouped by site + role) and imports it. Remove, bulk
-sync, and role/site *moves* are all expressed as the same render-and-replace, so
-re-syncing is idempotent and never duplicates a node.
+You author a **Monitoring Profile** once — a reusable template of OpenNMS
+**detectors** and **policies** (from a built-in preset registry, or freeform
+classes) — and **assign** it to a *(site[, role])* scope. Every Device/VM in that
+scope is then monitored: its management IP is its **primary IP**, and OpenNMS
+auto-discovers services via the profile's detectors. A per-object **Monitoring
+Override** is the escape hatch (exclude an object, pin a different management IP,
+add extra interfaces/services, or change its location).
+
+**Sync** renders the complete OpenNMS *foreign-source definition* + *requisition*
+for a Foreign Source (grouped by site + role) and imports it. Membership is a
+live NetBox query, so adding/removing a Device or changing its role/site simply
+re-resolves the scope; render-and-replace makes every re-sync idempotent and
+never duplicates a node.
 
 ## Compatibility
 
@@ -83,11 +90,11 @@ jobs to execute:
 python manage.py rqworker
 ```
 
-If no worker is running, the Monitoring Profile page shows a warning and jobs
-stay pending until one starts. Each object's last-sync state (submitted /
+If no worker is running, the Monitoring Assignment and Sync pages show a warning
+and jobs stay pending until one starts. Each object's last-sync state (submitted /
 succeeded-accepted / removed / failed, with the triggering user, time, and any
-error) is shown on the Monitoring Profile **and** on the Device/VM detail page,
-backed by the NetBox Job log as the audit trail.
+error) is shown on the **Device/VM detail page**, backed by the NetBox Job log as
+the audit trail.
 
 ## OpenNMS-side setup
 
@@ -96,10 +103,11 @@ monitoring to actually happen:
 
 - **Provisioning account** — `opennms_username` needs a role that can read/write
   requisitions and trigger imports (e.g. the OpenNMS provisioning/REST role).
-- **Poller packages** — OpenNMS only *polls* a monitored service if a matching
-  **poller package** exists for it. The plugin declares the services you choose
-  (auto-detection is intentionally disabled), but it cannot create poller
-  packages — ensure your `poller-configuration.xml` covers them.
+- **Detectors → poller packages** — the profile's detectors tell OpenNMS which
+  services to auto-discover, but OpenNMS only *polls* a discovered service if a
+  matching **poller package** exists for it. The plugin cannot create poller
+  packages — ensure your `poller-configuration.xml` covers the services your
+  detectors discover.
 - **Minions / monitoring locations** — a node assigned to a non-`Default`
   monitoring location is only polled if a **Minion** is registered at that
   location. The plugin best-effort warns when a chosen location is unknown to

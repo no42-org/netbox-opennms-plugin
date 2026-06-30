@@ -184,7 +184,9 @@ class SyncForeignSourceJob(JobRunner):
                 foreign_source, nodes, default_location=default_location
             )
             fs_xml = (
-                render_foreign_source_definition(resolution.assignment.profile)
+                render_foreign_source_definition(
+                    foreign_source, resolution.assignment.profile
+                )
                 if resolution is not None
                 else None
             )

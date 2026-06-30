@@ -85,7 +85,7 @@ class SyncForeignSourceJobTest(TestCase):
         )
         self.assertEqual(
             client.post_foreign_source.call_args.args[0],
-            render_foreign_source_definition(self.profile),
+            render_foreign_source_definition(FS, self.profile),
         )
         resolution = resolve(FS)
         self.assertEqual(

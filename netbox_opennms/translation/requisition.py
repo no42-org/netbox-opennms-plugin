@@ -84,18 +84,23 @@ def render_requisition(foreign_source, nodes, date_stamp=None, default_location=
     return etree.tostring(root, xml_declaration=True, encoding="UTF-8")
 
 
-def render_foreign_source_definition(profile, date_stamp=None):
-    """Render a foreign-source definition from a profile's detectors/policies.
+def render_foreign_source_definition(foreign_source, profile, date_stamp=None):
+    """Render a foreign-source definition named ``foreign_source`` from a profile.
 
     Emits ``<scan-interval>`` plus the profile's detectors (OpenNMS auto-discovers
     the matching services) and policies (categories, interface management). This
     reverses v1's AD-11 empty ``<detectors/>``: detection is now the default
-    service source. Returns bytes.
+    service source.
+
+    The definition's ``name`` MUST be the Foreign Source (the requisition's
+    ``foreign-source``), not the profile name — OpenNMS links a definition to a
+    requisition by name, and a mismatch silently falls back to OpenNMS's built-in
+    default detectors. Returns bytes.
     """
     root = etree.Element(
         f"{{{FOREIGN_SOURCE_NS}}}foreign-source", nsmap={None: FOREIGN_SOURCE_NS}
     )
-    root.set("name", profile.name)
+    root.set("name", foreign_source)
     if date_stamp is not None:
         root.set("date-stamp", date_stamp)
 

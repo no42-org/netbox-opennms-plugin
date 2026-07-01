@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: MIT
 """Form-layer tests for the Epic 5 models (override IP ownership)."""
 
+from core.models import ObjectType
 from dcim.models import (
     Device,
     DeviceRole,
@@ -10,7 +11,6 @@ from dcim.models import (
     Manufacturer,
     Site,
 )
-from core.models import ObjectType
 from django.test import TestCase
 from extras.models import SavedFilter
 from ipam.models import IPAddress

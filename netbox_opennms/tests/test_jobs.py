@@ -258,7 +258,9 @@ class SyncForeignSourceJobTest(TestCase):
 
     @mock.patch("netbox_opennms.jobs.advisory_lock")
     @mock.patch("netbox_opennms.jobs.OpenNMSClient.from_config")
-    def test_remove_of_empty_requisition_tears_down_shell(self, mock_from_config, _lock):
+    def test_remove_of_empty_requisition_tears_down_shell(
+        self, mock_from_config, _lock
+    ):
         # A Remove that resolves to ZERO nodes tears down the shell + the ownership
         # record, so the reconciler can't re-Remove it every interval (review #3).
         client = mock_from_config.return_value.__enter__.return_value

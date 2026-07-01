@@ -128,7 +128,9 @@ class RequisitionAndRuleTest(TestCase):
         ok.clean()
 
     def test_set_category_preset_requires_category(self):
-        bad = MonitoringPolicy(requisition=self.req, name="cat", preset="set-node-category")
+        bad = MonitoringPolicy(
+            requisition=self.req, name="cat", preset="set-node-category"
+        )
         with self.assertRaises(ValidationError):
             bad.clean()
 

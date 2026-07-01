@@ -85,6 +85,20 @@ def _wants_vms(requisition):
     return requisition.object_types in (ObjectTypeChoices.VM, ObjectTypeChoices.BOTH)
 
 
+def _device_filter_keys():
+    # An INSTANTIATED filterset, not DeviceFilterSet.base_filters: NetBox adds the
+    # custom-field (cf_*) filters per instance in NetBoxModelFilterSet.__init__, so
+    # base_filters would wrongly exclude them and the guard would reject a valid
+    # custom-field filter the resolver actually honours (review #2).
+    return set(DeviceFilterSet(data={}, queryset=Device.objects.none()).filters)
+
+
+def _vm_filter_keys():
+    return set(
+        VirtualMachineFilterSet(data={}, queryset=VirtualMachine.objects.none()).filters
+    )
+
+
 def known_filter_keys(requisition):
     """The set of filter keys understood by the Requisition's selected types (H8).
 
@@ -93,9 +107,9 @@ def known_filter_keys(requisition):
     """
     keys = set()
     if _wants_devices(requisition):
-        keys |= set(DeviceFilterSet.base_filters)
+        keys |= _device_filter_keys()
     if _wants_vms(requisition):
-        keys |= set(VirtualMachineFilterSet.base_filters)
+        keys |= _vm_filter_keys()
     return keys
 
 
@@ -134,11 +148,9 @@ def filter_errors(requisition):
         # else it is an unguarded catch-all over that type (H8 hardened — review #3).
         per_type = []
         if _wants_devices(requisition):
-            per_type.append(("devices", set(DeviceFilterSet.base_filters)))
+            per_type.append(("devices", _device_filter_keys()))
         if _wants_vms(requisition):
-            per_type.append(
-                ("virtual machines", set(VirtualMachineFilterSet.base_filters))
-            )
+            per_type.append(("virtual machines", _vm_filter_keys()))
         for label, keys in per_type:
             if not _constrains(keys):
                 errors.append(

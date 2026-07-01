@@ -151,6 +151,19 @@ class MembershipTest(TestCase):
             )
         )
 
+    def test_custom_field_filter_key_is_accepted(self):
+        # cf_* filters are added per-instance (not in base_filters), so the guard
+        # must recognize a custom-field filter key (review #2).
+        from core.models import ObjectType
+        from extras.models import CustomField
+
+        cf = CustomField.objects.create(name="datacenter", type="text")
+        cf.object_types.set([ObjectType.objects.get_for_model(Device)])
+        req = self._requisition(
+            filter_params={"cf_datacenter": ["dc1"]}, object_types="device"
+        )
+        self.assertEqual(filter_errors(req), [])
+
     # --- priority-ordered overlap ------------------------------------------
 
     def test_higher_priority_requisition_claims_a_shared_object(self):

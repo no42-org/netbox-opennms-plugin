@@ -51,6 +51,8 @@ from netbox_opennms.models import (
 from netbox_opennms.presets import (
     DETECTOR_PRESETS,
     POLICY_PRESETS,
+    detector_required_params,
+    policy_required_params,
     resolve_detector,
     resolve_policy,
 )
@@ -212,12 +214,18 @@ class OpenNMSRoundTripTest(TestCase):
         )
         for key in DETECTOR_PRESETS:
             cls, params = resolve_detector(key)
+            # Supply a value for any class-required param (e.g. TcpDetector port),
+            # else OpenNMS would reject the definition (the model's clean() guard).
+            for req_key in detector_required_params(key):
+                params.setdefault(req_key, "8080")
             MonitoringDetector.objects.create(
                 requisition=requisition, name=key, preset=key,
                 rule_class=cls, parameters=params,
             )
         for key in POLICY_PRESETS:
             cls, params = resolve_policy(key)
+            for req_key in policy_required_params(key):
+                params.setdefault(req_key, "citest")
             MonitoringPolicy.objects.create(
                 requisition=requisition, name=key, preset=key,
                 rule_class=cls, parameters=params,

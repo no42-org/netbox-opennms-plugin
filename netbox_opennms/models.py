@@ -173,14 +173,18 @@ class MonitoringDetector(_ProvisioningRule):
         verbose_name_plural = "monitoring detectors"
 
     def _apply_preset(self):
-        # The preset OWNS the class: whenever a preset is set, the rule class is
-        # (re)derived from it and cannot be overridden by the user. Defaults are
-        # merged UNDER any user-set parameters. Applied in both clean() and save()
-        # so it holds on every path — the API/bulk paths don't run clean().
+        # A KNOWN preset owns the class: it is (re)derived from the preset and the
+        # user can't override it. An unknown preset (admin-extended via FIELD_CHOICES
+        # with no registry entry) leaves any existing class untouched — never blanked.
+        # Defaults are seeded only when parameters are empty, so a user-tuned/-deleted
+        # parameter is not resurrected. Applied in both clean() and save() so it holds
+        # on every path — the API/bulk paths don't run clean().
         if self.preset:
             cls, defaults = resolve_detector(self.preset)
-            self.rule_class = cls or ""
-            self.parameters = {**defaults, **(self.parameters or {})}
+            if cls:
+                self.rule_class = cls
+                if not self.parameters:
+                    self.parameters = dict(defaults)
 
     def clean(self):
         super().clean()
@@ -219,11 +223,13 @@ class MonitoringPolicy(_ProvisioningRule):
         verbose_name_plural = "monitoring policies"
 
     def _apply_preset(self):
-        # The preset OWNS the class (see MonitoringDetector._apply_preset).
+        # A known preset owns the class (see MonitoringDetector._apply_preset).
         if self.preset:
             cls, defaults = resolve_policy(self.preset)
-            self.rule_class = cls or ""
-            self.parameters = {**defaults, **(self.parameters or {})}
+            if cls:
+                self.rule_class = cls
+                if not self.parameters:
+                    self.parameters = dict(defaults)
 
     def clean(self):
         super().clean()

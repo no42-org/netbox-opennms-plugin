@@ -91,6 +91,19 @@ class RequisitionSavedFilterImportTest(TestCase):
         # One-shot copy: the empty filter is replaced by the Saved Filter's params.
         self.assertEqual(form.cleaned_data["filter_params"], {"role": ["switch"]})
 
+    def test_import_and_typed_filter_conflict_is_rejected(self):
+        # Picking a Saved Filter AND typing a filter is ambiguous — reject, don't
+        # silently discard the typed one (review #5).
+        saved = SavedFilter.objects.create(
+            name="Switches", slug="switches", parameters={"role": ["switch"]}
+        )
+        saved.object_types.set([ObjectType.objects.get_for_model(Device)])
+        form = self._form(
+            import_from_saved_filter=saved.pk, filter_params='{"role": ["router"]}'
+        )
+        self.assertFalse(form.is_valid())
+        self.assertIn("import_from_saved_filter", form.errors)
+
     def test_import_of_empty_saved_filter_is_still_guarded(self):
         # Importing a Saved Filter with no effective constraint is rejected (H1).
         saved = SavedFilter.objects.create(

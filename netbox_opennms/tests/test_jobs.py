@@ -258,13 +258,17 @@ class SyncForeignSourceJobTest(TestCase):
 
     @mock.patch("netbox_opennms.jobs.advisory_lock")
     @mock.patch("netbox_opennms.jobs.OpenNMSClient.from_config")
-    def test_governed_remove_keeps_shell(self, mock_from_config, _lock):
+    def test_remove_of_empty_requisition_tears_down_shell(self, mock_from_config, _lock):
+        # A Remove that resolves to ZERO nodes tears down the shell + the ownership
+        # record, so the reconciler can't re-Remove it every interval (review #3).
         client = mock_from_config.return_value.__enter__.return_value
         client.import_requisition.return_value = mock.Mock(status_code=202)
+        DeployedForeignSource.objects.create(name=FS)
         Device.objects.filter(pk=self.device.pk).delete()
         self._runner().run(foreign_source=FS, allow_empty=True)
-        client.delete_requisition.assert_not_called()
-        client.delete_foreign_source.assert_not_called()
+        client.delete_requisition.assert_called_once_with(FS)
+        client.delete_foreign_source.assert_called_once_with(FS)
+        self.assertFalse(DeployedForeignSource.objects.filter(name=FS).exists())
 
     @mock.patch("netbox_opennms.jobs.OpenNMSClient.from_config")
     def test_reconcile_enqueues_remove_for_orphans(self, mock_from_config):

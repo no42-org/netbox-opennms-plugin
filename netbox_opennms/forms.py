@@ -82,11 +82,21 @@ class RequisitionForm(NetBoxModelForm):
 
     def clean(self):
         super().clean()
-        # A one-shot copy: importing a Saved Filter overwrites the filter params
-        # (no live link, R2). Done before the guard so the copied params are checked.
+        # A one-shot copy: importing a Saved Filter seeds the filter params (no live
+        # link, R2). Done before the guard so the copied params are checked. Refuse
+        # to silently discard a filter the user also typed in the same submit.
         saved = self.cleaned_data.get("import_from_saved_filter")
         if saved is not None:
-            self.cleaned_data["filter_params"] = dict(saved.parameters or {})
+            if self.cleaned_data.get("filter_params"):
+                self.add_error(
+                    "import_from_saved_filter",
+                    _(
+                        "Clear the Filter field to import a Saved Filter, or drop "
+                        "the import and edit the filter directly — not both."
+                    ),
+                )
+            else:
+                self.cleaned_data["filter_params"] = dict(saved.parameters or {})
         # Reject unknown/empty filters here (the same guard the resolver uses), so a
         # typo can't be saved into a priority-1 catch-all (C1/H1). Read from
         # cleaned_data — self.instance isn't populated until _post_clean(), after this.

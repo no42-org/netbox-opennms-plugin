@@ -84,6 +84,27 @@ class RequisitionAndRuleTest(TestCase):
         detector.clean()
         self.assertTrue(detector.rule_class.endswith("IcmpDetector"))
 
+    def test_unknown_preset_does_not_blank_existing_class(self):
+        # An admin-extended preset with no registry entry must not wipe the class
+        # (review #1) — an existing freeform class is preserved.
+        detector = MonitoringDetector(
+            requisition=self.req, name="x", preset="not-a-registered-preset",
+            rule_class="org.example.Custom",
+        )
+        detector.clean()
+        self.assertEqual(detector.rule_class, "org.example.Custom")
+
+    def test_preset_default_not_resurrected_after_deletion(self):
+        # Deleting a seeded default and saving must not re-add it (review #4).
+        detector = MonitoringDetector.objects.create(
+            requisition=self.req, name="i", preset="icmp"
+        )
+        self.assertIn("retries", detector.parameters)
+        detector.parameters = {"timeout": "2000"}
+        detector.save()
+        detector.refresh_from_db()
+        self.assertNotIn("retries", detector.parameters)
+
     def test_all_policy_presets_resolve_to_a_class(self):
         for preset, suffix in (
             ("match-ip-interface", "MatchingIpInterfacePolicy"),

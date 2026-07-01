@@ -214,7 +214,8 @@ class SyncForeignSourceJob(JobRunner):
                 client.import_requisition(foreign_source, rescan_existing=rescan)
                 # Record ownership so the reconciler can find this FS as an orphan
                 # later even though its (user-chosen) name has no netbox. prefix.
-                if resolution is not None:
+                # Only when we actually pushed nodes — an empty push is a teardown.
+                if nodes:
                     DeployedForeignSource.objects.get_or_create(name=foreign_source)
                 # Best-effort advisory (FR-5/AD-16): warn on an unknown location.
                 try:
@@ -225,13 +226,13 @@ class SyncForeignSourceJob(JobRunner):
                         )
                 except Exception:
                     pass
-                # An ungoverned Remove (the drift reconciler, or a manual purge of
-                # an orphaned Foreign Source): the nodes are now cleared, so also
-                # drop the requisition + foreign-source shell — else the empty
-                # requisition lingers in OpenNMS's list and the reconciler keeps
-                # re-finding it every interval. Best-effort: a 404/transient here
-                # must not fail an otherwise-successful Remove.
-                if resolution is None and allow_empty:
+                # A Remove that resolved to ZERO nodes (a deleted/renamed Requisition,
+                # or one that now matches nothing): the nodes are cleared, so also
+                # drop the requisition + foreign-source shell AND the ownership record
+                # — else the empty requisition lingers in OpenNMS and the reconciler
+                # re-Removes it every interval forever (review #3). Best-effort: a
+                # 404/transient here must not fail an otherwise-successful Remove.
+                if allow_empty and not nodes:
                     try:
                         client.delete_requisition(foreign_source)
                         client.delete_foreign_source(foreign_source)

@@ -178,9 +178,14 @@ class RequisitionSyncView(PermissionRequiredMixin, View):
         return redirect(requisition.get_absolute_url())
 
 
-class RequisitionDryRunView(LoginRequiredMixin, View):
-    """Show the per-node diff of a Requisition against the live OpenNMS state (R7)."""
+class RequisitionDryRunView(PermissionRequiredMixin, View):
+    """Show the per-node diff of a Requisition against the live OpenNMS state (R7).
 
+    Permission-gated (not merely login) because it issues live outbound calls to
+    OpenNMS and returns the node/interface/service topology (review #7).
+    """
+
+    permission_required = "netbox_opennms.view_requisition"
     template_name = "netbox_opennms/dry_run.html"
 
     def get(self, request, pk):

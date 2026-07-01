@@ -26,9 +26,9 @@ from netbox_opennms.jobs import (
 )
 from netbox_opennms.membership import resolve
 from netbox_opennms.models import (
-    MonitoringAssignment,
+    DeployedForeignSource,
     MonitoringDetector,
-    MonitoringProfile,
+    Requisition,
 )
 from netbox_opennms.translation import (
     render_foreign_source_definition,
@@ -45,14 +45,13 @@ class SyncForeignSourceJobTest(TestCase):
         cls.role = DeviceRole.objects.create(name="Router", slug="router")
         mfr = Manufacturer.objects.create(name="Acme", slug="acme")
         cls.dt = DeviceType.objects.create(manufacturer=mfr, model="M1", slug="m1")
-        cls.profile = MonitoringProfile.objects.create(name="Network device")
+        cls.requisition = Requisition.objects.create(
+            name=FS, filter_params={"site": ["raleigh"], "role": ["router"]}
+        )
         MonitoringDetector.objects.create(
-            profile=cls.profile,
+            requisition=cls.requisition,
             name="ICMP",
             rule_class="org.opennms.netmgt.provision.detector.icmp.IcmpDetector",
-        )
-        cls.assignment = MonitoringAssignment.objects.create(
-            profile=cls.profile, site=cls.site, role=cls.role
         )
         cls.device = cls._make_device("rtr-1", "10.0.0.1/24")
 
@@ -86,7 +85,7 @@ class SyncForeignSourceJobTest(TestCase):
         )
         self.assertEqual(
             client.post_foreign_source.call_args.args[0],
-            render_foreign_source_definition(FS, self.profile),
+            render_foreign_source_definition(FS, self.requisition),
         )
         resolution = resolve(FS)
         self.assertEqual(
@@ -100,9 +99,8 @@ class SyncForeignSourceJobTest(TestCase):
     @mock.patch("netbox_opennms.jobs.advisory_lock")
     @mock.patch("netbox_opennms.jobs.OpenNMSClient.from_config")
     def test_render_error_marks_failed(self, mock_from_config, _lock):
-        # A detector with no class makes the FS-definition render raise.
         MonitoringDetector.objects.create(
-            profile=self.profile, name="bad", rule_class=""
+            requisition=self.requisition, name="bad", rule_class=""
         )
         with self.assertRaises(JobFailed):
             self._runner().run(foreign_source=FS)
@@ -138,6 +136,15 @@ class SyncForeignSourceJobTest(TestCase):
         self._runner().run(foreign_source=FS)
         mock_lock.assert_called_once_with(f"netbox_opennms:fs:{FS}")
 
+    @mock.patch("netbox_opennms.jobs.advisory_lock")
+    @mock.patch("netbox_opennms.jobs.OpenNMSClient.from_config")
+    def test_sync_records_ownership(self, mock_from_config, _lock):
+        # A successful sync records the FS name so the reconciler owns it (review #4).
+        client = mock_from_config.return_value.__enter__.return_value
+        client.import_requisition.return_value = mock.Mock(status_code=202)
+        self._runner().run(foreign_source=FS)
+        self.assertTrue(DeployedForeignSource.objects.filter(name=FS).exists())
+
     def test_enqueue_sync_coalesces_pending(self):
         job1 = SyncForeignSourceJob.enqueue_sync(FS)
         job2 = SyncForeignSourceJob.enqueue_sync(FS)
@@ -147,7 +154,7 @@ class SyncForeignSourceJobTest(TestCase):
     @mock.patch("netbox_opennms.jobs.advisory_lock")
     @mock.patch("netbox_opennms.jobs.OpenNMSClient.from_config")
     def test_ungoverned_foreign_source_skips_import(self, mock_from_config, _lock):
-        # No assignment governs this FS → a Sync must not push anything.
+        # No Requisition is named this → a Sync must not push anything.
         self._runner().run(foreign_source="netbox.durham.router")
         mock_from_config.assert_not_called()
 
@@ -164,7 +171,6 @@ class SyncForeignSourceJobTest(TestCase):
     @mock.patch("netbox_opennms.jobs.advisory_lock")
     @mock.patch("netbox_opennms.jobs.OpenNMSClient.from_config")
     def test_remove_pushes_empty_requisition(self, mock_from_config, _lock):
-        # allow_empty + governed → push a node-less requisition (the Remove path).
         client = mock_from_config.return_value.__enter__.return_value
         client.import_requisition.return_value = mock.Mock(status_code=202)
         Device.objects.filter(pk=self.device.pk).delete()
@@ -176,8 +182,8 @@ class SyncForeignSourceJobTest(TestCase):
     @mock.patch("netbox_opennms.jobs.advisory_lock")
     @mock.patch("netbox_opennms.jobs.OpenNMSClient.from_config")
     def test_remove_ungoverned_skips_definition(self, mock_from_config, _lock):
-        # A bare Remove of an ungoverned FS has no profile, so no FS-definition is
-        # pushed — only the empty requisition + import that clears the nodes.
+        # A bare Remove of a name with no Requisition has no definition to push —
+        # only the empty requisition + import that clears the nodes.
         client = mock_from_config.return_value.__enter__.return_value
         client.import_requisition.return_value = mock.Mock(status_code=202)
         self._runner().run(foreign_source="netbox.durham.router", allow_empty=True)
@@ -188,9 +194,9 @@ class SyncForeignSourceJobTest(TestCase):
     @mock.patch("netbox_opennms.jobs.advisory_lock")
     @mock.patch("netbox_opennms.jobs.OpenNMSClient.from_config")
     def test_validation_error_marks_failed(self, mock_from_config, _lock):
-        # An invalid location on the assignment (ORM-set, bypassing clean) fails
+        # An invalid location on the Requisition (ORM-set, bypassing clean) fails
         # the job before any push (it would 400 on import).
-        MonitoringAssignment.objects.filter(pk=self.assignment.pk).update(
+        Requisition.objects.filter(pk=self.requisition.pk).update(
             location="bad location"
         )
         with self.assertRaises(JobFailed):
@@ -224,9 +230,7 @@ class SyncForeignSourceJobTest(TestCase):
         client = mock_from_config.return_value.__enter__.return_value
         client.import_requisition.return_value = mock.Mock(status_code=202)
         client.list_locations.return_value = {"Default"}
-        MonitoringAssignment.objects.filter(pk=self.assignment.pk).update(
-            location="edge-1"
-        )
+        Requisition.objects.filter(pk=self.requisition.pk).update(location="edge-1")
         with self.assertLogs(
             "netbox.jobs.SyncForeignSourceJob", level="WARNING"
         ) as captured:
@@ -239,17 +243,13 @@ class SyncForeignSourceJobTest(TestCase):
         client = mock_from_config.return_value.__enter__.return_value
         client.import_requisition.return_value = mock.Mock(status_code=202)
         client.list_locations.side_effect = OpenNMSHTTPError("boom", status_code=500)
-        MonitoringAssignment.objects.filter(pk=self.assignment.pk).update(
-            location="edge-1"
-        )
+        Requisition.objects.filter(pk=self.requisition.pk).update(location="edge-1")
         self._runner().run(foreign_source=FS)
         client.import_requisition.assert_called_once()
 
     @mock.patch("netbox_opennms.jobs.advisory_lock")
     @mock.patch("netbox_opennms.jobs.OpenNMSClient.from_config")
     def test_ungoverned_remove_purges_shell(self, mock_from_config, _lock):
-        # A Remove of an UNGOVERNED FS (reconciler/manual purge) clears the nodes
-        # AND deletes the requisition + foreign-source shell so it can't recur.
         client = mock_from_config.return_value.__enter__.return_value
         client.import_requisition.return_value = mock.Mock(status_code=202)
         self._runner().run(foreign_source="netbox.durham.router", allow_empty=True)
@@ -258,27 +258,35 @@ class SyncForeignSourceJobTest(TestCase):
 
     @mock.patch("netbox_opennms.jobs.advisory_lock")
     @mock.patch("netbox_opennms.jobs.OpenNMSClient.from_config")
-    def test_governed_remove_keeps_shell(self, mock_from_config, _lock):
-        # A Remove of a still-GOVERNED FS (assignment exists, members emptied)
-        # clears the nodes but keeps the shell — the scope is still intended.
+    def test_remove_of_empty_requisition_tears_down_shell(
+        self, mock_from_config, _lock
+    ):
+        # A Remove that resolves to ZERO nodes tears down the shell + the ownership
+        # record, so the reconciler can't re-Remove it every interval (review #3).
         client = mock_from_config.return_value.__enter__.return_value
         client.import_requisition.return_value = mock.Mock(status_code=202)
+        DeployedForeignSource.objects.create(name=FS)
         Device.objects.filter(pk=self.device.pk).delete()
         self._runner().run(foreign_source=FS, allow_empty=True)
-        client.delete_requisition.assert_not_called()
-        client.delete_foreign_source.assert_not_called()
+        client.delete_requisition.assert_called_once_with(FS)
+        client.delete_foreign_source.assert_called_once_with(FS)
+        self.assertFalse(DeployedForeignSource.objects.filter(name=FS).exists())
 
     @mock.patch("netbox_opennms.jobs.OpenNMSClient.from_config")
     def test_reconcile_enqueues_remove_for_orphans(self, mock_from_config):
+        # Ownership is tracked by DeployedForeignSource, not a name prefix — so a
+        # USER-named orphan (no netbox. prefix) is detected (review #4).
+        DeployedForeignSource.objects.create(name=FS)
+        DeployedForeignSource.objects.create(name="core-switches")
         client = mock_from_config.return_value.__enter__.return_value
         client.list_requisition_names.return_value = {
-            FS,  # governed (assignment + member) → kept
-            "netbox.durham.router",  # ours, ungoverned → orphan
-            "external.thing",  # not our namespace → ignored
+            FS,  # managed + monitored (requisition + member) → kept
+            "core-switches",  # managed, no requisition → orphan
+            "external.thing",  # not managed → ignored
         }
         with mock.patch.object(SyncForeignSourceJob, "enqueue_sync") as enqueue:
             ReconcileOrphansJob(job=mock.Mock()).run()
-        enqueue.assert_called_once_with("netbox.durham.router", allow_empty=True)
+        enqueue.assert_called_once_with("core-switches", allow_empty=True)
 
     @mock.patch("netbox_opennms.jobs.get_plugin_config")
     def test_reconcile_disabled_skips(self, mock_cfg):
@@ -304,10 +312,10 @@ class SyncForeignSourceJobTest(TestCase):
         )
 
     def test_enabled_foreign_sources(self):
-        # Distinct governed FSs with members; a different site is its own FS.
         durham = Site.objects.create(name="Durham", slug="durham")
-        MonitoringAssignment.objects.create(
-            profile=self.profile, site=durham, role=self.role
+        Requisition.objects.create(
+            name="netbox.durham.router",
+            filter_params={"site": ["durham"], "role": ["router"]},
         )
         self._make_device("rtr-d", "10.0.1.1/24", site=durham)
         self.assertEqual(

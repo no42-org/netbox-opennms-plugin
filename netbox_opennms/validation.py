@@ -28,9 +28,9 @@ class ValidationResult:
 def validate_resolution(resolution):
     """Validate a resolved Foreign Source (``membership.resolve``). Returns a result.
 
-    ``None`` (no governing assignment) is a clean, empty result — nothing to push.
-    Member skips are warnings; an invalid resolved location is an error (it would
-    400 on import, like the historic ':' bug).
+    ``None`` (no such Requisition) is a clean, empty result — nothing to push.
+    Member skips (and rejected/stale filters) are warnings; an invalid resolved
+    location is an error (it would 400 on import, like the historic ':' bug).
     """
     result = ValidationResult()
     if resolution is None:
@@ -39,10 +39,10 @@ def validate_resolution(resolution):
     result.warnings.extend(resolution.warnings)
 
     try:
-        validate_location_name(resolution.assignment.location)
+        validate_location_name(resolution.requisition.location)
     except ValueError as exc:
         result.errors.append(
-            f"{resolution.foreign_source}: invalid assignment location — {exc}"
+            f"{resolution.foreign_source}: invalid requisition location — {exc}"
         )
 
     for node in resolution.nodes:

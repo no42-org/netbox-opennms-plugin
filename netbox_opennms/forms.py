@@ -1,85 +1,155 @@
 # Copyright 2026 Ronny Trommer <ronny@no42.org>
 # SPDX-License-Identifier: MIT
-"""Forms for plugin models (Epic 5)."""
+"""Forms for plugin models (Requisition redesign)."""
 
-from dcim.models import Device, DeviceRole, Site
+from dcim.models import Device
+from django import forms
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
+from django.db.models import Q
 from django.utils.translation import gettext_lazy as _
+from extras.models import SavedFilter
 from ipam.models import IPAddress
 from netbox.forms import NetBoxModelForm
 from utilities.forms.fields import (
     DynamicModelChoiceField,
     DynamicModelMultipleChoiceField,
+    JSONField,
 )
 from virtualization.models import VirtualMachine
 
+from .choices import ObjectTypeChoices, ServiceChoices
+from .membership import filter_errors
 from .models import (
     MonitoredService,
-    MonitoringAssignment,
     MonitoringDetector,
     MonitoringOverride,
     MonitoringPolicy,
-    MonitoringProfile,
+    Requisition,
     object_ip_pks,
 )
 
 
-class MonitoringProfileForm(NetBoxModelForm):
-    """Create/edit a Monitoring Profile (a reusable detector/policy template)."""
+class RequisitionForm(NetBoxModelForm):
+    """Create/edit a Requisition (one user-named OpenNMS Foreign Source)."""
+
+    import_from_saved_filter = forms.ModelChoiceField(
+        queryset=SavedFilter.objects.filter(
+            Q(object_types__app_label="dcim", object_types__model="device")
+            | Q(
+                object_types__app_label="virtualization",
+                object_types__model="virtualmachine",
+            )
+        ).distinct(),
+        required=False,
+        label=_("Import from Saved Filter"),
+        help_text=_(
+            "Copy a NetBox Device/VM Saved Filter's parameters into the filter "
+            "below — a one-time copy, with no live link to the Saved Filter."
+        ),
+    )
+    filter_params = JSONField(
+        required=False,
+        label=_("Filter"),
+        help_text=_(
+            "NetBox filter parameters, e.g. "
+            '{"role": ["switch"], "tag": ["critical"]}. Applied to the selected '
+            "object types to compute members."
+        ),
+    )
+    services = forms.MultipleChoiceField(
+        choices=ServiceChoices,
+        required=False,
+        label=_("Declared services"),
+        help_text=_("Applied to every member's interfaces (overridable per object)."),
+    )
 
     class Meta:
-        model = MonitoringProfile
+        model = Requisition
         fields = (
             "name",
             "description",
+            "priority",
+            "object_types",
+            "import_from_saved_filter",
+            "filter_params",
             "scan_interval",
             "default_interfaces",
+            "services",
+            "location",
             "tags",
         )
 
+    def clean(self):
+        super().clean()
+        # A one-shot copy: importing a Saved Filter seeds the filter params (no live
+        # link, R2). Done before the guard so the copied params are checked. Refuse
+        # to silently discard a filter the user also typed in the same submit.
+        saved = self.cleaned_data.get("import_from_saved_filter")
+        if saved is not None:
+            if self.cleaned_data.get("filter_params"):
+                self.add_error(
+                    "import_from_saved_filter",
+                    _(
+                        "Clear the Filter field to import a Saved Filter, or drop "
+                        "the import and edit the filter directly — not both."
+                    ),
+                )
+            else:
+                self.cleaned_data["filter_params"] = dict(saved.parameters or {})
+        # Reject unknown/empty filters here (the same guard the resolver uses), so a
+        # typo can't be saved into a priority-1 catch-all (C1/H1). Read from
+        # cleaned_data — self.instance isn't populated until _post_clean(), after this.
+        if not self.errors:
+            probe = Requisition(
+                object_types=self.cleaned_data.get("object_types")
+                or ObjectTypeChoices.BOTH,
+                filter_params=self.cleaned_data.get("filter_params") or {},
+            )
+            for error in filter_errors(probe):
+                self.add_error("filter_params", error)
+        return self.cleaned_data
 
-class MonitoringDetectorForm(NetBoxModelForm):
-    """Add/edit a detector on a profile (a preset, or a freeform class)."""
 
-    profile = DynamicModelChoiceField(
-        queryset=MonitoringProfile.objects.all(), label=_("Monitoring Profile")
+class _PresetRuleForm(NetBoxModelForm):
+    """Shared: the preset owns the rule class, so it isn't user-editable.
+
+    The class is filled from the preset by the model; the form makes ``rule_class``
+    optional (a preset provides it) and locks the field once a preset is set —
+    freeform entry is only for a rule with no preset.
+    """
+
+    requisition = DynamicModelChoiceField(
+        queryset=Requisition.objects.all(), label=_("Requisition")
     )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        field = self.fields["rule_class"]
+        field.required = False
+        field.help_text = _(
+            "Set automatically from the preset and locked; enter a class only for "
+            "a freeform rule (no preset selected)."
+        )
+        # An existing preset-backed rule: the class is fixed to the preset's.
+        if self.instance and self.instance.pk and self.instance.preset:
+            field.disabled = True
+
+
+class MonitoringDetectorForm(_PresetRuleForm):
+    """Add/edit a detector on a Requisition (a preset, or a freeform class)."""
 
     class Meta:
         model = MonitoringDetector
-        fields = ("profile", "name", "preset", "rule_class", "parameters", "tags")
+        fields = ("requisition", "name", "preset", "rule_class", "parameters", "tags")
 
 
-class MonitoringPolicyForm(NetBoxModelForm):
-    """Add/edit a policy on a profile (a preset, or a freeform class)."""
-
-    profile = DynamicModelChoiceField(
-        queryset=MonitoringProfile.objects.all(), label=_("Monitoring Profile")
-    )
+class MonitoringPolicyForm(_PresetRuleForm):
+    """Add/edit a policy on a Requisition (a preset, or a freeform class)."""
 
     class Meta:
         model = MonitoringPolicy
-        fields = ("profile", "name", "preset", "rule_class", "parameters", "tags")
-
-
-class MonitoringAssignmentForm(NetBoxModelForm):
-    """Bind a profile to a (site[, role]) scope."""
-
-    profile = DynamicModelChoiceField(
-        queryset=MonitoringProfile.objects.all(), label=_("Monitoring Profile")
-    )
-    site = DynamicModelChoiceField(queryset=Site.objects.all(), label=_("Site"))
-    role = DynamicModelChoiceField(
-        queryset=DeviceRole.objects.all(),
-        required=False,
-        label=_("Role"),
-        help_text=_("Leave blank to apply to every role in the site."),
-    )
-
-    class Meta:
-        model = MonitoringAssignment
-        fields = ("profile", "site", "role", "location", "tags")
+        fields = ("requisition", "name", "preset", "rule_class", "parameters", "tags")
 
 
 class MonitoringOverrideForm(NetBoxModelForm):
@@ -112,6 +182,12 @@ class MonitoringOverrideForm(NetBoxModelForm):
             "virtual_machine_id": "$virtual_machine",
         },
     )
+    suppressed_services = forms.MultipleChoiceField(
+        choices=ServiceChoices,
+        required=False,
+        label=_("Suppress declared services"),
+        help_text=_("Declared services to remove for this object only."),
+    )
 
     class Meta:
         model = MonitoringOverride
@@ -121,6 +197,7 @@ class MonitoringOverrideForm(NetBoxModelForm):
             "exclude",
             "management_ip",
             "additional_ips",
+            "suppressed_services",
             "location",
             "tags",
         )
@@ -180,7 +257,7 @@ class MonitoringOverrideForm(NetBoxModelForm):
 
 
 class MonitoredServiceForm(NetBoxModelForm):
-    """Add/edit an explicit service on one of an override's interfaces."""
+    """Add/edit an explicit added service on one of an override's interfaces."""
 
     override = DynamicModelChoiceField(
         queryset=MonitoringOverride.objects.all(), label=_("Monitoring Override")

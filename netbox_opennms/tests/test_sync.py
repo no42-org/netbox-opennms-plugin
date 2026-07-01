@@ -17,11 +17,7 @@ from django.test import TestCase
 from django.urls import reverse
 from ipam.models import IPAddress
 
-from netbox_opennms.models import (
-    MonitoringAssignment,
-    MonitoringDetector,
-    MonitoringProfile,
-)
+from netbox_opennms.models import MonitoringDetector, Requisition
 
 User = get_user_model()
 FS = "netbox.raleigh.router"
@@ -41,12 +37,11 @@ class SyncViewTest(TestCase):
         ip = IPAddress.objects.create(address="10.0.0.1/24", assigned_object=iface)
         device.primary_ip4 = ip
         device.save()
-        cls.profile = MonitoringProfile.objects.create(name="Network device")
-        MonitoringDetector.objects.create(
-            profile=cls.profile, name="ICMP", rule_class="org.x.IcmpDetector"
+        cls.requisition = Requisition.objects.create(
+            name=FS, filter_params={"site": ["raleigh"], "role": ["router"]}
         )
-        cls.assignment = MonitoringAssignment.objects.create(
-            profile=cls.profile, site=site, role=role
+        MonitoringDetector.objects.create(
+            requisition=cls.requisition, name="ICMP", rule_class="org.x.IcmpDetector"
         )
         cls.superuser = User.objects.create_superuser(username="super", password="pw")
         cls.plain = User.objects.create_user(username="plain", password="pw")
@@ -81,15 +76,14 @@ class SyncViewTest(TestCase):
         mock_enqueue.assert_called_once()
 
     @mock.patch("netbox_opennms.views.SyncForeignSourceJob.enqueue_sync")
-    def test_assignment_sync_enqueues(self, mock_enqueue):
+    def test_requisition_sync_enqueues(self, mock_enqueue):
         mock_enqueue.return_value = mock.Mock(pk=14)
         self.client.force_login(self.superuser)
         url = reverse(
-            "plugins:netbox_opennms:monitoringassignment_sync",
-            args=[self.assignment.pk],
+            "plugins:netbox_opennms:requisition_sync", args=[self.requisition.pk]
         )
         response = self.client.post(url, follow=True)
-        self.assertContains(response, "Submitted 1 Foreign Source sync(s)")
+        self.assertContains(response, "Sync submitted")
 
     def test_preview_renders(self):
         self.client.force_login(self.superuser)

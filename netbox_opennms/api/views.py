@@ -1,57 +1,48 @@
 # Copyright 2026 Ronny Trommer <ronny@no42.org>
 # SPDX-License-Identifier: MIT
-"""REST API views (Epic 5)."""
+"""REST API views (Requisition redesign)."""
 
 from netbox.api.viewsets import NetBoxModelViewSet
 
 from ..filtersets import (
     MonitoredServiceFilterSet,
-    MonitoringAssignmentFilterSet,
     MonitoringDetectorFilterSet,
     MonitoringOverrideFilterSet,
     MonitoringPolicyFilterSet,
-    MonitoringProfileFilterSet,
+    RequisitionFilterSet,
 )
 from ..models import (
     MonitoredService,
-    MonitoringAssignment,
     MonitoringDetector,
     MonitoringOverride,
     MonitoringPolicy,
-    MonitoringProfile,
+    Requisition,
 )
 from .serializers import (
     MonitoredServiceSerializer,
-    MonitoringAssignmentSerializer,
     MonitoringDetectorSerializer,
     MonitoringOverrideSerializer,
     MonitoringPolicySerializer,
-    MonitoringProfileSerializer,
+    RequisitionSerializer,
 )
 
 
-class MonitoringProfileViewSet(NetBoxModelViewSet):
-    queryset = MonitoringProfile.objects.prefetch_related("detectors", "policies")
-    serializer_class = MonitoringProfileSerializer
-    filterset_class = MonitoringProfileFilterSet
+class RequisitionViewSet(NetBoxModelViewSet):
+    queryset = Requisition.objects.prefetch_related("detectors", "policies")
+    serializer_class = RequisitionSerializer
+    filterset_class = RequisitionFilterSet
 
 
 class MonitoringDetectorViewSet(NetBoxModelViewSet):
-    queryset = MonitoringDetector.objects.select_related("profile")
+    queryset = MonitoringDetector.objects.select_related("requisition")
     serializer_class = MonitoringDetectorSerializer
     filterset_class = MonitoringDetectorFilterSet
 
 
 class MonitoringPolicyViewSet(NetBoxModelViewSet):
-    queryset = MonitoringPolicy.objects.select_related("profile")
+    queryset = MonitoringPolicy.objects.select_related("requisition")
     serializer_class = MonitoringPolicySerializer
     filterset_class = MonitoringPolicyFilterSet
-
-
-class MonitoringAssignmentViewSet(NetBoxModelViewSet):
-    queryset = MonitoringAssignment.objects.select_related("profile", "site", "role")
-    serializer_class = MonitoringAssignmentSerializer
-    filterset_class = MonitoringAssignmentFilterSet
 
 
 class MonitoringOverrideViewSet(NetBoxModelViewSet):

@@ -219,6 +219,45 @@ class OpenNMSClient:
             ) from exc
         return names
 
+    def get_requisition(self, foreign_source):
+        """The current (deployed) requisition for a Foreign Source as JSON, or None.
+
+        ``GET /rest/requisitions/{fs}`` → the ``model-import`` document. A 404 (the
+        Foreign Source is not yet in OpenNMS) returns ``None`` so the dry-run reads
+        it as an all-added diff (R7/M5), rather than raising. Other errors raise the
+        typed taxonomy; an unparseable 2xx body raises ``OpenNMSError``.
+        """
+        return self._get_json_or_none(
+            f"/rest/requisitions/{quote(foreign_source, safe='')}"
+        )
+
+    def get_foreign_source(self, foreign_source):
+        """The current foreign-source definition for a Foreign Source as JSON, or None.
+
+        ``GET /rest/foreignSources/{fs}`` → detectors/policies/scan-interval. A 404
+        returns ``None`` (no definition yet). Feeds the dry-run's definition diff.
+        """
+        return self._get_json_or_none(
+            f"/rest/foreignSources/{quote(foreign_source, safe='')}"
+        )
+
+    def _get_json_or_none(self, path):
+        """GET *path* as JSON; ``None`` on 404; typed taxonomy on other failures."""
+        try:
+            response = self._request(
+                "GET", path, headers={"Accept": "application/json"}
+            )
+        except OpenNMSHTTPError as exc:
+            if exc.status_code == 404:
+                return None
+            raise
+        try:
+            return response.json()
+        except (ValueError, AttributeError, TypeError) as exc:
+            raise OpenNMSError(
+                f"OpenNMS returned an unparseable response for {path}."
+            ) from exc
+
     def delete_requisition(self, foreign_source):
         """Delete a requisition by Foreign Source — the DEPLOYED copy then pending.
 

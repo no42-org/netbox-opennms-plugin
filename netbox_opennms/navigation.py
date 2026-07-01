@@ -6,22 +6,11 @@ from netbox.plugins import PluginMenuButton, PluginMenuItem
 
 menu_items = (
     PluginMenuItem(
-        link="plugins:netbox_opennms:monitoringprofile_list",
-        link_text="Monitoring Profiles",
+        link="plugins:netbox_opennms:requisition_list",
+        link_text="Requisitions",
         buttons=(
             PluginMenuButton(
-                link="plugins:netbox_opennms:monitoringprofile_add",
-                title="Add",
-                icon_class="mdi mdi-plus-thick",
-            ),
-        ),
-    ),
-    PluginMenuItem(
-        link="plugins:netbox_opennms:monitoringassignment_list",
-        link_text="Monitoring Assignments",
-        buttons=(
-            PluginMenuButton(
-                link="plugins:netbox_opennms:monitoringassignment_add",
+                link="plugins:netbox_opennms:requisition_add",
                 title="Add",
                 icon_class="mdi mdi-plus-thick",
             ),
@@ -37,6 +26,10 @@ menu_items = (
                 icon_class="mdi mdi-plus-thick",
             ),
         ),
+    ),
+    PluginMenuItem(
+        link="plugins:netbox_opennms:sync_preview",
+        link_text="Sync Preview",
     ),
     PluginMenuItem(
         link="plugins:netbox_opennms:connection_test",

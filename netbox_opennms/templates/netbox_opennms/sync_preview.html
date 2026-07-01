@@ -14,8 +14,8 @@
   {% endif %}
   <div class="card">
     <div class="card-header d-flex justify-content-between align-items-center">
-      <h2 class="m-0">Foreign Sources</h2>
-      {% if perms.netbox_opennms.change_monitoringassignment %}
+      <h2 class="m-0">Requisitions</h2>
+      {% if perms.netbox_opennms.change_requisition %}
         <form method="post" action="{% url 'plugins:netbox_opennms:sync_all' %}">
           {% csrf_token %}
           <button type="submit" class="btn btn-sm btn-primary">
@@ -26,13 +26,13 @@
     </div>
     <table class="table table-hover">
       <thead>
-        <tr><th>Foreign Source</th><th>Profile</th><th>Nodes</th><th>Warnings</th><th></th></tr>
+        <tr><th>Requisition</th><th>Priority</th><th>Nodes</th><th>Warnings</th><th></th></tr>
       </thead>
       <tbody>
         {% for row in rows %}
           <tr>
-            <td><code>{{ row.foreign_source }}</code></td>
-            <td>{{ row.assignment.profile|linkify|placeholder }}</td>
+            <td>{{ row.requisition|linkify }} <code class="text-muted">{{ row.foreign_source }}</code></td>
+            <td>{{ row.requisition.priority }}</td>
             <td>{{ row.node_count }}</td>
             <td>
               {% if row.warnings %}
@@ -40,18 +40,17 @@
               {% else %}{{ ''|placeholder }}{% endif %}
             </td>
             <td class="text-end">
-              {% if perms.netbox_opennms.change_monitoringassignment %}
-                <form method="post" action="{% url 'plugins:netbox_opennms:foreign_source_sync' %}" class="d-inline">
+              <a href="{% url 'plugins:netbox_opennms:requisition_dry_run' pk=row.requisition.pk %}" class="btn btn-sm btn-outline-primary">Dry run</a>
+              {% if perms.netbox_opennms.change_requisition %}
+                <form method="post" action="{% url 'plugins:netbox_opennms:requisition_sync' pk=row.requisition.pk %}" class="d-inline">
                   {% csrf_token %}
-                  <input type="hidden" name="foreign_source" value="{{ row.foreign_source }}">
-                  <input type="hidden" name="return_url" value="{% url 'plugins:netbox_opennms:sync_preview' %}">
                   <button type="submit" class="btn btn-sm btn-primary">Sync</button>
                 </form>
               {% endif %}
             </td>
           </tr>
         {% empty %}
-          <tr><td colspan="5" class="text-muted">No monitored Foreign Sources — create a Monitoring Assignment.</td></tr>
+          <tr><td colspan="5" class="text-muted">No requisitions — create one to start monitoring.</td></tr>
         {% endfor %}
       </tbody>
     </table>

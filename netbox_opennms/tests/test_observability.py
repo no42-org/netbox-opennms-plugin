@@ -21,11 +21,7 @@ from netbox_opennms.jobs import (
     sync_outcome,
     sync_status_for,
 )
-from netbox_opennms.models import (
-    MonitoringAssignment,
-    MonitoringOverride,
-    MonitoringProfile,
-)
+from netbox_opennms.models import MonitoringOverride, Requisition
 from netbox_opennms.template_content import (
     DeviceSyncStatusPanel,
     VirtualMachineSyncStatusPanel,
@@ -42,9 +38,8 @@ class ObservabilityTest(TestCase):
         cls.role = DeviceRole.objects.create(name="Router", slug="router")
         mfr = Manufacturer.objects.create(name="Acme", slug="acme")
         cls.dt = DeviceType.objects.create(manufacturer=mfr, model="M1", slug="m1")
-        cls.profile = MonitoringProfile.objects.create(name="Network device")
-        cls.assignment = MonitoringAssignment.objects.create(
-            profile=cls.profile, site=cls.site, role=cls.role
+        cls.requisition = Requisition.objects.create(
+            name=FS, filter_params={"site": ["raleigh"], "role": ["router"]}
         )
         cls.device = cls._device("rtr-1", "10.0.0.1/24")
         cls.user = User.objects.create_superuser(username="super", password="pw")
@@ -71,7 +66,7 @@ class ObservabilityTest(TestCase):
         status = sync_status_for(self.device)
         self.assertEqual(status["foreign_source"], FS)
         self.assertTrue(status["governed"])
-        self.assertEqual(status["assignment"], self.assignment)
+        self.assertEqual(status["requisition"], self.requisition)
         self.assertIsNone(status["job"])
 
     def test_excluded_override(self):
@@ -79,6 +74,9 @@ class ObservabilityTest(TestCase):
         status = sync_status_for(self.device)
         self.assertTrue(status["excluded"])
         self.assertFalse(status["governed"])
+        # Excluded objects still surface their claiming Requisition + FS (review #9).
+        self.assertEqual(status["requisition"], self.requisition)
+        self.assertEqual(status["foreign_source"], FS)
 
     def test_ungoverned_device(self):
         other = self._device(
@@ -88,7 +86,7 @@ class ObservabilityTest(TestCase):
         )
         status = sync_status_for(other)
         self.assertFalse(status["governed"])
-        self.assertIsNone(status["assignment"])
+        self.assertIsNone(status["requisition"])
 
     def test_completed_job_outcome(self):
         self._completed_job()

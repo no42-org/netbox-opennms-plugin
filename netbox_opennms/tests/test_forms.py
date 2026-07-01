@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: MIT
 """Form-layer tests for the Epic 5 models (override IP ownership)."""
 
+from core.models import ObjectType
 from dcim.models import (
     Device,
     DeviceRole,
@@ -11,9 +12,10 @@ from dcim.models import (
     Site,
 )
 from django.test import TestCase
+from extras.models import SavedFilter
 from ipam.models import IPAddress
 
-from netbox_opennms.forms import MonitoringOverrideForm
+from netbox_opennms.forms import MonitoringOverrideForm, RequisitionForm
 
 
 class MonitoringOverrideFormTest(TestCase):
@@ -64,3 +66,50 @@ class MonitoringOverrideFormTest(TestCase):
     def test_exactly_one_target_required(self):
         form = MonitoringOverrideForm(data={"exclude": False, "location": ""})
         self.assertFalse(form.is_valid())
+
+
+class RequisitionSavedFilterImportTest(TestCase):
+    def _form(self, **overrides):
+        data = {
+            "name": "core-switches",
+            "priority": 100,
+            "object_types": "device",
+            "filter_params": "{}",
+            "scan_interval": "1d",
+            "default_interfaces": "primary",
+        }
+        data.update(overrides)
+        return RequisitionForm(data=data)
+
+    def test_import_copies_saved_filter_parameters(self):
+        saved = SavedFilter.objects.create(
+            name="Switches", slug="switches", parameters={"role": ["switch"]}
+        )
+        saved.object_types.set([ObjectType.objects.get_for_model(Device)])
+        form = self._form(import_from_saved_filter=saved.pk)
+        self.assertTrue(form.is_valid(), form.errors)
+        # One-shot copy: the empty filter is replaced by the Saved Filter's params.
+        self.assertEqual(form.cleaned_data["filter_params"], {"role": ["switch"]})
+
+    def test_import_and_typed_filter_conflict_is_rejected(self):
+        # Picking a Saved Filter AND typing a filter is ambiguous — reject, don't
+        # silently discard the typed one (review #5).
+        saved = SavedFilter.objects.create(
+            name="Switches", slug="switches", parameters={"role": ["switch"]}
+        )
+        saved.object_types.set([ObjectType.objects.get_for_model(Device)])
+        form = self._form(
+            import_from_saved_filter=saved.pk, filter_params='{"role": ["router"]}'
+        )
+        self.assertFalse(form.is_valid())
+        self.assertIn("import_from_saved_filter", form.errors)
+
+    def test_import_of_empty_saved_filter_is_still_guarded(self):
+        # Importing a Saved Filter with no effective constraint is rejected (H1).
+        saved = SavedFilter.objects.create(
+            name="Everything", slug="everything", parameters={}
+        )
+        saved.object_types.set([ObjectType.objects.get_for_model(Device)])
+        form = self._form(import_from_saved_filter=saved.pk)
+        self.assertFalse(form.is_valid())
+        self.assertIn("filter_params", form.errors)

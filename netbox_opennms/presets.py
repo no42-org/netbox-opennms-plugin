@@ -1,11 +1,13 @@
 # Copyright 2026 Ronny Trommer <ronny@no42.org>
 # SPDX-License-Identifier: MIT
-"""Detector/policy preset registry (Epic 5).
+"""Detector/policy preset registry.
 
 Maps a preset key (see ``choices.DetectorPresetChoices`` / ``PolicyPresetChoices``)
-to its OpenNMS class and default parameters. A Monitoring Profile stores the
-resolved class + parameters, so a profile stays self-contained even if a preset
-later changes.
+to its OpenNMS class and default parameters. A **known** preset OWNS the rule
+class: a Requisition's detector/policy re-derives its class from the preset on
+save (``models._apply_preset``), so it tracks the registry. Default parameters
+are seeded once (when the rule has none); a preset the registry doesn't know
+(e.g. admin-extended) leaves an existing freeform class untouched.
 
 WARNING: these class names and parameters are an OpenNMS-version contract. They
 are a first cut and MUST be confirmed by the live ``make integration`` round-trip
@@ -63,16 +65,12 @@ DETECTOR_PRESETS = {
 }
 
 # preset key -> {class, parameters (defaults incl. matchBehavior), schema}
+# One entry per built-in OpenNMS provisioning policy class. The class names +
+# parameters are an OpenNMS-version contract (Horizon 36) — a first cut that MUST
+# be confirmed by the live ``make integration`` round-trip before shipping.
 _MATCH = ("matchBehavior", "Match behavior", "ALL_PARAMETERS")
 POLICY_PRESETS = {
-    "set-category": {
-        "class": f"{_POLICY}.NodeCategorySettingPolicy",
-        "parameters": {"matchBehavior": "ALL_PARAMETERS"},
-        "schema": [("category", "Category", ""), _MATCH],
-        # The category to assign is node/site-specific — no default; require it.
-        "required": ["category"],
-    },
-    "manage-ip-interfaces": {
+    "match-ip-interface": {
         "class": f"{_POLICY}.MatchingIpInterfacePolicy",
         "parameters": {
             "action": "DO_NOT_PERSIST",
@@ -80,13 +78,47 @@ POLICY_PRESETS = {
         },
         "schema": [("action", "Action", "DO_NOT_PERSIST"), _MATCH],
     },
-    "snmp-collection": {
+    "match-snmp-interface": {
         "class": f"{_POLICY}.MatchingSnmpInterfacePolicy",
         "parameters": {
             "action": "DISABLE_COLLECTION",
             "matchBehavior": "ALL_PARAMETERS",
         },
         "schema": [("action", "Action", "DISABLE_COLLECTION"), _MATCH],
+    },
+    "script-policy": {
+        "class": f"{_POLICY}.ScriptPolicy",
+        "parameters": {},
+        "schema": [("script", "Script name", "")],
+        # ScriptPolicy runs a named provisioning script — no default; require it.
+        "required": ["script"],
+    },
+    "set-interface-metadata": {
+        "class": f"{_POLICY}.InterfaceMetadataSettingPolicy",
+        "parameters": {"matchBehavior": "ALL_PARAMETERS"},
+        "schema": [
+            ("metadataKey", "Metadata key", ""),
+            ("metadataValue", "Metadata value", ""),
+            _MATCH,
+        ],
+        "required": ["metadataKey", "metadataValue"],
+    },
+    "set-node-category": {
+        "class": f"{_POLICY}.NodeCategorySettingPolicy",
+        "parameters": {"matchBehavior": "ALL_PARAMETERS"},
+        "schema": [("category", "Category", ""), _MATCH],
+        # The category to assign is node/site-specific — no default; require it.
+        "required": ["category"],
+    },
+    "set-node-metadata": {
+        "class": f"{_POLICY}.NodeMetadataSettingPolicy",
+        "parameters": {"matchBehavior": "ALL_PARAMETERS"},
+        "schema": [
+            ("metadataKey", "Metadata key", ""),
+            ("metadataValue", "Metadata value", ""),
+            _MATCH,
+        ],
+        "required": ["metadataKey", "metadataValue"],
     },
 }
 

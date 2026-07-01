@@ -27,19 +27,21 @@ bare ``202`` from import is "accepted for import", never "provisioned".
 from core.choices import JobStatusChoices
 from core.exceptions import JobFailed
 from core.models import Job
+from dcim.models import Device
 from django.contrib.contenttypes.models import ContentType
 from django_pglocks import advisory_lock
 from netbox.jobs import JobRunner, system_job
 from netbox.plugins import get_plugin_config
+from virtualization.models import VirtualMachine
 
 from .client import OpenNMSClient, OpenNMSError
-from .derivation import foreign_source_for, validate_location_name
+from .derivation import validate_location_name
 from .membership import (
-    governing_assignment,
+    governing_requisition,
     monitored_foreign_sources,
     resolve,
 )
-from .models import MonitoringOverride
+from .models import DeployedForeignSource, MonitoringOverride
 from .translation import (
     RenderError,
     render_foreign_source_definition,
@@ -184,7 +186,7 @@ class SyncForeignSourceJob(JobRunner):
         nodes = resolution.nodes if resolution is not None else []
         locations = {default_location}
         if resolution is not None:
-            locations.add(resolution.assignment.location)
+            locations.add(resolution.requisition.location)
             locations.update(node.location for node in nodes)
 
         try:
@@ -193,7 +195,7 @@ class SyncForeignSourceJob(JobRunner):
             )
             fs_xml = (
                 render_foreign_source_definition(
-                    foreign_source, resolution.assignment.profile
+                    foreign_source, resolution.requisition
                 )
                 if resolution is not None
                 else None
@@ -210,6 +212,11 @@ class SyncForeignSourceJob(JobRunner):
                     client.post_foreign_source(fs_xml)
                 client.post_requisition(requisition_xml)
                 client.import_requisition(foreign_source, rescan_existing=rescan)
+                # Record ownership so the reconciler can find this FS as an orphan
+                # later even though its (user-chosen) name has no netbox. prefix.
+                # Only when we actually pushed nodes — an empty push is a teardown.
+                if nodes:
+                    DeployedForeignSource.objects.get_or_create(name=foreign_source)
                 # Best-effort advisory (FR-5/AD-16): warn on an unknown location.
                 try:
                     for location in unknown_locations(client, locations):
@@ -219,16 +226,19 @@ class SyncForeignSourceJob(JobRunner):
                         )
                 except Exception:
                     pass
-                # An ungoverned Remove (the drift reconciler, or a manual purge of
-                # an orphaned Foreign Source): the nodes are now cleared, so also
-                # drop the requisition + foreign-source shell — else the empty
-                # requisition lingers in OpenNMS's list and the reconciler keeps
-                # re-finding it every interval. Best-effort: a 404/transient here
-                # must not fail an otherwise-successful Remove.
-                if resolution is None and allow_empty:
+                # A Remove that resolved to ZERO nodes (a deleted/renamed Requisition,
+                # or one that now matches nothing): the nodes are cleared, so also
+                # drop the requisition + foreign-source shell AND the ownership record
+                # — else the empty requisition lingers in OpenNMS and the reconciler
+                # re-Removes it every interval forever (review #3). Best-effort: a
+                # 404/transient here must not fail an otherwise-successful Remove.
+                if allow_empty and not nodes:
                     try:
                         client.delete_requisition(foreign_source)
                         client.delete_foreign_source(foreign_source)
+                        DeployedForeignSource.objects.filter(
+                            name=foreign_source
+                        ).delete()
                     except OpenNMSError as exc:
                         self.logger.warning(
                             f"could not purge orphan shell {foreign_source}: {exc}"
@@ -285,29 +295,29 @@ def sync_status_for(target):
     """Last-sync state for a Device/VM — the single source the Device/VM template
     extension renders (Story 4.2).
 
-    Derives the object's Foreign Source, looks up whether a Monitoring Assignment
-    governs it (and whether an override excludes it), and attaches the latest Job
-    for that Foreign Source. Returns ``None`` for a missing or non-Device/VM
+    Runs the priority resolver to find the Requisition that governs the object (if
+    any) and whether an override excludes it, and attaches the latest Job for that
+    Requisition's Foreign Source. Returns ``None`` for a missing or non-Device/VM
     target.
     """
-    if target is None:
+    if target is None or not isinstance(target, (Device, VirtualMachine)):
         return None
-    try:
-        foreign_source = foreign_source_for(target)
-    except TypeError:
-        return None
-    assignment = governing_assignment(foreign_source)
+    # governing_requisition returns the CLAIMING requisition even for an excluded
+    # object, so the panel keeps the Foreign Source + last-sync Job (review #9);
+    # `governed` (actively monitored) then excludes the excluded ones.
+    requisition = governing_requisition(target)
     content_type = ContentType.objects.get_for_model(type(target))
     override = MonitoringOverride.objects.filter(
         assigned_object_type=content_type, assigned_object_id=target.pk
     ).first()
     excluded = bool(override and override.exclude)
-    governed = assignment is not None and not excluded
-    job = latest_sync_job(foreign_source)
+    governed = requisition is not None and not excluded
+    foreign_source = requisition.name if requisition is not None else None
+    job = latest_sync_job(foreign_source) if foreign_source else None
     is_removal = bool(job) and job.name.endswith(" (remove)")
     return {
         "foreign_source": foreign_source,
-        "assignment": assignment,
+        "requisition": requisition,
         "governed": governed,
         "excluded": excluded,
         "job": job,
@@ -316,19 +326,19 @@ def sync_status_for(target):
 
 
 def orphaned_foreign_sources(client):
-    """Foreign Sources OpenNMS still holds that NetBox no longer governs.
+    """Foreign Sources OpenNMS holds that NetBox manages but no longer monitors.
 
-    The reconciliation core (pure given a ``client``, so it tests against a fake):
-    OpenNMS's ``netbox.*`` requisitions minus the set NetBox currently governs
-    (``monitored_foreign_sources`` — assignment + ≥1 member). Scoped to the
-    ``netbox.`` namespace so a non-managed requisition is never touched. Catches
-    every drift cause uniformly: last-member departure, role/site move (the old
-    Foreign Source), and assignment removal.
+    The reconciliation core (pure given a ``client``, so it tests against a fake).
+    Requisition names are user-chosen, so ownership is tracked in
+    ``DeployedForeignSource`` (written on each successful push) rather than a
+    ``netbox.`` name prefix (review #4): orphans = (OpenNMS requisitions ∩ our
+    managed names) − currently monitored. Scoped to managed names, so a requisition
+    NetBox never created is never touched. Catches every drift cause uniformly:
+    last-member departure, membership move, requisition rename, and deletion.
     """
-    deployed = {
-        fs for fs in client.list_requisition_names() if fs.startswith("netbox.")
-    }
-    return sorted(deployed - set(monitored_foreign_sources()))
+    deployed = set(client.list_requisition_names())
+    managed = set(DeployedForeignSource.objects.values_list("name", flat=True))
+    return sorted((deployed & managed) - set(monitored_foreign_sources()))
 
 
 @system_job(interval=RECONCILE_INTERVAL_MINUTES)

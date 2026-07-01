@@ -1,14 +1,16 @@
 # Copyright 2026 Ronny Trommer <ronny@no42.org>
 # SPDX-License-Identifier: MIT
-"""Plugin data models (Epic 5 — profile = reusable detector/policy template).
+"""Plugin data models (Requisition redesign).
 
-A **MonitoringProfile** is an object-independent template of OpenNMS detectors +
-policies + scan-interval (the foreign-source definition). It is **assigned** to a
-(site[, role]) scope via **MonitoringAssignment**; membership is a live NetBox
-query (the Devices/VMs in that site+role = one Foreign Source). A
-**MonitoringOverride** is an optional per-object exception (exclude / override
-management IP / override location / explicit services). See the OpenSpec change
-``rethink-monitoring-profiles`` for the full design (incl. the AD-11 reversal).
+A **Requisition** is one user-named OpenNMS Foreign Source: it owns the
+foreign-source *definition* (inline detectors + policies + scan-interval) and the
+*requisition* (a live NetBox **filter** over Devices/VMs → nodes → interfaces →
+services). Requisitions are resolved in **priority order** — the highest-priority
+Requisition whose filter matches an object claims it, and a node lives in exactly
+one Foreign Source. A **MonitoringOverride** is an optional per-object exception
+(exclude / override management IP / add interfaces / add-or-suppress services /
+override location). See the OpenSpec change ``requisition-redesign`` for the full
+design (R1–R8).
 """
 
 from django.contrib.contenttypes.fields import GenericForeignKey
@@ -20,10 +22,11 @@ from netbox.models import NetBoxModel
 from .choices import (
     DetectorPresetChoices,
     InterfaceScopeChoices,
+    ObjectTypeChoices,
     PolicyPresetChoices,
     ServiceChoices,
 )
-from .derivation import validate_location_name
+from .derivation import validate_location_name, validate_requisition_name
 from .presets import (
     detector_required_params,
     policy_required_params,
@@ -36,6 +39,14 @@ ASSIGNMENT_MODELS = models.Q(
     models.Q(app_label="dcim", model="device")
     | models.Q(app_label="virtualization", model="virtualmachine")
 )
+
+
+def _validate_service_names(names, field):
+    """Raise if any entry in *names* is not a known ``ServiceChoices`` value."""
+    valid = {value for value, _label in ServiceChoices()}
+    bad = [name for name in (names or []) if name not in valid]
+    if bad:
+        raise ValidationError({field: f"Unknown service name(s): {', '.join(bad)}."})
 
 
 def _require_preset_params(rule, required):
@@ -57,19 +68,31 @@ def _require_preset_params(rule, required):
         )
 
 
-class MonitoringProfile(NetBoxModel):
-    """A reusable OpenNMS provisioning template (detectors + policies + scan).
+class Requisition(NetBoxModel):
+    """A user-named OpenNMS Foreign Source (definition + filter-scoped requisition).
 
-    Object-independent: a few profiles (e.g. "Network device", "Server") are
-    authored once and assigned to many site/role scopes. Renders to a
-    foreign-source definition; OpenNMS then discovers services via the detectors
-    (reverses v1's AD-11 "explicit services only").
+    The **name** is the Foreign Source name (URL-path-safe, R1/H7). Membership is a
+    live NetBox **filter** over the selected ``object_types``; overlap between
+    Requisitions is resolved by **priority** (lower number wins, R3). It owns its
+    detectors/policies/scan-interval (the definition) and a set of declared
+    ``services`` applied to every member's interfaces (R5).
     """
 
     name = models.CharField(max_length=100, unique=True)
     description = models.CharField(max_length=200, blank=True)
-    # OpenNMS scan interval (a duration string, e.g. "1d", "30m"); how often
-    # detectors re-run. Meaningful again now that detection is on.
+    # Lower number = higher priority. Ordered + pk-tiebroken, but deliberately NOT
+    # a DB-unique constraint so a reorder can't throw an IntegrityError (R3/M6).
+    priority = models.PositiveIntegerField(default=100, db_index=True)
+    # Which NetBox object types this Requisition's filter draws from.
+    object_types = models.CharField(
+        max_length=10,
+        choices=ObjectTypeChoices,
+        default=ObjectTypeChoices.BOTH,
+    )
+    # NetBox FilterSet query params (e.g. {"role": ["switch"], "tag": ["critical"]})
+    # applied to the Device/VM filtersets to compute members (R2).
+    filter_params = models.JSONField(default=dict, blank=True)
+    # OpenNMS scan interval (a duration string, e.g. "1d", "30m").
     scan_interval = models.CharField(max_length=32, default="1d")
     # Which of a node's NetBox IPs become interfaces before per-object overrides.
     default_interfaces = models.CharField(
@@ -77,17 +100,41 @@ class MonitoringProfile(NetBoxModel):
         choices=InterfaceScopeChoices,
         default=InterfaceScopeChoices.PRIMARY,
     )
+    # Declared service names applied to every member's interfaces (R5); a
+    # per-object override may add extra or suppress one of these.
+    services = models.JSONField(default=list, blank=True)
+    # OpenNMS monitoring location (which Minion polls these nodes). Blank falls
+    # back to the configured default location at render time.
+    location = models.CharField(max_length=255, blank=True, default="")
 
     class Meta:
-        ordering = ("name",)
-        verbose_name = "monitoring profile"
-        verbose_name_plural = "monitoring profiles"
+        ordering = ("priority", "pk")
+        verbose_name = "requisition"
+        verbose_name_plural = "requisitions"
 
     def __str__(self):
         return self.name
 
     def get_absolute_url(self):
-        return reverse("plugins:netbox_opennms:monitoringprofile", args=[self.pk])
+        return reverse("plugins:netbox_opennms:requisition", args=[self.pk])
+
+    def clean(self):
+        super().clean()
+        try:
+            validate_requisition_name(self.name)
+        except ValueError as exc:
+            raise ValidationError({"name": str(exc)}) from exc
+        try:
+            validate_location_name(self.location)
+        except ValueError as exc:
+            raise ValidationError({"location": str(exc)}) from exc
+        if not isinstance(self.filter_params, dict):
+            raise ValidationError({"filter_params": "Filter must be a mapping."})
+        # Empty / no-effective-key filters are rejected in the resolution layer
+        # (which knows the filtersets' keys); the model only guards the shape.
+        if not isinstance(self.services, list):
+            raise ValidationError({"services": "Services must be a list."})
+        _validate_service_names(self.services, "services")
 
 
 class _ProvisioningRule(NetBoxModel):
@@ -107,18 +154,18 @@ class _ProvisioningRule(NetBoxModel):
 
 
 class MonitoringDetector(_ProvisioningRule):
-    """A detector on a profile's foreign-source definition (auto-discovers services)."""
+    """A detector on a Requisition's definition (OpenNMS auto-discovers services)."""
 
-    profile = models.ForeignKey(
-        to=MonitoringProfile, on_delete=models.CASCADE, related_name="detectors"
+    requisition = models.ForeignKey(
+        to=Requisition, on_delete=models.CASCADE, related_name="detectors"
     )
     preset = models.CharField(max_length=50, choices=DetectorPresetChoices, blank=True)
 
     class Meta:
-        ordering = ("profile", "name")
+        ordering = ("requisition", "name")
         constraints = [
             models.UniqueConstraint(
-                fields=("profile", "name"),
+                fields=("requisition", "name"),
                 name="%(app_label)s_%(class)s_unique_name",
             ),
         ]
@@ -126,13 +173,18 @@ class MonitoringDetector(_ProvisioningRule):
         verbose_name_plural = "monitoring detectors"
 
     def _apply_preset(self):
-        # A preset fills the class (and seeds defaults) so the rule is
-        # self-contained. Done in both clean() and save() so the resolved class is
-        # persisted on EVERY path — the API/bulk paths don't run clean().
-        if self.preset and not self.rule_class:
+        # A KNOWN preset owns the class: it is (re)derived from the preset and the
+        # user can't override it. An unknown preset (admin-extended via FIELD_CHOICES
+        # with no registry entry) leaves any existing class untouched — never blanked.
+        # Defaults are seeded only when parameters are empty, so a user-tuned/-deleted
+        # parameter is not resurrected. Applied in both clean() and save() so it holds
+        # on every path — the API/bulk paths don't run clean().
+        if self.preset:
             cls, defaults = resolve_detector(self.preset)
-            self.rule_class = cls or ""
-            self.parameters = {**defaults, **(self.parameters or {})}
+            if cls:
+                self.rule_class = cls
+                if not self.parameters:
+                    self.parameters = dict(defaults)
 
     def clean(self):
         super().clean()
@@ -152,18 +204,18 @@ class MonitoringDetector(_ProvisioningRule):
 
 
 class MonitoringPolicy(_ProvisioningRule):
-    """A policy on a profile's foreign-source definition (categories, interfaces…)."""
+    """A policy on a Requisition's definition (categories, interface management…)."""
 
-    profile = models.ForeignKey(
-        to=MonitoringProfile, on_delete=models.CASCADE, related_name="policies"
+    requisition = models.ForeignKey(
+        to=Requisition, on_delete=models.CASCADE, related_name="policies"
     )
     preset = models.CharField(max_length=50, choices=PolicyPresetChoices, blank=True)
 
     class Meta:
-        ordering = ("profile", "name")
+        ordering = ("requisition", "name")
         constraints = [
             models.UniqueConstraint(
-                fields=("profile", "name"),
+                fields=("requisition", "name"),
                 name="%(app_label)s_%(class)s_unique_name",
             ),
         ]
@@ -171,10 +223,13 @@ class MonitoringPolicy(_ProvisioningRule):
         verbose_name_plural = "monitoring policies"
 
     def _apply_preset(self):
-        if self.preset and not self.rule_class:
+        # A known preset owns the class (see MonitoringDetector._apply_preset).
+        if self.preset:
             cls, defaults = resolve_policy(self.preset)
-            self.rule_class = cls or ""
-            self.parameters = {**defaults, **(self.parameters or {})}
+            if cls:
+                self.rule_class = cls
+                if not self.parameters:
+                    self.parameters = dict(defaults)
 
     def clean(self):
         super().clean()
@@ -193,74 +248,13 @@ class MonitoringPolicy(_ProvisioningRule):
         return reverse("plugins:netbox_opennms:monitoringpolicy", args=[self.pk])
 
 
-class MonitoringAssignment(NetBoxModel):
-    """Binds a Monitoring Profile to a (site[, role]) scope = one Foreign Source.
-
-    ``role`` NULL means site-level (applies to every role in the site). Exactly
-    one assignment may govern a given (site, role) — including the site-level row
-    — enforced with a NULLS-NOT-DISTINCT unique constraint. The (site, role) that
-    governs an object resolves to the more specific assignment (AD/D9).
-    """
-
-    profile = models.ForeignKey(
-        to=MonitoringProfile, on_delete=models.PROTECT, related_name="assignments"
-    )
-    site = models.ForeignKey(to="dcim.Site", on_delete=models.CASCADE, related_name="+")
-    role = models.ForeignKey(
-        to="dcim.DeviceRole",
-        on_delete=models.CASCADE,
-        related_name="+",
-        null=True,
-        blank=True,
-    )
-    # OpenNMS monitoring location (which Minion polls these nodes). Blank falls
-    # back to the configured default location at render time.
-    location = models.CharField(max_length=255, blank=True, default="")
-
-    class Meta:
-        ordering = ("site", "role")
-        # Two partial constraints, not one ``nulls_distinct=False`` — the latter is
-        # PostgreSQL 15+ only and is SILENTLY IGNORED on PG14 (a NetBox-supported
-        # version), which would let two site-level rows coexist. This pair is
-        # portable to PG12+: one unique (site, role) for concrete roles, and at
-        # most one role-NULL (site-level) row per site.
-        constraints = [
-            models.UniqueConstraint(
-                fields=("site", "role"),
-                condition=models.Q(role__isnull=False),
-                name="%(app_label)s_%(class)s_unique_site_role",
-            ),
-            models.UniqueConstraint(
-                fields=("site",),
-                condition=models.Q(role__isnull=True),
-                name="%(app_label)s_%(class)s_unique_site_level",
-            ),
-        ]
-        verbose_name = "monitoring assignment"
-        verbose_name_plural = "monitoring assignments"
-
-    def __str__(self):
-        scope = self.site.name
-        if self.role is not None:
-            scope = f"{self.site.name} / {self.role}"
-        return f"{self.profile} → {scope}"
-
-    def get_absolute_url(self):
-        return reverse("plugins:netbox_opennms:monitoringassignment", args=[self.pk])
-
-    def clean(self):
-        super().clean()
-        try:
-            validate_location_name(self.location)
-        except ValueError as exc:
-            raise ValidationError({"location": str(exc)}) from exc
-
-
 class MonitoringOverride(NetBoxModel):
-    """An optional per-object exception to its scope's defaults (Epic 5).
+    """An optional per-object exception to its Requisition's defaults (R5/R6/H3).
 
-    Absent an override, a matching Device/VM is monitored by its scope. One
-    override per object (the GFK unique constraint also indexes the GFK).
+    Absent an override, a matching Device/VM is monitored by the Requisition that
+    claims it. One override per object (the GFK unique constraint also indexes the
+    GFK). Resolution applies an override by object (via the GFK), so an override
+    on an object that no Requisition currently claims is simply never applied.
     """
 
     assigned_object_type = models.ForeignKey(
@@ -274,7 +268,8 @@ class MonitoringOverride(NetBoxModel):
         ct_field="assigned_object_type",
         fk_field="assigned_object_id",
     )
-    # Drop this object from monitoring entirely.
+    # Drop this object from monitoring entirely (monitored nowhere — no
+    # fall-through to a lower-priority Requisition, M2).
     exclude = models.BooleanField(default=False)
     # Override the management (primary) interface; null = use the object's primary_ip.
     management_ip = models.ForeignKey(
@@ -288,7 +283,10 @@ class MonitoringOverride(NetBoxModel):
     additional_ips = models.ManyToManyField(
         to="ipam.IPAddress", related_name="+", blank=True
     )
-    # Override the OpenNMS location for just this object; blank = use the scope's.
+    # Declared-service names to suppress for this object (R5); effective services =
+    # (requisition.services ∪ added MonitoredService) − suppressed_services.
+    suppressed_services = models.JSONField(default=list, blank=True)
+    # Override the OpenNMS location for just this object; blank = use the Requisition's.
     location = models.CharField(max_length=255, blank=True, default="")
 
     class Meta:
@@ -316,14 +314,19 @@ class MonitoringOverride(NetBoxModel):
             validate_location_name(self.location)
         except ValueError as exc:
             raise ValidationError({"location": str(exc)}) from exc
+        if not isinstance(self.suppressed_services, list):
+            raise ValidationError(
+                {"suppressed_services": "Suppressed services must be a list."}
+            )
+        _validate_service_names(self.suppressed_services, "suppressed_services")
 
 
 class MonitoredService(NetBoxModel):
-    """An explicit service on a Monitoring Override's interface (Epic 5).
+    """An explicit service ADDED on a Monitoring Override's interface (R5).
 
-    Detectors are the default service source; this is the rare additive exception
-    ("also monitor X here"). ``name`` is drawn from the admin-extensible
-    ``ServiceChoices``.
+    The Requisition's declared services are the default; this is the additive
+    per-object exception ("also monitor X on this IP"). ``name`` is drawn from the
+    admin-extensible ``ServiceChoices``.
     """
 
     override = models.ForeignKey(
@@ -361,6 +364,28 @@ class MonitoredService(NetBoxModel):
             raise ValidationError(
                 {"ip_address": "Must be one of the override's IPs."}
             )
+
+
+class DeployedForeignSource(models.Model):
+    """A Foreign Source name NetBox has pushed to OpenNMS — the reconciler's
+    ownership record (review #4).
+
+    Requisition names are user-chosen, so the drift reconciler can't use a
+    ``netbox.`` prefix to tell ours from foreign requisitions. A row is written when
+    a sync succeeds and removed when the Foreign Source's shell is deleted, so
+    ``orphaned_foreign_sources`` scopes cleanup to exactly the names we manage and
+    never touches a requisition NetBox didn't create.
+    """
+
+    name = models.CharField(max_length=100, unique=True)
+
+    class Meta:
+        ordering = ("name",)
+        verbose_name = "deployed foreign source"
+        verbose_name_plural = "deployed foreign sources"
+
+    def __str__(self):
+        return self.name
 
 
 def object_ip_pks(target):

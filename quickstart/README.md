@@ -1,8 +1,8 @@
 # Quickstart: NetBox + the OpenNMS plugin (Web UI)
 
 A throwaway, single-command NetBox deployment with **netbox-opennms** installed,
-for manually exercising the plugin through the Web UI — create a Monitoring
-Profile, click **Sync to OpenNMS**, and watch the node appear. Optionally boots a
+for manually exercising the plugin through the Web UI — create a **Requisition**,
+click **Sync to OpenNMS**, and watch the node appear. Optionally boots a
 disposable OpenNMS Horizon 36 so the whole loop is self-contained.
 
 > ⚠️ For testing only — fixed throwaway secrets, no TLS, ephemeral data. Not for
@@ -33,16 +33,17 @@ docker compose logs -f netbox
 | NetBox | http://localhost:8000 | `admin` / `admin` |
 | OpenNMS *(with `--profile opennms`)* | http://localhost:8980/opennms | `admin` / `admin` |
 
-The plugin lives under **Plugins → Monitoring Profiles** (and a **OpenNMS Sync
-Status** panel appears on Device/VM pages). Direct links:
+The plugin lives under **Plugins → Requisitions** (and a **OpenNMS Sync Status**
+panel appears on Device/VM pages). Direct links:
 
-- Monitoring Profiles — http://localhost:8000/plugins/opennms/monitoring-profiles/
+- Requisitions — http://localhost:8000/plugins/opennms/requisitions/
+- Sync preview — http://localhost:8000/plugins/opennms/sync/
 - OpenNMS connection test — http://localhost:8000/plugins/opennms/connection-test/
 
 ## Seed test data
 
-Once NetBox is up, load a set of sample Devices, VMs, and Monitoring Profiles so
-there's something to sync immediately:
+Once NetBox is up, load a set of sample Devices, VMs, and Requisitions so there's
+something to sync immediately:
 
 ```bash
 ./seed.sh
@@ -52,27 +53,34 @@ there's something to sync immediately:
 
 It's **idempotent** (everything is `get_or_create`'d). It builds 3 sites × a few
 roles, devices with multiple interfaces + additional IPs, VMs on a site-scoped
-cluster, monitored services, and 8 Monitoring Profiles — including a multi-node
-Foreign Source mixing devices **and** VMs (`netbox.raleigh.router`), a profile
-with an OpenNMS-unknown location (trips the no-Minion warning), a disabled
-profile, and one unmonitored object. Edit [`seed.py`](./seed.py) to taste.
+cluster, and 5 **Requisitions** (each a site+role filter with inline detectors and
+declared services) — including a multi-node Foreign Source mixing devices **and**
+VMs (`netbox.raleigh.router`), a requisition with an OpenNMS-unknown location
+(trips the no-Minion warning), per-object overrides (an excluded object, a
+suppressed service, extra interfaces), and one unmonitored object. Edit
+[`seed.py`](./seed.py) to taste.
 
-After seeding, **Plugins → Monitoring Profiles** lists them; try **Sync all**, or
-change a device's site/role and re-sync to watch a Foreign Source *move*.
+After seeding, **Plugins → Requisitions** lists them; try **Sync all** (or a
+per-requisition **Dry run** first), or change a device's role and re-sync to watch
+it move between Foreign Sources.
 
 ## Do a sync (Web UI)
 
 1. *(or run [`./seed.sh`](#seed-test-data) and skip to step 4)* **Create the
    prerequisites** (Organization/DCIM): a Site, a Device Role, a Manufacturer +
-   Device Type, then a **Device** in that site/role.
-2. Add an **Interface** to the device and assign it an **IP address**.
-3. **Plugins → Monitoring Profiles → Add**: pick the device as the object, set its
-   **Management IP** (optionally add monitored services / a location).
-4. Open the profile (or the Device page) and click **Sync to OpenNMS**.
+   Device Type, then a **Device** in that site/role with a **primary IP** (add an
+   Interface and assign it an IP address, then set it as the device's primary IP).
+2. **Plugins → Requisitions → Add**: name it (e.g. `core-switches`), set a
+   **filter** that selects your device — e.g. `{"role": ["<role-slug>"]}`, or
+   **Import from Saved Filter** — and add a detector (e.g. ICMP) and declared
+   services.
+3. Open the Requisition and click **Dry run** to preview what a Sync would push.
+4. Click **Sync to OpenNMS** (on the Requisition, the Sync preview, or the Device
+   page).
 5. The **OpenNMS Sync Status** panel shows `submitted` → `succeeded-accepted`
    (the worker runs the job). With the bundled OpenNMS, open its UI → **Info →
-   Nodes** and you'll see the device, grouped under Foreign Source
-   `netbox.<site>.<role>`.
+   Nodes** and you'll see the device, grouped under the Requisition's Foreign
+   Source name.
 
 > Test connectivity first at
 > http://localhost:8000/plugins/opennms/connection-test/ — it probes OpenNMS
@@ -91,8 +99,8 @@ and trigger imports.
   `PYTHONPATH`, reusing the image's bundled `requests`/`lxml`. No rebuild on code
   changes — restart the `netbox` + `netbox-worker` containers to pick them up.
 - `netbox` runs the web UI (gunicorn); `netbox-worker` runs `manage.py rqworker`
-  — **required**, because Sync/Remove/Move run as background jobs (the profile
-  page warns when no worker is running).
+  — **required**, because Sync/Remove/Move run as background jobs (the Requisition
+  and Sync pages warn when no worker is running).
 - `configuration/plugins.py` is mounted at `/etc/netbox/config/plugins.py` to set
   `PLUGINS` + `PLUGINS_CONFIG`.
 

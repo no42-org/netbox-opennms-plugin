@@ -44,14 +44,15 @@ from netbox_opennms.client import OpenNMSClient, OpenNMSHTTPError
 from netbox_opennms.derivation import foreign_id_for
 from netbox_opennms.membership import resolve
 from netbox_opennms.models import (
-    MonitoringAssignment,
     MonitoringDetector,
     MonitoringPolicy,
-    MonitoringProfile,
+    Requisition,
 )
 from netbox_opennms.presets import (
     DETECTOR_PRESETS,
     POLICY_PRESETS,
+    detector_required_params,
+    policy_required_params,
     resolve_detector,
     resolve_policy,
 )
@@ -101,19 +102,24 @@ class OpenNMSRoundTripTest(TestCase):
             except requests.RequestException:
                 pass
 
-    def _profile_with_icmp(self):
-        profile = MonitoringProfile.objects.create(name="CI Network device")
+    def _requisition_with_icmp(self):
+        requisition = Requisition.objects.create(
+            name=FS,
+            filter_params={"site": ["citest"], "role": ["router"]},
+            services=["ICMP"],
+            location=LOCATION,
+        )
         cls, params = resolve_detector("icmp")
         MonitoringDetector.objects.create(
-            profile=profile,
+            requisition=requisition,
             name="ICMP",
             preset="icmp",
             rule_class=cls,
             parameters=params,
         )
-        return profile
+        return requisition
 
-    def _device_node(self, profile):
+    def _device_node(self):
         site = Site.objects.create(name="CI Test", slug="citest")
         role = DeviceRole.objects.create(name="Router", slug="router")
         mfr = Manufacturer.objects.create(name="Acme", slug="acme")
@@ -127,9 +133,6 @@ class OpenNMSRoundTripTest(TestCase):
         )
         device.primary_ip4 = ip
         device.save()
-        MonitoringAssignment.objects.create(
-            profile=profile, site=site, role=role, location=LOCATION
-        )
         return device
 
     def _poll_for_node(self, foreign_id):
@@ -154,12 +157,12 @@ class OpenNMSRoundTripTest(TestCase):
         return False
 
     def test_detector_preset_detects_icmp(self):
-        profile = self._profile_with_icmp()
-        device = self._device_node(profile)
+        requisition = self._requisition_with_icmp()
+        device = self._device_node()
         nodes = resolve(FS).nodes
         try:
             with self._client() as client:
-                fs_xml = render_foreign_source_definition(FS, profile)
+                fs_xml = render_foreign_source_definition(FS, requisition)
                 client.post_foreign_source(fs_xml)
                 client.post_requisition(render_requisition(FS, nodes))
                 response = client.import_requisition(FS, rescan_existing="true")
@@ -182,12 +185,12 @@ class OpenNMSRoundTripTest(TestCase):
         # holds (GET /rest/requisitions JSON shape) and delete the requisition +
         # foreign-source shell of an orphan. Validates list_requisition_names +
         # delete_requisition + delete_foreign_source against real H36.
-        profile = self._profile_with_icmp()
-        self._device_node(profile)
+        requisition = self._requisition_with_icmp()
+        self._device_node()
         nodes = resolve(FS).nodes
         try:
             with self._client() as client:
-                fs_xml = render_foreign_source_definition(FS, profile)
+                fs_xml = render_foreign_source_definition(FS, requisition)
                 client.post_foreign_source(fs_xml)
                 client.post_requisition(render_requisition(FS, nodes))
                 client.import_requisition(FS, rescan_existing="true")
@@ -206,23 +209,33 @@ class OpenNMSRoundTripTest(TestCase):
             self._delete_foreign_source()
 
     def test_all_presets_accepted_and_round_trip(self):
-        profile = MonitoringProfile.objects.create(name="CI All presets")
+        requisition = Requisition.objects.create(
+            name="netbox.citest.allpresets", filter_params={"site": ["citest"]}
+        )
         for key in DETECTOR_PRESETS:
             cls, params = resolve_detector(key)
+            # Supply a value for any class-required param (e.g. TcpDetector port),
+            # else OpenNMS would reject the definition (the model's clean() guard).
+            for req_key in detector_required_params(key):
+                params.setdefault(req_key, "8080")
             MonitoringDetector.objects.create(
-                profile=profile, name=key, preset=key, rule_class=cls, parameters=params
+                requisition=requisition, name=key, preset=key,
+                rule_class=cls, parameters=params,
             )
         for key in POLICY_PRESETS:
             cls, params = resolve_policy(key)
+            for req_key in policy_required_params(key):
+                params.setdefault(req_key, "citest")
             MonitoringPolicy.objects.create(
-                profile=profile, name=key, preset=key, rule_class=cls, parameters=params
+                requisition=requisition, name=key, preset=key,
+                rule_class=cls, parameters=params,
             )
         expected = {resolve_detector(k)[0] for k in DETECTOR_PRESETS}
         expected |= {resolve_policy(k)[0] for k in POLICY_PRESETS}
         try:
             with self._client() as client:
                 # Accepted by OpenNMS (XSD-valid for every preset's parameters).
-                fs_xml = render_foreign_source_definition(FS, profile)
+                fs_xml = render_foreign_source_definition(FS, requisition)
                 client.post_foreign_source(fs_xml)
             got = self._get(f"/rest/foreignSources/{quote(FS, safe='')}")
             self.assertEqual(got.status_code, 200)

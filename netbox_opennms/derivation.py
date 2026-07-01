@@ -26,6 +26,12 @@ from virtualization.models import VirtualMachine
 # Story 4.4 live round-trip), which is why the delimiter below is '.'.
 _FORBIDDEN_CHARS = set("/\\?*'\":")
 
+# A Requisition name is now USER-CHOSEN and goes straight into a REST URL path
+# (GET/POST /rest/requisitions/{name}), so the slug-era ``_FORBIDDEN_CHARS`` guard
+# is insufficient (R1/H7): whitespace and URL-significant characters must also be
+# rejected. This is the superset the Requisition name validator enforces.
+_NAME_FORBIDDEN_CHARS = _FORBIDDEN_CHARS | set("#%&+ \t\n\r")
+
 # OpenNMS Monitoring Location names: ASCII alphanumeric plus '-' and '.' (AD-9).
 # \A...\Z (not ^...$) so a trailing newline is rejected, not accepted.
 _LOCATION_ALLOWED = re.compile(r"\A[A-Za-z0-9.-]*\Z")
@@ -56,6 +62,27 @@ def validate_foreign_source_name(name):
         raise ValueError(
             f"Foreign Source name {name!r} contains forbidden characters: "
             f"{''.join(bad)}"
+        )
+    return name
+
+
+def validate_requisition_name(name):
+    """Raise ``ValueError`` if *name* is not a safe OpenNMS Foreign Source name (H7).
+
+    A Requisition's name IS the Foreign Source name and is placed directly into a
+    REST URL path, so it must reject whitespace and URL-significant characters in
+    addition to the OpenNMS-forbidden set. An empty name is rejected (a Foreign
+    Source must be named).
+    """
+    if not name or not name.strip():
+        raise ValueError("A Requisition name is required.")
+    bad = sorted(_NAME_FORBIDDEN_CHARS.intersection(name))
+    if bad:
+        # repr() already renders whitespace legibly (' ', '\t', '\n').
+        printable = ", ".join(repr(c) for c in bad)
+        raise ValueError(
+            f"Requisition name {name!r} contains characters that are not safe in "
+            f"an OpenNMS Foreign Source / URL: {printable}."
         )
     return name
 

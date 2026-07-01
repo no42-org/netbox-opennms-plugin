@@ -1,6 +1,6 @@
 # Copyright 2026 Ronny Trommer <ronny@no42.org>
 # SPDX-License-Identifier: MIT
-"""Tests for the Epic 5 data model: clean() rules, constraints, helpers."""
+"""Tests for the data model: clean() rules, constraints, helpers."""
 
 from dcim.models import (
     Device,
@@ -17,142 +17,103 @@ from ipam.models import IPAddress
 
 from netbox_opennms.models import (
     MonitoredService,
-    MonitoringAssignment,
     MonitoringDetector,
     MonitoringOverride,
     MonitoringPolicy,
-    MonitoringProfile,
+    Requisition,
     object_ip_pks,
     override_ip_pks,
 )
 
+FILTER = {"site": ["raleigh"], "role": ["router"]}
 
-class ProfileAndRuleTest(TestCase):
+
+class RequisitionAndRuleTest(TestCase):
     @classmethod
     def setUpTestData(cls):
-        cls.profile = MonitoringProfile.objects.create(name="Network device")
+        cls.req = Requisition.objects.create(
+            name="netbox.raleigh.router", filter_params=FILTER
+        )
 
-    def test_profile_str(self):
-        self.assertEqual(str(self.profile), "Network device")
+    def test_requisition_str(self):
+        self.assertEqual(str(self.req), "netbox.raleigh.router")
 
     def test_detector_preset_fills_class_and_params(self):
-        detector = MonitoringDetector(
-            profile=self.profile, name="ICMP", preset="icmp"
-        )
+        detector = MonitoringDetector(requisition=self.req, name="ICMP", preset="icmp")
         detector.clean()
         self.assertTrue(detector.rule_class.endswith("IcmpDetector"))
         self.assertIn("timeout", detector.parameters)
 
     def test_detector_user_params_win_over_preset_defaults(self):
         detector = MonitoringDetector(
-            profile=self.profile,
-            name="ICMP",
-            preset="icmp",
+            requisition=self.req, name="ICMP", preset="icmp",
             parameters={"timeout": "9000"},
         )
         detector.clean()
         self.assertEqual(detector.parameters["timeout"], "9000")
 
     def test_detector_save_persists_preset_class(self):
-        # save() resolves the preset (not just clean()), so the API/bulk paths
-        # that skip clean() still persist a non-empty rule_class.
         detector = MonitoringDetector.objects.create(
-            profile=self.profile, name="ICMP", preset="icmp"
+            requisition=self.req, name="ICMP", preset="icmp"
         )
         detector.refresh_from_db()
         self.assertTrue(detector.rule_class.endswith("IcmpDetector"))
         self.assertIn("timeout", detector.parameters)
 
     def test_detector_without_preset_or_class_is_invalid(self):
-        detector = MonitoringDetector(profile=self.profile, name="x")
+        detector = MonitoringDetector(requisition=self.req, name="x")
         with self.assertRaises(ValidationError):
             detector.clean()
 
     def test_policy_preset_fills_class(self):
         policy = MonitoringPolicy(
-            profile=self.profile,
-            name="cat",
-            preset="set-category",
+            requisition=self.req, name="cat", preset="set-category",
             parameters={"category": "Routers"},
         )
         policy.clean()
         self.assertTrue(policy.rule_class.endswith("NodeCategorySettingPolicy"))
 
     def test_tcp_preset_requires_port(self):
-        # TcpDetector has no default port — clean() rejects the bare preset.
-        bad = MonitoringDetector(profile=self.profile, name="tcp", preset="tcp")
+        bad = MonitoringDetector(requisition=self.req, name="tcp", preset="tcp")
         with self.assertRaises(ValidationError):
             bad.clean()
         ok = MonitoringDetector(
-            profile=self.profile,
-            name="tcp2",
-            preset="tcp",
+            requisition=self.req, name="tcp2", preset="tcp",
             parameters={"port": "8080"},
-        )
-        ok.clean()  # with the required port — valid
-
-    def test_set_category_preset_requires_category(self):
-        bad = MonitoringPolicy(
-            profile=self.profile, name="cat", preset="set-category"
-        )
-        with self.assertRaises(ValidationError):
-            bad.clean()
-        ok = MonitoringPolicy(
-            profile=self.profile,
-            name="cat2",
-            preset="set-category",
-            parameters={"category": "Routers"},
         )
         ok.clean()
 
-    def test_detector_unique_per_profile_name(self):
+    def test_set_category_preset_requires_category(self):
+        bad = MonitoringPolicy(requisition=self.req, name="cat", preset="set-category")
+        with self.assertRaises(ValidationError):
+            bad.clean()
+
+    def test_detector_unique_per_requisition_name(self):
         MonitoringDetector.objects.create(
-            profile=self.profile, name="ICMP", rule_class="X"
+            requisition=self.req, name="ICMP", rule_class="X"
         )
         with transaction.atomic(), self.assertRaises(IntegrityError):
             MonitoringDetector.objects.create(
-                profile=self.profile, name="ICMP", rule_class="Y"
+                requisition=self.req, name="ICMP", rule_class="Y"
             )
 
 
-class AssignmentTest(TestCase):
-    @classmethod
-    def setUpTestData(cls):
-        cls.profile = MonitoringProfile.objects.create(name="P")
-        cls.site = Site.objects.create(name="Raleigh", slug="raleigh")
-        cls.role = DeviceRole.objects.create(name="Router", slug="router")
-
-    def test_str(self):
-        assignment = MonitoringAssignment.objects.create(
-            profile=self.profile, site=self.site, role=self.role
-        )
-        self.assertEqual(str(assignment), "P → Raleigh / Router")
-
-    def test_invalid_location_rejected(self):
-        assignment = MonitoringAssignment(
-            profile=self.profile, site=self.site, location="bad location"
-        )
+class RequisitionModelTest(TestCase):
+    def test_url_unsafe_name_rejected(self):
+        req = Requisition(name="bad name", filter_params={"site": ["x"]})
         with self.assertRaises(ValidationError):
-            assignment.clean()
+            req.clean()
 
-    def test_site_role_unique(self):
-        MonitoringAssignment.objects.create(
-            profile=self.profile, site=self.site, role=self.role
-        )
-        with transaction.atomic(), self.assertRaises(IntegrityError):
-            MonitoringAssignment.objects.create(
-                profile=self.profile, site=self.site, role=self.role
-            )
+    def test_priority_is_not_unique(self):
+        # Two Requisitions may share a priority (reorder-safe — no DB unique).
+        Requisition.objects.create(name="a", priority=5, filter_params=FILTER)
+        # No IntegrityError:
+        Requisition.objects.create(name="b", priority=5, filter_params=FILTER)
 
-    def test_site_level_unique_nulls_not_distinct(self):
-        # Two site-level (role NULL) assignments for the same site collide.
-        MonitoringAssignment.objects.create(
-            profile=self.profile, site=self.site, role=None
-        )
-        with transaction.atomic(), self.assertRaises(IntegrityError):
-            MonitoringAssignment.objects.create(
-                profile=self.profile, site=self.site, role=None
-            )
+    def test_invalid_service_name_rejected(self):
+        req = Requisition(name="x", filter_params=FILTER, services=["BOGUS"])
+        with self.assertRaises(ValidationError):
+            req.clean()
 
 
 class OverrideAndServiceTest(TestCase):
@@ -189,6 +150,13 @@ class OverrideAndServiceTest(TestCase):
         with self.assertRaises(ValidationError):
             override.clean()
 
+    def test_override_invalid_suppressed_service(self):
+        override = MonitoringOverride(
+            assigned_object=self.device, suppressed_services=["BOGUS"]
+        )
+        with self.assertRaises(ValidationError):
+            override.clean()
+
     def test_service_must_be_on_override_ip(self):
         override = MonitoringOverride.objects.create(
             assigned_object=self.device, management_ip=self.ip
@@ -197,7 +165,7 @@ class OverrideAndServiceTest(TestCase):
         with self.assertRaises(ValidationError):
             bad.clean()
         ok = MonitoredService(override=override, ip_address=self.ip, name="ICMP")
-        ok.clean()  # the override's management IP — valid
+        ok.clean()
 
     def test_service_unique(self):
         override = MonitoringOverride.objects.create(

@@ -5,19 +5,25 @@ virtual machines into [OpenNMS](https://www.opennms.com/) (Horizon 36) via the
 OpenNMS REST provisioning API. NetBox is the source of truth; OpenNMS monitoring
 is a derived artifact kept in sync from NetBox intent.
 
-You author a **Monitoring Profile** once — a reusable template of OpenNMS
-**detectors** and **policies** (from a built-in preset registry, or freeform
-classes) — and **assign** it to a *(site[, role])* scope. Every Device/VM in that
-scope is then monitored: its management IP is its **primary IP**, and OpenNMS
-auto-discovers services via the profile's detectors. A per-object **Monitoring
+You author a **Requisition** — one user-named OpenNMS Foreign Source — that owns
+its OpenNMS **detectors** and **policies** (from a built-in preset registry, or
+freeform classes), a set of declared **services** (e.g. ICMP, SNMP), and a live
+NetBox **filter** that selects its member Devices/VMs (by role, tag, site, status,
+custom field, …). Every member is monitored: its management IP is its **primary
+IP** unless overridden, OpenNMS auto-discovers services via the detectors, and the
+declared services are the guaranteed-present floor. A per-object **Monitoring
 Override** is the escape hatch (exclude an object, pin a different management IP,
-add extra interfaces/services, or change its location).
+add extra interfaces, add/suppress a service, or change its location).
+
+Requisitions are resolved in **priority order**: an object matched by more than
+one Requisition's filter is claimed by the highest-priority one, so a node lives
+in exactly one Foreign Source. A **dry-run** shows, per node, exactly what a Sync
+would add / remove / change against the live OpenNMS state before you commit.
 
 **Sync** renders the complete OpenNMS *foreign-source definition* + *requisition*
-for a Foreign Source (grouped by site + role) and imports it. Membership is a
-live NetBox query, so adding/removing a Device or changing its role/site simply
-re-resolves the scope; render-and-replace makes every re-sync idempotent and
-never duplicates a node.
+and imports it. Membership is a live NetBox query, so adding/removing a Device or
+changing an attribute the filter matches simply re-resolves the Requisition;
+render-and-replace makes every re-sync idempotent and never duplicates a node.
 
 ## Compatibility
 
@@ -48,18 +54,17 @@ PLUGINS_CONFIG = {
         # A provisioning/REST role account (NOT stored on any NetBox model).
         "opennms_username": "provision-svc",
         "opennms_password": "********",          # use your secrets mechanism
-        # Default OpenNMS monitoring location for profiles that don't set one.
+        # Default OpenNMS monitoring location for requisitions that don't set one.
         # Empty means OpenNMS's built-in "Default" location.
         "default_location": "",
         # rescanExisting value passed to the import step: one of
         # "true" | "false" | "dbonly".
         "import_mode": "false",
-        # Periodic drift reconciler (hourly): clears OpenNMS `netbox.*` Foreign
-        # Sources that NetBox no longer governs — when the last member leaves a
-        # scope (object deleted, role/site changed, or its assignment removed),
-        # the Foreign Source is no longer governed and its stale nodes would
-        # otherwise linger. Touches only the plugin's own namespace. "true" /
-        # "false"; needs an RQ worker.
+        # Periodic drift reconciler (hourly): clears OpenNMS Foreign Sources the
+        # plugin has pushed but NetBox no longer monitors — when a Requisition is
+        # renamed or deleted, or its last member leaves. Ownership is tracked per
+        # pushed Foreign Source, so it only ever touches requisitions the plugin
+        # created, never a foreign one. "true" / "false"; needs an RQ worker.
         "reconcile_orphans": "true",
     },
 }
@@ -97,7 +102,7 @@ jobs to execute:
 python manage.py rqworker
 ```
 
-If no worker is running, the Monitoring Assignment and Sync pages show a warning
+If no worker is running, the Requisition and Sync pages show a warning
 and jobs stay pending until one starts. Each object's last-sync state (submitted /
 succeeded-accepted / removed / failed, with the triggering user, time, and any
 error) is shown on the **Device/VM detail page**, backed by the NetBox Job log as
@@ -110,24 +115,36 @@ monitoring to actually happen:
 
 - **Provisioning account** — `opennms_username` needs a role that can read/write
   requisitions and trigger imports (e.g. the OpenNMS provisioning/REST role).
-- **Detectors → poller packages** — the profile's detectors tell OpenNMS which
+- **Detectors → poller packages** — the requisition's detectors tell OpenNMS which
   services to auto-discover, but OpenNMS only *polls* a discovered service if a
   matching **poller package** exists for it. The plugin cannot create poller
   packages — ensure your `poller-configuration.xml` covers the services your
-  detectors discover.
+  detectors discover (and the requisition's declared services).
 - **Minions / monitoring locations** — a node assigned to a non-`Default`
   monitoring location is only polled if a **Minion** is registered at that
   location. The plugin best-effort warns when a chosen location is unknown to
   OpenNMS, but cannot create it. The built-in `Default` location is polled by the
   OpenNMS core (no Minion required).
 
-## Foreign Source naming
+## Requisitions, membership, and node identity
 
-A node's OpenNMS Foreign Source is derived (not configured) as
-`netbox.{site.slug}.{role.slug}` (`no-site` / `no-role` when absent). Node
-identity is the pair *(Foreign Source, type-qualified Foreign ID)* —
-`device-{pk}` / `vm-{pk}` — so a re-sync updates in place and a role/site change
-is handled as a move, never a duplicate.
+A **Requisition**'s name *is* its OpenNMS Foreign Source name — user-chosen (it
+must be Foreign-Source- and URL-path-safe: no whitespace or `# % & + ? / \ : * ' "`),
+not derived. Its membership is a NetBox **filter** (FilterSet parameters, e.g.
+`{"role": ["switch"], "tag": ["critical"]}`) applied to Devices and/or
+VirtualMachines per its *object types*; you can seed the filter by **importing a
+NetBox Saved Filter** (a one-time copy — no live link). A filter must actually
+constrain each selected object type, so a typo or empty value can't silently
+become a fleet-wide catch-all. When several Requisitions match the same object,
+the highest-**priority** (lowest number) one claims it, so every node belongs to
+exactly one Foreign Source.
+
+Node identity is the pair *(Foreign Source, type-qualified Foreign ID)* —
+`device-{pk}` / `vm-{pk}` — so a re-sync updates a node in place and renaming a
+Device only relabels it (never a duplicate). Moving an object between Requisitions
+(a filter or priority change) changes its Foreign Source, which OpenNMS treats as
+a new node; the per-node **dry-run** surfaces such moves — and every add / remove /
+change against the live OpenNMS state — before you Sync.
 
 ## Development
 

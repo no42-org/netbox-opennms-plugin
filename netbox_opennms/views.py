@@ -1,6 +1,8 @@
 # Copyright 2026 Ronny Trommer <ronny@no42.org>
 # SPDX-License-Identifier: MIT
-"""UI views for plugin models (Epic 5)."""
+"""UI views for plugin models (Requisition redesign)."""
+
+from copy import deepcopy
 
 from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin, PermissionRequiredMixin
@@ -13,25 +15,26 @@ from utilities.rqworker import any_workers_for_queue
 
 from . import filtersets, forms, tables
 from .client import OpenNMSClient, OpenNMSError
+from .dryrun import dry_run
 from .jobs import (
     SyncForeignSourceJob,
     enabled_foreign_sources,
     unknown_locations,
 )
-from .membership import governing_assignment, resolve
+from .membership import resolve, resolve_all
 from .models import (
     MonitoredService,
-    MonitoringAssignment,
     MonitoringDetector,
     MonitoringOverride,
     MonitoringPolicy,
-    MonitoringProfile,
+    Requisition,
 )
 from .validation import validate_resolution
 
 # Sync jobs are enqueued without an instance, so they run on the default RQ
 # queue (get_queue_for_model(None) -> RQ_QUEUE_DEFAULT). FR-13 / AD-16.
 SYNC_QUEUE = "default"
+SYNC_PERM = "netbox_opennms.change_requisition"
 
 
 def _no_worker_running():
@@ -43,12 +46,7 @@ def _no_worker_running():
 
 
 def _location_warnings(locations):
-    """Best-effort warnings for chosen locations with no Minion (FR-5/AD-16).
-
-    Opens the port, asks OpenNMS which monitoring locations exist, and returns a
-    warning string per location it doesn't know. ANY failure degrades to ``[]`` —
-    the check never blocks Sync.
-    """
+    """Best-effort warnings for chosen locations with no Minion (FR-5/AD-16)."""
     try:
         with OpenNMSClient.from_config() as client:
             missing = unknown_locations(client, locations)
@@ -62,17 +60,8 @@ def _location_warnings(locations):
 
 
 def _enqueue_foreign_source(request, foreign_source, allow_empty=False):
-    """Validate a Foreign Source's resolved intent and enqueue a sync (FR-8).
-
-    Errors block; warnings (member skips, unknown locations) are surfaced and the
-    sync still proceeds. Returns the Job, or ``None`` when validation blocked it.
-    """
-    try:
-        resolution = resolve(foreign_source)
-    except ValueError as exc:
-        # A tampered/garbled ``foreign_source`` POST value (not netbox.site.role).
-        messages.error(request, f"Invalid Foreign Source {foreign_source!r}: {exc}")
-        return None
+    """Validate a Foreign Source's resolved intent and enqueue a sync (FR-8)."""
+    resolution = resolve(foreign_source)
     result = validate_resolution(resolution)
     for warning in result.warnings:
         messages.warning(request, warning)
@@ -83,7 +72,7 @@ def _enqueue_foreign_source(request, foreign_source, allow_empty=False):
 
     locations = set()
     if resolution is not None:
-        locations.add(resolution.assignment.location)
+        locations.add(resolution.requisition.location)
         locations.update(node.location for node in resolution.nodes)
     for warning in _location_warnings(locations):
         messages.warning(request, warning)
@@ -93,31 +82,120 @@ def _enqueue_foreign_source(request, foreign_source, allow_empty=False):
     )
 
 
-# --- Monitoring Profile (template) -----------------------------------------
+# --- Requisition ------------------------------------------------------------
 
 
-class MonitoringProfileView(generic.ObjectView):
-    queryset = MonitoringProfile.objects.all()
+class RequisitionView(generic.ObjectView):
+    queryset = Requisition.objects.prefetch_related("detectors", "policies")
+
+    def get_extra_context(self, request, instance):
+        return {"no_worker_warning": _no_worker_running()}
 
 
-class MonitoringProfileListView(generic.ObjectListView):
-    queryset = MonitoringProfile.objects.all()
-    table = tables.MonitoringProfileTable
-    filterset = filtersets.MonitoringProfileFilterSet
+class RequisitionListView(generic.ObjectListView):
+    queryset = Requisition.objects.all()
+    table = tables.RequisitionTable
+    filterset = filtersets.RequisitionFilterSet
 
 
-class MonitoringProfileEditView(generic.ObjectEditView):
-    queryset = MonitoringProfile.objects.all()
-    form = forms.MonitoringProfileForm
+class RequisitionEditView(generic.ObjectEditView):
+    queryset = Requisition.objects.all()
+    form = forms.RequisitionForm
 
 
-class MonitoringProfileDeleteView(generic.ObjectDeleteView):
-    queryset = MonitoringProfile.objects.all()
+class RequisitionDeleteView(generic.ObjectDeleteView):
+    queryset = Requisition.objects.all()
 
 
-class MonitoringProfileBulkDeleteView(generic.BulkDeleteView):
-    queryset = MonitoringProfile.objects.all()
-    table = tables.MonitoringProfileTable
+class RequisitionBulkDeleteView(generic.BulkDeleteView):
+    queryset = Requisition.objects.all()
+    table = tables.RequisitionTable
+
+
+class RequisitionDuplicateView(PermissionRequiredMixin, View):
+    """Deep-copy a Requisition (rules, services, filter) into a new named one (R4)."""
+
+    permission_required = "netbox_opennms.add_requisition"
+
+    def post(self, request, pk):
+        source = get_object_or_404(Requisition, pk=pk)
+        detectors = list(source.detectors.all())
+        policies = list(source.policies.all())
+
+        # Bound to Requisition.name max_length (100), leaving room for a "-N" tag.
+        base = f"{source.name}-copy"[:100]
+        name = base
+        suffix = 2
+        while Requisition.objects.filter(name=name).exists():
+            tag = f"-{suffix}"
+            name = f"{base[: 100 - len(tag)]}{tag}"
+            suffix += 1
+
+        clone = Requisition(
+            name=name,
+            description=source.description,
+            priority=source.priority,
+            object_types=source.object_types,
+            filter_params=deepcopy(source.filter_params),
+            scan_interval=source.scan_interval,
+            default_interfaces=source.default_interfaces,
+            services=list(source.services or []),
+            location=source.location,
+        )
+        clone.save()
+        for detector in detectors:
+            MonitoringDetector.objects.create(
+                requisition=clone,
+                name=detector.name,
+                preset=detector.preset,
+                rule_class=detector.rule_class,
+                parameters=deepcopy(detector.parameters),
+            )
+        for policy in policies:
+            MonitoringPolicy.objects.create(
+                requisition=clone,
+                name=policy.name,
+                preset=policy.preset,
+                rule_class=policy.rule_class,
+                parameters=deepcopy(policy.parameters),
+            )
+        messages.success(request, f"Duplicated {source.name} → {clone.name}.")
+        return redirect(clone.get_absolute_url())
+
+
+class RequisitionSyncView(PermissionRequiredMixin, View):
+    """Enqueue a Sync for the Foreign Source this Requisition owns (AD-4/5)."""
+
+    permission_required = SYNC_PERM
+
+    def post(self, request, pk):
+        requisition = get_object_or_404(Requisition, pk=pk)
+        job = _enqueue_foreign_source(request, requisition.name)
+        if job is not None:
+            messages.success(
+                request, f"Sync submitted for {requisition.name} (job #{job.pk})."
+            )
+        return redirect(requisition.get_absolute_url())
+
+
+class RequisitionDryRunView(LoginRequiredMixin, View):
+    """Show the per-node diff of a Requisition against the live OpenNMS state (R7)."""
+
+    template_name = "netbox_opennms/dry_run.html"
+
+    def get(self, request, pk):
+        requisition = get_object_or_404(Requisition, pk=pk)
+        error = None
+        result = None
+        try:
+            result = dry_run(requisition.name)
+        except OpenNMSError as exc:
+            error = str(exc)
+        return render(
+            request,
+            self.template_name,
+            {"object": requisition, "dryrun": result, "error": error},
+        )
 
 
 # --- Monitoring Detector ----------------------------------------------------
@@ -128,7 +206,7 @@ class MonitoringDetectorView(generic.ObjectView):
 
 
 class MonitoringDetectorListView(generic.ObjectListView):
-    queryset = MonitoringDetector.objects.select_related("profile")
+    queryset = MonitoringDetector.objects.select_related("requisition")
     table = tables.MonitoringDetectorTable
     filterset = filtersets.MonitoringDetectorFilterSet
 
@@ -155,7 +233,7 @@ class MonitoringPolicyView(generic.ObjectView):
 
 
 class MonitoringPolicyListView(generic.ObjectListView):
-    queryset = MonitoringPolicy.objects.select_related("profile")
+    queryset = MonitoringPolicy.objects.select_related("requisition")
     table = tables.MonitoringPolicyTable
     filterset = filtersets.MonitoringPolicyFilterSet
 
@@ -172,64 +250,6 @@ class MonitoringPolicyDeleteView(generic.ObjectDeleteView):
 class MonitoringPolicyBulkDeleteView(generic.BulkDeleteView):
     queryset = MonitoringPolicy.objects.all()
     table = tables.MonitoringPolicyTable
-
-
-# --- Monitoring Assignment --------------------------------------------------
-
-
-class MonitoringAssignmentView(generic.ObjectView):
-    queryset = MonitoringAssignment.objects.select_related("profile", "site", "role")
-
-    def get_extra_context(self, request, instance):
-        return {"no_worker_warning": _no_worker_running()}
-
-
-class MonitoringAssignmentListView(generic.ObjectListView):
-    queryset = MonitoringAssignment.objects.select_related("profile", "site", "role")
-    table = tables.MonitoringAssignmentTable
-    filterset = filtersets.MonitoringAssignmentFilterSet
-
-
-class MonitoringAssignmentEditView(generic.ObjectEditView):
-    queryset = MonitoringAssignment.objects.all()
-    form = forms.MonitoringAssignmentForm
-
-
-class MonitoringAssignmentDeleteView(generic.ObjectDeleteView):
-    queryset = MonitoringAssignment.objects.all()
-
-
-class MonitoringAssignmentBulkDeleteView(generic.BulkDeleteView):
-    queryset = MonitoringAssignment.objects.all()
-    table = tables.MonitoringAssignmentTable
-
-
-class MonitoringAssignmentSyncView(PermissionRequiredMixin, View):
-    """Enqueue a Sync for every Foreign Source this assignment governs (AD-4/5).
-
-    A (site, role) assignment governs one Foreign Source; a site-level assignment
-    fans out to one per role present in the site (the more-specific assignment
-    wins, so this never double-syncs a Foreign Source owned by another).
-    """
-
-    permission_required = "netbox_opennms.change_monitoringassignment"
-
-    def post(self, request, pk):
-        assignment = get_object_or_404(MonitoringAssignment, pk=pk)
-        foreign_sources = [
-            fs
-            for fs in enabled_foreign_sources()
-            if governing_assignment(fs) == assignment
-        ]
-        submitted = 0
-        for foreign_source in foreign_sources:
-            if _enqueue_foreign_source(request, foreign_source) is not None:
-                submitted += 1
-        if submitted:
-            messages.success(request, f"Submitted {submitted} Foreign Source sync(s).")
-        elif not foreign_sources:
-            messages.info(request, "This assignment governs no monitored objects yet.")
-        return redirect(assignment.get_absolute_url())
 
 
 # --- Monitoring Override ----------------------------------------------------
@@ -292,14 +312,9 @@ class MonitoredServiceBulkDeleteView(generic.BulkDeleteView):
 
 
 class ForeignSourceSyncView(PermissionRequiredMixin, View):
-    """Enqueue a Sync (or Remove) for one Foreign Source named in the POST.
+    """Enqueue a Sync (or Remove) for one Foreign Source named in the POST."""
 
-    Render-and-replace is per whole Foreign Source (AD-5). A Remove
-    (``allow_empty``) pushes the intentional empty requisition that clears the
-    Foreign Source; a plain Sync refuses an empty one (it would mass-delete).
-    """
-
-    permission_required = "netbox_opennms.change_monitoringassignment"
+    permission_required = SYNC_PERM
 
     def post(self, request):
         foreign_source = request.POST.get("foreign_source", "").strip()
@@ -325,9 +340,9 @@ class ForeignSourceSyncView(PermissionRequiredMixin, View):
 
 
 class MonitoringSyncAllView(PermissionRequiredMixin, View):
-    """Enqueue a Sync for every governed Foreign Source with members (FR-9)."""
+    """Enqueue a Sync for every Requisition that resolves to members (FR-9)."""
 
-    permission_required = "netbox_opennms.change_monitoringassignment"
+    permission_required = SYNC_PERM
 
     def post(self, request):
         foreign_sources = enabled_foreign_sources()
@@ -338,30 +353,30 @@ class MonitoringSyncAllView(PermissionRequiredMixin, View):
                 request, f"Submitted {len(foreign_sources)} Foreign Source sync(s)."
             )
         else:
-            messages.info(request, "Nothing assigned to sync.")
+            messages.info(request, "Nothing to sync.")
         return redirect("plugins:netbox_opennms:sync_preview")
 
 
 class SyncPreviewView(LoginRequiredMixin, View):
-    """The preview-and-sync overview: every governed Foreign Source + its members.
+    """The preview-and-sync overview: every Requisition + its resolved members.
 
-    A read-only aggregate for now (the paginated, status-filtered detail and
-    bulk-adjust are Story 5.5). Resolves each Foreign Source so the operator sees
-    the node count and any skip warnings before pressing Sync.
+    Lists every Requisition in priority order with its node count and any
+    resolution warnings (rejected filters, member skips), so the operator sees
+    what will go before pressing Sync. The per-node dry-run diff against OpenNMS is
+    a per-Requisition action (RequisitionDryRunView).
     """
 
     template_name = "netbox_opennms/sync_preview.html"
 
     def get(self, request):
         rows = []
-        for foreign_source in enabled_foreign_sources():
-            resolution = resolve(foreign_source)
+        for resolution in resolve_all():
             rows.append(
                 {
-                    "foreign_source": foreign_source,
-                    "assignment": resolution.assignment if resolution else None,
-                    "node_count": len(resolution.nodes) if resolution else 0,
-                    "warnings": resolution.warnings if resolution else [],
+                    "foreign_source": resolution.foreign_source,
+                    "requisition": resolution.requisition,
+                    "node_count": len(resolution.nodes),
+                    "warnings": resolution.warnings,
                 }
             )
         return render(

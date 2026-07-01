@@ -1,24 +1,31 @@
 # Copyright 2026 Ronny Trommer <ronny@no42.org>
 # SPDX-License-Identifier: MIT
-"""Filter sets for plugin models."""
+"""Filter sets for plugin models (Requisition redesign)."""
 
 from django.db.models import Q
 from netbox.filtersets import NetBoxModelFilterSet
 
 from .models import (
     MonitoredService,
-    MonitoringAssignment,
     MonitoringDetector,
     MonitoringOverride,
     MonitoringPolicy,
-    MonitoringProfile,
+    Requisition,
 )
 
 
-class MonitoringProfileFilterSet(NetBoxModelFilterSet):
+class RequisitionFilterSet(NetBoxModelFilterSet):
     class Meta:
-        model = MonitoringProfile
-        fields = ("id", "name", "scan_interval", "default_interfaces")
+        model = Requisition
+        fields = (
+            "id",
+            "name",
+            "priority",
+            "object_types",
+            "scan_interval",
+            "default_interfaces",
+            "location",
+        )
 
     def search(self, queryset, name, value):
         if value:
@@ -31,7 +38,7 @@ class MonitoringProfileFilterSet(NetBoxModelFilterSet):
 class MonitoringDetectorFilterSet(NetBoxModelFilterSet):
     class Meta:
         model = MonitoringDetector
-        fields = ("id", "profile", "name", "preset", "rule_class")
+        fields = ("id", "requisition", "name", "preset", "rule_class")
 
     def search(self, queryset, name, value):
         if value:
@@ -42,22 +49,11 @@ class MonitoringDetectorFilterSet(NetBoxModelFilterSet):
 class MonitoringPolicyFilterSet(NetBoxModelFilterSet):
     class Meta:
         model = MonitoringPolicy
-        fields = ("id", "profile", "name", "preset", "rule_class")
+        fields = ("id", "requisition", "name", "preset", "rule_class")
 
     def search(self, queryset, name, value):
         if value:
             return queryset.filter(name__icontains=value)
-        return queryset
-
-
-class MonitoringAssignmentFilterSet(NetBoxModelFilterSet):
-    class Meta:
-        model = MonitoringAssignment
-        fields = ("id", "profile", "site", "role", "location")
-
-    def search(self, queryset, name, value):
-        if value:
-            return queryset.filter(location__icontains=value)
         return queryset
 
 

@@ -1,6 +1,6 @@
 # Copyright 2026 Ronny Trommer <ronny@no42.org>
 # SPDX-License-Identifier: MIT
-"""Seed the quickstart NetBox with test Devices, VMs, and the Epic 5 model.
+"""Seed the quickstart NetBox with test Devices, VMs, and the Requisition model.
 
 Run it with `quickstart/seed.sh`, or by hand inside the NetBox container (the ORM
 + plugin are available there) — from the quickstart/ directory:
@@ -10,13 +10,13 @@ Run it with `quickstart/seed.sh`, or by hand inside the NetBox container (the OR
 
 Idempotent — every object is get_or_create'd, so re-running is safe.
 
-It builds enough to exercise every Epic 5 path: reusable Monitoring Profiles
-(detector/policy templates from the preset registry), Monitoring Assignments
-binding a profile to a (site[, role]) scope — including a site-level assignment
-that fans out across roles — per-object Monitoring Overrides (extra IPs +
-services, an excluded object, an OpenNMS-unknown location to trip the no-Minion
-warning), a multi-node Foreign Source mixing devices and VMs, and an object in an
-unassigned scope (unmonitored). A node's management IP is now its primary IP.
+It builds enough to exercise every path: user-named **Requisitions** (each a
+filter over Devices/VMs + inline detectors/policies + declared services),
+priority-ordered membership, per-object **Monitoring Overrides** (extra IPs, an
+added service, a suppressed declared service, an excluded object, an
+OpenNMS-unknown location to trip the no-Minion warning), a multi-node Foreign
+Source mixing devices and VMs, and an object in no requisition (unmonitored). A
+node's management IP is its primary IP.
 """
 
 from dcim.models import (
@@ -39,11 +39,10 @@ from virtualization.models import (
 from netbox_opennms.membership import monitored_foreign_sources, resolve
 from netbox_opennms.models import (
     MonitoredService,
-    MonitoringAssignment,
     MonitoringDetector,
     MonitoringOverride,
     MonitoringPolicy,
-    MonitoringProfile,
+    Requisition,
 )
 from netbox_opennms.presets import resolve_detector, resolve_policy
 
@@ -106,41 +105,56 @@ def iface_ip(parent, ifname, cidr, *, primary=False):
     return ip
 
 
-def profile_template(name, detectors=(), policies=(), scan="1d"):
-    """A reusable Monitoring Profile + its detectors/policies (from the presets)."""
-    prof = MonitoringProfile.objects.get_or_create(
-        name=name, defaults={"scan_interval": scan}
+def requisition(
+    name,
+    filter_params,
+    *,
+    detectors=(),
+    policies=(),
+    services=(),
+    priority=100,
+    location="",
+    object_types="both",
+):
+    """A user-named Requisition + its inline detectors/policies (from the presets)."""
+    req = Requisition.objects.get_or_create(
+        name=name,
+        defaults={
+            "priority": priority,
+            "object_types": object_types,
+            "filter_params": filter_params,
+            "services": list(services),
+            "location": location,
+        },
     )[0]
     for det_name, preset in detectors:
         cls, params = resolve_detector(preset)
         MonitoringDetector.objects.get_or_create(
-            profile=prof,
+            requisition=req,
             name=det_name,
             defaults={"preset": preset, "rule_class": cls, "parameters": params},
         )
     for pol_name, preset in policies:
         cls, params = resolve_policy(preset)
         MonitoringPolicy.objects.get_or_create(
-            profile=prof,
+            requisition=req,
             name=pol_name,
             defaults={"preset": preset, "rule_class": cls, "parameters": params},
         )
-    return prof
+    return req
 
 
-def assign(prof, a_site, a_role=None, location=""):
-    return MonitoringAssignment.objects.get_or_create(
-        site=a_site,
-        role=a_role,
-        defaults={"profile": prof, "location": location},
-    )[0]
-
-
-def override(target, *, exclude=False, additional=(), location="", services=()):
+def override(
+    target, *, exclude=False, additional=(), location="", services=(), suppressed=()
+):
     ov = MonitoringOverride.objects.get_or_create(
         assigned_object_type=ContentType.objects.get_for_model(target),
         assigned_object_id=target.pk,
-        defaults={"exclude": exclude, "location": location},
+        defaults={
+            "exclude": exclude,
+            "location": location,
+            "suppressed_services": list(suppressed),
+        },
     )[0]
     if additional:
         ov.additional_ips.set(additional)
@@ -181,15 +195,15 @@ iface_ip(fw1, "eth0", "198.51.100.31/24", primary=True)
 rtr3 = device("rtr-3", durham, router, vsr)
 iface_ip(rtr3, "eth0", "203.0.113.11/24", primary=True)
 
-# An UNMONITORED object: a durham switch — durham only assigns its routers.
+# An UNMONITORED object: a durham switch — no requisition matches it.
 swd = device("sw-durham", durham, switch, vsw)
 iface_ip(swd, "eth0", "203.0.113.31/24", primary=True)
 
 sw2 = device("sw-2", asheville, switch, vsw)
 iface_ip(sw2, "eth0", "203.0.113.21/24", primary=True)
 
-# A cluster scoped to Raleigh, so its VMs derive netbox.raleigh.<role> and join
-# the devices in those Foreign Sources (a mixed Device+VM requisition).
+# A cluster scoped to Raleigh, so its VMs sit in Raleigh and join the Raleigh
+# requisitions (a mixed Device+VM requisition).
 kvm = ClusterType.objects.get_or_create(slug="kvm", defaults={"name": "KVM"})[0]
 vmhost = Cluster.objects.get_or_create(
     name="vmhost-1", defaults={"type": kvm, "status": "active"}
@@ -207,37 +221,56 @@ iface_ip(vm2, "eth0", "198.51.100.42/24", primary=True)
 vm3 = vm("vm-3", vmhost, switch)
 iface_ip(vm3, "eth0", "198.51.100.51/24", primary=True)
 
-# --- profiles (reusable templates) + assignments (scopes) ------------------
+# --- requisitions (name = Foreign Source; filter = membership) -------------
 
-network = profile_template(
-    "Network device",
+# Raleigh routers + switches: monitored as network devices (ICMP + SNMP declared).
+requisition(
+    "netbox.raleigh.router",
+    {"site": ["raleigh"], "role": ["router"]},
     detectors=[("ICMP", "icmp"), ("SNMP", "snmp")],
     policies=[("Categorise", "set-category")],
+    services=["ICMP", "SNMP"],
+    location="Default",
 )
-edge = profile_template("Edge firewall", detectors=[("ICMP", "icmp")])
-
-# Raleigh: per-role assignments (routers + switches monitored as Network device).
-assign(network, raleigh, router, location="Default")
-assign(network, raleigh, switch)
-# Firewalls in Raleigh use a location OpenNMS won't know → no-Minion warning.
-assign(edge, raleigh, firewall, location="edge-rdu")
-# Durham: only the routers are assigned (sw-durham stays unmonitored).
-assign(network, durham, router)
-# Asheville: a SITE-LEVEL assignment (role=None) covers every role in the site.
-assign(network, asheville)
+requisition(
+    "netbox.raleigh.switch",
+    {"site": ["raleigh"], "role": ["switch"]},
+    detectors=[("ICMP", "icmp"), ("SNMP", "snmp")],
+    services=["ICMP", "SNMP"],
+)
+# Firewalls use a location OpenNMS won't know → no-Minion warning.
+requisition(
+    "netbox.raleigh.firewall",
+    {"site": ["raleigh"], "role": ["firewall"]},
+    detectors=[("ICMP", "icmp")],
+    services=["ICMP"],
+    location="edge-rdu",
+)
+# Durham: only the routers (sw-durham stays unmonitored — no requisition matches).
+requisition(
+    "netbox.durham.router",
+    {"site": ["durham"], "role": ["router"]},
+    detectors=[("ICMP", "icmp"), ("SNMP", "snmp")],
+    services=["ICMP", "SNMP"],
+)
+# Asheville switches.
+requisition(
+    "netbox.asheville.switch",
+    {"site": ["asheville"], "role": ["switch"]},
+    detectors=[("ICMP", "icmp"), ("SNMP", "snmp")],
+    services=["ICMP", "SNMP"],
+)
 
 # --- per-object overrides --------------------------------------------------
 
 # rtr-1: monitor two extra interfaces + an explicit HTTP service on eth1.
-override(
-    rtr1,
-    additional=[rtr1_e1, rtr1_lo],
-    services=[(rtr1_e1, "HTTP")],
-    location="Default",
-)
+override(rtr1, additional=[rtr1_e1, rtr1_lo], services=[(rtr1_e1, "HTTP")],
+         location="Default")
+# rtr-2: suppress the declared SNMP service for this one device.
+override(rtr2, suppressed=["SNMP"])
 # vm-1: one extra interface.
 override(vm1, additional=[vm1_e1])
-# sw-2: explicitly excluded from monitoring despite the asheville site assignment.
+# sw-2: explicitly excluded despite matching netbox.asheville.switch.
 override(sw2, exclude=True)
 
 # --- summary ---------------------------------------------------------------
@@ -246,16 +279,15 @@ print("\nSeeded:")
 print(
     f"  sites={Site.objects.count()} roles={DeviceRole.objects.count()} "
     f"devices={Device.objects.count()} vms={VirtualMachine.objects.count()} "
-    f"profiles={MonitoringProfile.objects.count()} "
-    f"assignments={MonitoringAssignment.objects.count()} "
+    f"requisitions={Requisition.objects.count()} "
     f"overrides={MonitoringOverride.objects.count()}"
 )
-print("\nForeign Sources (governed, with members):")
+print("\nForeign Sources (requisitions with members):")
 for fs in monitored_foreign_sources():
     resolution = resolve(fs)
     members = ", ".join(sorted(n.node_label for n in resolution.nodes))
     print(f"  {fs:28s} {members or '(no monitorable members)'}")
-print("\nUnmonitored: sw-durham (no assignment) · sw-2 (override excludes it)")
+print("\nUnmonitored: sw-durham (no requisition) · sw-2 (override excludes it)")
 print(
     "Now open http://localhost:8000/plugins/opennms/sync/ and Sync.\n"
 )

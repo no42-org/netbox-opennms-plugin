@@ -6,12 +6,13 @@ from utilities.choices import ChoiceSet
 
 
 class ServiceChoices(ChoiceSet):
-    """OpenNMS service names for an explicit per-object service override (Epic 5).
+    """OpenNMS service names declared on a Requisition or per-object override.
 
-    Detectors on the Monitoring Profile are the default service source; an explicit
-    ``MonitoredService`` is a Monitoring Override exception. ``key`` keeps the list
-    admin-extensible (``FIELD_CHOICES['netbox_opennms.MonitoredService.name']``);
-    the names must match OpenNMS's poller/service config server-side.
+    A Requisition's ``services`` are applied to every member's interfaces; a
+    Monitoring Override may add extra ``MonitoredService`` rows or suppress a
+    declared default. ``key`` keeps the list admin-extensible
+    (``FIELD_CHOICES['netbox_opennms.MonitoredService.name']``); the names must
+    match OpenNMS's poller/service config server-side.
     """
 
     key = "MonitoredService.name"
@@ -27,8 +28,22 @@ class ServiceChoices(ChoiceSet):
     ]
 
 
+class ObjectTypeChoices(ChoiceSet):
+    """Which NetBox object types a Requisition's filter draws members from."""
+
+    DEVICE = "device"
+    VM = "vm"
+    BOTH = "both"
+
+    CHOICES = [
+        (DEVICE, "Devices only"),
+        (VM, "Virtual machines only"),
+        (BOTH, "Devices and virtual machines"),
+    ]
+
+
 class DetectorPresetChoices(ChoiceSet):
-    """Provisioning detector presets a Monitoring Profile can select (Epic 5).
+    """Provisioning detector presets a Requisition can select (Epic 5).
 
     Each key resolves (via ``presets.DETECTOR_PRESETS``) to an OpenNMS detector
     class + default parameters. Blank preset = freeform detector (user supplies the

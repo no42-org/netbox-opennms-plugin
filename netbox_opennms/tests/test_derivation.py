@@ -17,6 +17,7 @@ from netbox_opennms.derivation import (
     foreign_source_for,
     validate_foreign_source_name,
     validate_location_name,
+    validate_requisition_name,
 )
 
 
@@ -98,6 +99,27 @@ class ForeignSourceNameValidationTest(SimpleTestCase):
         for bad in ["a/b", "a\\b", "a?b", "a*b", "a'b", 'a"b', "a:b"]:
             with self.assertRaises(ValueError):
                 validate_foreign_source_name(bad)
+
+
+class RequisitionNameValidationTest(SimpleTestCase):
+    def test_valid_name_passes(self):
+        self.assertEqual(
+            validate_requisition_name("netbox.raleigh.core-router"),
+            "netbox.raleigh.core-router",
+        )
+        self.assertEqual(validate_requisition_name("core-switches"), "core-switches")
+
+    def test_url_unsafe_and_forbidden_characters_rejected(self):
+        # OpenNMS-forbidden PLUS URL-significant characters (H7): the name goes
+        # straight into a REST URL path.
+        for bad in ["a/b", "a:b", "a b", "a#b", "a%b", "a&b", "a+b", "a?b", 'a"b']:
+            with self.assertRaises(ValueError):
+                validate_requisition_name(bad)
+
+    def test_empty_rejected(self):
+        for bad in ["", "   "]:
+            with self.assertRaises(ValueError):
+                validate_requisition_name(bad)
 
 
 class LocationNameValidationTest(SimpleTestCase):

@@ -1,7 +1,7 @@
 {# Copyright 2026 Ronny Trommer <ronny@no42.org> #}
 {# SPDX-License-Identifier: MIT #}
-{# Last-sync panel (Story 4.2, Epic 5). Expects `sync_status` in context: a dict
-   with `foreign_source`, `assignment`, `governed`, `excluded`, `job`,
+{# Last-sync panel (Story 4.2). Expects `sync_status` in context: a dict
+   with `foreign_source`, `requisition`, `governed`, `excluded`, `job`,
    `outcome` (label, color) — or None. Shown on the Device/VM detail page. #}
 {% load helpers %}
 <div class="card">
@@ -17,9 +17,9 @@
         {% if sync_status.excluded %}
           <span class="text-muted">Excluded by override</span>
         {% elif sync_status.governed %}
-          {% checkmark True %} via {{ sync_status.assignment|linkify }}
+          {% checkmark True %} via {{ sync_status.requisition|linkify }}
         {% else %}
-          <span class="text-muted">No monitoring assignment</span>
+          <span class="text-muted">No requisition</span>
         {% endif %}
       </td>
     </tr>

@@ -1,6 +1,6 @@
 # Copyright 2026 Ronny Trommer <ronny@no42.org>
 # SPDX-License-Identifier: MIT
-"""REST API serializers (Epic 5)."""
+"""REST API serializers (Requisition redesign)."""
 
 from django.contrib.contenttypes.models import ContentType
 from netbox.api.fields import ContentTypeField
@@ -8,15 +8,15 @@ from netbox.api.serializers import NetBoxModelSerializer
 from rest_framework import serializers
 from utilities.api import get_serializer_for_model
 
-from ..derivation import validate_location_name
+from ..derivation import validate_location_name, validate_requisition_name
+from ..membership import filter_errors
 from ..models import (
     ASSIGNMENT_MODELS,
     MonitoredService,
-    MonitoringAssignment,
     MonitoringDetector,
     MonitoringOverride,
     MonitoringPolicy,
-    MonitoringProfile,
+    Requisition,
     object_ip_pks,
 )
 
@@ -29,27 +29,54 @@ def _validate_location(value):
     return value
 
 
-class MonitoringProfileSerializer(NetBoxModelSerializer):
+class RequisitionSerializer(NetBoxModelSerializer):
     url = serializers.HyperlinkedIdentityField(
-        view_name="plugins-api:netbox_opennms-api:monitoringprofile-detail"
+        view_name="plugins-api:netbox_opennms-api:requisition-detail"
     )
 
     class Meta:
-        model = MonitoringProfile
+        model = Requisition
         fields = (
             "id",
             "url",
             "display",
             "name",
             "description",
+            "priority",
+            "object_types",
+            "filter_params",
             "scan_interval",
             "default_interfaces",
+            "services",
+            "location",
             "tags",
             "custom_fields",
             "created",
             "last_updated",
         )
         brief_fields = ("id", "url", "display", "name")
+
+    def validate_location(self, value):
+        return _validate_location(value)
+
+    def validate_name(self, value):
+        try:
+            validate_requisition_name(value)
+        except ValueError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
+        return value
+
+    def validate(self, data):
+        data = super().validate(data)
+        # Build a transient instance to reuse the resolver's filter guard (C1/H1).
+        instance = self.instance or Requisition()
+        for attr in ("object_types", "filter_params"):
+            if attr in data:
+                setattr(instance, attr, data[attr])
+        errors = filter_errors(instance)
+        if errors:
+            raise serializers.ValidationError({"filter_params": errors})
+        return data
 
 
 class MonitoringDetectorSerializer(NetBoxModelSerializer):
@@ -63,7 +90,7 @@ class MonitoringDetectorSerializer(NetBoxModelSerializer):
             "id",
             "url",
             "display",
-            "profile",
+            "requisition",
             "name",
             "preset",
             "rule_class",
@@ -87,7 +114,7 @@ class MonitoringPolicySerializer(NetBoxModelSerializer):
             "id",
             "url",
             "display",
-            "profile",
+            "requisition",
             "name",
             "preset",
             "rule_class",
@@ -98,32 +125,6 @@ class MonitoringPolicySerializer(NetBoxModelSerializer):
             "last_updated",
         )
         brief_fields = ("id", "url", "display", "name")
-
-
-class MonitoringAssignmentSerializer(NetBoxModelSerializer):
-    url = serializers.HyperlinkedIdentityField(
-        view_name="plugins-api:netbox_opennms-api:monitoringassignment-detail"
-    )
-
-    class Meta:
-        model = MonitoringAssignment
-        fields = (
-            "id",
-            "url",
-            "display",
-            "profile",
-            "site",
-            "role",
-            "location",
-            "tags",
-            "custom_fields",
-            "created",
-            "last_updated",
-        )
-        brief_fields = ("id", "url", "display", "profile", "site", "role")
-
-    def validate_location(self, value):
-        return _validate_location(value)
 
 
 class MonitoringOverrideSerializer(NetBoxModelSerializer):
@@ -147,6 +148,7 @@ class MonitoringOverrideSerializer(NetBoxModelSerializer):
             "exclude",
             "management_ip",
             "additional_ips",
+            "suppressed_services",
             "location",
             "tags",
             "custom_fields",

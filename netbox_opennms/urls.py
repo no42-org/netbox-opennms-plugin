@@ -1,6 +1,6 @@
 # Copyright 2026 Ronny Trommer <ronny@no42.org>
 # SPDX-License-Identifier: MIT
-"""UI URL routing (Epic 5)."""
+"""UI URL routing (Requisition redesign)."""
 
 from django.urls import path
 from netbox.views.generic import ObjectChangeLogView
@@ -8,11 +8,10 @@ from netbox.views.generic import ObjectChangeLogView
 from . import views
 from .models import (
     MonitoredService,
-    MonitoringAssignment,
     MonitoringDetector,
     MonitoringOverride,
     MonitoringPolicy,
-    MonitoringProfile,
+    Requisition,
 )
 
 
@@ -45,19 +44,26 @@ def _crud(prefix, name, view_prefix, model, *, bulk_delete=True):
 
 
 urlpatterns = (
-    *_crud("monitoring-profiles", "monitoringprofile", "MonitoringProfile",
-           MonitoringProfile),
+    *_crud("requisitions", "requisition", "Requisition", Requisition),
+    path(
+        "requisitions/<int:pk>/sync/",
+        views.RequisitionSyncView.as_view(),
+        name="requisition_sync",
+    ),
+    path(
+        "requisitions/<int:pk>/duplicate/",
+        views.RequisitionDuplicateView.as_view(),
+        name="requisition_duplicate",
+    ),
+    path(
+        "requisitions/<int:pk>/dry-run/",
+        views.RequisitionDryRunView.as_view(),
+        name="requisition_dry_run",
+    ),
     *_crud("monitoring-detectors", "monitoringdetector", "MonitoringDetector",
            MonitoringDetector),
     *_crud("monitoring-policies", "monitoringpolicy", "MonitoringPolicy",
            MonitoringPolicy),
-    *_crud("monitoring-assignments", "monitoringassignment", "MonitoringAssignment",
-           MonitoringAssignment),
-    path(
-        "monitoring-assignments/<int:pk>/sync/",
-        views.MonitoringAssignmentSyncView.as_view(),
-        name="monitoringassignment_sync",
-    ),
     *_crud("monitoring-overrides", "monitoringoverride", "MonitoringOverride",
            MonitoringOverride),
     *_crud("monitored-services", "monitoredservice", "MonitoredService",

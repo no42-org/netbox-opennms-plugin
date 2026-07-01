@@ -1,6 +1,6 @@
 # Copyright 2026 Ronny Trommer <ronny@no42.org>
 # SPDX-License-Identifier: MIT
-"""Tests for pre-push resolution validation (Epic 5)."""
+"""Tests for pre-push resolution validation (Requisition redesign)."""
 
 from django.test import SimpleTestCase
 
@@ -8,7 +8,7 @@ from netbox_opennms.membership import NodeSpec, Resolution
 from netbox_opennms.validation import validate_resolution
 
 
-class _Assignment:
+class _Requisition:
     def __init__(self, location=""):
         self.location = location
 
@@ -21,26 +21,28 @@ class ValidateResolutionTest(SimpleTestCase):
 
     def test_warnings_forwarded(self):
         resolution = Resolution(
-            "fs", _Assignment(), nodes=[], warnings=["rtr-x: no management IP"]
+            "fs", _Requisition(), nodes=[], warnings=["rtr-x: no management IP"]
         )
         result = validate_resolution(resolution)
         self.assertTrue(result.ok)
         self.assertEqual(result.warnings, ["rtr-x: no management IP"])
 
-    def test_invalid_assignment_location_is_error(self):
-        resolution = Resolution("fs", _Assignment(location="bad name"), nodes=[])
+    def test_invalid_requisition_location_is_error(self):
+        resolution = Resolution("fs", _Requisition(location="bad name"), nodes=[])
         result = validate_resolution(resolution)
         self.assertFalse(result.ok)
-        self.assertTrue(any("invalid assignment location" in e for e in result.errors))
+        self.assertTrue(
+            any("invalid requisition location" in e for e in result.errors)
+        )
 
     def test_invalid_node_location_is_error(self):
         node = NodeSpec("rtr-1", "device-1", location="bad name", interfaces=[])
-        resolution = Resolution("fs", _Assignment(), nodes=[node])
+        resolution = Resolution("fs", _Requisition(), nodes=[node])
         result = validate_resolution(resolution)
         self.assertFalse(result.ok)
         self.assertTrue(any("rtr-1: invalid location" in e for e in result.errors))
 
     def test_valid_location_ok(self):
         node = NodeSpec("rtr-1", "device-1", location="edge-1", interfaces=[])
-        resolution = Resolution("fs", _Assignment(location="core"), nodes=[node])
+        resolution = Resolution("fs", _Requisition(location="core"), nodes=[node])
         self.assertTrue(validate_resolution(resolution).ok)

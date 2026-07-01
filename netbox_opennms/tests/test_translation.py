@@ -9,7 +9,7 @@ from netbox_opennms.membership import InterfaceSpec, NodeSpec
 from netbox_opennms.models import (
     MonitoringDetector,
     MonitoringPolicy,
-    MonitoringProfile,
+    Requisition,
 )
 from netbox_opennms.translation import (
     RenderError,
@@ -103,21 +103,23 @@ class RenderRequisitionTest(SimpleTestCase):
 
 
 class RenderForeignSourceDefinitionTest(TestCase):
-    """render_foreign_source_definition reads a profile's detectors/policies."""
+    """render_foreign_source_definition reads a Requisition's detectors/policies."""
 
     @classmethod
     def setUpTestData(cls):
-        cls.profile = MonitoringProfile.objects.create(
-            name="Network device", scan_interval="30m"
+        cls.requisition = Requisition.objects.create(
+            name="netbox.raleigh.router",
+            scan_interval="30m",
+            filter_params={"site": ["raleigh"], "role": ["router"]},
         )
         MonitoringDetector.objects.create(
-            profile=cls.profile,
+            requisition=cls.requisition,
             name="ICMP",
             rule_class="org.opennms.netmgt.provision.detector.icmp.IcmpDetector",
             parameters={"timeout": "2000", "retries": "1"},
         )
         MonitoringPolicy.objects.create(
-            profile=cls.profile,
+            requisition=cls.requisition,
             name="Categorise",
             rule_class="org.opennms.netmgt.provision.persist.policies."
             "NodeCategorySettingPolicy",
@@ -125,12 +127,16 @@ class RenderForeignSourceDefinitionTest(TestCase):
         )
 
     def test_scan_interval_and_name(self):
-        root = etree.fromstring(render_foreign_source_definition(FSNAME, self.profile))
+        root = etree.fromstring(
+            render_foreign_source_definition(FSNAME, self.requisition)
+        )
         self.assertEqual(root.get("name"), FSNAME)
         self.assertEqual(root.find(f"{FS}scan-interval").text, "30m")
 
     def test_detector_emits_class_and_sorted_parameters(self):
-        root = etree.fromstring(render_foreign_source_definition(FSNAME, self.profile))
+        root = etree.fromstring(
+            render_foreign_source_definition(FSNAME, self.requisition)
+        )
         detector = root.find(f"{FS}detectors/{FS}detector")
         self.assertEqual(detector.get("name"), "ICMP")
         self.assertEqual(
@@ -143,18 +149,23 @@ class RenderForeignSourceDefinitionTest(TestCase):
         self.assertEqual(params, [("retries", "1"), ("timeout", "2000")])
 
     def test_policy_emitted(self):
-        root = etree.fromstring(render_foreign_source_definition(FSNAME, self.profile))
+        root = etree.fromstring(
+            render_foreign_source_definition(FSNAME, self.requisition)
+        )
         policy = root.find(f"{FS}policies/{FS}policy")
         self.assertEqual(policy.get("name"), "Categorise")
         self.assertEqual(policy.find(f"{FS}parameter").get("key"), "category")
 
     def test_detectors_present_reverses_ad11(self):
-        # Epic 5 reversal: detection is on, so <detectors> is non-empty.
-        root = etree.fromstring(render_foreign_source_definition(FSNAME, self.profile))
+        root = etree.fromstring(
+            render_foreign_source_definition(FSNAME, self.requisition)
+        )
         self.assertEqual(len(root.find(f"{FS}detectors")), 1)
 
     def test_render_error_detector_without_class(self):
-        bare = MonitoringProfile.objects.create(name="Bare")
-        MonitoringDetector.objects.create(profile=bare, name="x", rule_class="")
+        bare = Requisition.objects.create(
+            name="bare", filter_params={"site": ["raleigh"]}
+        )
+        MonitoringDetector.objects.create(requisition=bare, name="x", rule_class="")
         with self.assertRaises(RenderError):
             render_foreign_source_definition(FSNAME, bare)

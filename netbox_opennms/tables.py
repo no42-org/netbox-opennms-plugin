@@ -1,49 +1,57 @@
 # Copyright 2026 Ronny Trommer <ronny@no42.org>
 # SPDX-License-Identifier: MIT
-"""Tables for plugin list views (Epic 5)."""
+"""Tables for plugin list views (Requisition redesign)."""
 
 import django_tables2 as tables
 from netbox.tables import NetBoxTable, columns
 
 from .models import (
     MonitoredService,
-    MonitoringAssignment,
     MonitoringDetector,
     MonitoringOverride,
     MonitoringPolicy,
-    MonitoringProfile,
+    Requisition,
 )
 
 
-class MonitoringProfileTable(NetBoxTable):
+class RequisitionTable(NetBoxTable):
     name = tables.Column(linkify=True)
 
     class Meta(NetBoxTable.Meta):
-        model = MonitoringProfile
+        model = Requisition
         fields = (
             "pk",
             "id",
             "name",
             "description",
+            "priority",
+            "object_types",
             "scan_interval",
             "default_interfaces",
+            "location",
             "created",
             "last_updated",
             "actions",
         )
-        default_columns = ("name", "description", "scan_interval", "default_interfaces")
+        default_columns = (
+            "name",
+            "priority",
+            "object_types",
+            "scan_interval",
+            "location",
+        )
 
 
 class MonitoringDetectorTable(NetBoxTable):
     name = tables.Column(linkify=True)
-    profile = tables.Column(linkify=True)
+    requisition = tables.Column(linkify=True)
 
     class Meta(NetBoxTable.Meta):
         model = MonitoringDetector
         fields = (
             "pk",
             "id",
-            "profile",
+            "requisition",
             "name",
             "preset",
             "rule_class",
@@ -51,19 +59,19 @@ class MonitoringDetectorTable(NetBoxTable):
             "last_updated",
             "actions",
         )
-        default_columns = ("profile", "name", "preset", "rule_class")
+        default_columns = ("requisition", "name", "preset", "rule_class")
 
 
 class MonitoringPolicyTable(NetBoxTable):
     name = tables.Column(linkify=True)
-    profile = tables.Column(linkify=True)
+    requisition = tables.Column(linkify=True)
 
     class Meta(NetBoxTable.Meta):
         model = MonitoringPolicy
         fields = (
             "pk",
             "id",
-            "profile",
+            "requisition",
             "name",
             "preset",
             "rule_class",
@@ -71,28 +79,7 @@ class MonitoringPolicyTable(NetBoxTable):
             "last_updated",
             "actions",
         )
-        default_columns = ("profile", "name", "preset", "rule_class")
-
-
-class MonitoringAssignmentTable(NetBoxTable):
-    profile = tables.Column(linkify=True)
-    site = tables.Column(linkify=True)
-    role = tables.Column(linkify=True)
-
-    class Meta(NetBoxTable.Meta):
-        model = MonitoringAssignment
-        fields = (
-            "pk",
-            "id",
-            "profile",
-            "site",
-            "role",
-            "location",
-            "created",
-            "last_updated",
-            "actions",
-        )
-        default_columns = ("profile", "site", "role", "location")
+        default_columns = ("requisition", "name", "preset", "rule_class")
 
 
 class MonitoringOverrideTable(NetBoxTable):

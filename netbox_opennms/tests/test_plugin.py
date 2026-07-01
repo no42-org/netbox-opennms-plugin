@@ -39,7 +39,6 @@ class PluginConfigTestCase(SimpleTestCase):
             self.assertEqual(get_plugin_config("netbox_opennms", key), "")
 
     def test_models_module_present(self):
-        # Story 1.2 introduced the first model.
-        from netbox_opennms.models import MonitoringProfile
+        from netbox_opennms.models import Requisition
 
-        self.assertTrue(issubclass(MonitoringProfile, models.Model))
+        self.assertTrue(issubclass(Requisition, models.Model))

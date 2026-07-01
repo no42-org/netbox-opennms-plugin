@@ -1,6 +1,6 @@
 # Copyright 2026 Ronny Trommer <ronny@no42.org>
 # SPDX-License-Identifier: MIT
-"""UI view (CRUD) tests for the Epic 5 models."""
+"""UI view (CRUD) tests for the plugin models."""
 
 from dcim.models import (
     Device,
@@ -15,17 +15,17 @@ from utilities.testing import ViewTestCases
 
 from netbox_opennms.models import (
     MonitoredService,
-    MonitoringAssignment,
     MonitoringDetector,
     MonitoringOverride,
     MonitoringPolicy,
-    MonitoringProfile,
+    Requisition,
 )
 
 DETECTOR_CLASS = "org.opennms.netmgt.provision.detector.icmp.IcmpDetector"
 POLICY_CLASS = (
     "org.opennms.netmgt.provision.persist.policies.NodeCategorySettingPolicy"
 )
+FILTER = {"site": ["site-1"], "role": ["router"]}
 
 
 def _devices(count):
@@ -39,7 +39,7 @@ def _devices(count):
     ]
 
 
-class MonitoringProfileViewTest(
+class RequisitionViewTest(
     ViewTestCases.GetObjectViewTestCase,
     ViewTestCases.GetObjectChangelogViewTestCase,
     ViewTestCases.CreateObjectViewTestCase,
@@ -48,19 +48,27 @@ class MonitoringProfileViewTest(
     ViewTestCases.ListObjectsViewTestCase,
     ViewTestCases.BulkDeleteObjectsViewTestCase,
 ):
-    model = MonitoringProfile
+    model = Requisition
+    # JSON / multi-value fields don't round-trip as plain equality in
+    # assertInstanceEqual (dict vs. string, list vs. list-of-choices).
+    validation_excluded_fields = ("filter_params", "services")
 
     def _get_base_url(self):
-        return "plugins:netbox_opennms:monitoringprofile_{}"
+        return "plugins:netbox_opennms:requisition_{}"
 
     @classmethod
     def setUpTestData(cls):
-        for name in ("Profile 1", "Profile 2", "Profile 3"):
-            MonitoringProfile.objects.create(name=name)
+        for name in ("req-1", "req-2", "req-3"):
+            Requisition.objects.create(name=name, filter_params=FILTER)
         cls.form_data = {
-            "name": "Profile 4",
+            "name": "req-4",
+            "priority": 100,
+            "object_types": "both",
+            "filter_params": '{"site": ["site-1"]}',
             "scan_interval": "1d",
             "default_interfaces": "primary",
+            "services": ["ICMP", "SNMP"],
+            "location": "",
         }
 
 
@@ -80,13 +88,13 @@ class MonitoringDetectorViewTest(
 
     @classmethod
     def setUpTestData(cls):
-        profile = MonitoringProfile.objects.create(name="P")
+        req = Requisition.objects.create(name="req", filter_params=FILTER)
         for name in ("d1", "d2", "d3"):
             MonitoringDetector.objects.create(
-                profile=profile, name=name, rule_class=DETECTOR_CLASS
+                requisition=req, name=name, rule_class=DETECTOR_CLASS
             )
         cls.form_data = {
-            "profile": profile.pk,
+            "requisition": req.pk,
             "name": "d4",
             "rule_class": DETECTOR_CLASS,
         }
@@ -108,49 +116,15 @@ class MonitoringPolicyViewTest(
 
     @classmethod
     def setUpTestData(cls):
-        profile = MonitoringProfile.objects.create(name="P")
+        req = Requisition.objects.create(name="req", filter_params=FILTER)
         for name in ("p1", "p2", "p3"):
             MonitoringPolicy.objects.create(
-                profile=profile, name=name, rule_class=POLICY_CLASS
+                requisition=req, name=name, rule_class=POLICY_CLASS
             )
         cls.form_data = {
-            "profile": profile.pk,
+            "requisition": req.pk,
             "name": "p4",
             "rule_class": POLICY_CLASS,
-        }
-
-
-class MonitoringAssignmentViewTest(
-    ViewTestCases.GetObjectViewTestCase,
-    ViewTestCases.GetObjectChangelogViewTestCase,
-    ViewTestCases.CreateObjectViewTestCase,
-    ViewTestCases.EditObjectViewTestCase,
-    ViewTestCases.DeleteObjectViewTestCase,
-    ViewTestCases.ListObjectsViewTestCase,
-    ViewTestCases.BulkDeleteObjectsViewTestCase,
-):
-    model = MonitoringAssignment
-
-    def _get_base_url(self):
-        return "plugins:netbox_opennms:monitoringassignment_{}"
-
-    @classmethod
-    def setUpTestData(cls):
-        profile = MonitoringProfile.objects.create(name="P")
-        site = Site.objects.create(name="Raleigh", slug="raleigh")
-        roles = [
-            DeviceRole.objects.create(name=f"Role {i}", slug=f"role-{i}")
-            for i in range(4)
-        ]
-        for role in roles[:3]:
-            MonitoringAssignment.objects.create(
-                profile=profile, site=site, role=role
-            )
-        cls.form_data = {
-            "profile": profile.pk,
-            "site": site.pk,
-            "role": roles[3].pk,
-            "location": "",
         }
 
 

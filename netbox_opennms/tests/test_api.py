@@ -1,6 +1,6 @@
 # Copyright 2026 Ronny Trommer <ronny@no42.org>
 # SPDX-License-Identifier: MIT
-"""REST API tests for the Epic 5 models."""
+"""REST API tests for the plugin models."""
 
 import unittest
 
@@ -17,17 +17,17 @@ from utilities.testing import APIViewTestCases
 
 from netbox_opennms.models import (
     MonitoredService,
-    MonitoringAssignment,
     MonitoringDetector,
     MonitoringOverride,
     MonitoringPolicy,
-    MonitoringProfile,
+    Requisition,
 )
 
 DETECTOR_CLASS = "org.opennms.netmgt.provision.detector.icmp.IcmpDetector"
 POLICY_CLASS = (
     "org.opennms.netmgt.provision.persist.policies.NodeCategorySettingPolicy"
 )
+FILTER = {"site": ["raleigh"], "role": ["router"]}
 
 
 class _NoGraphQL:
@@ -59,19 +59,19 @@ def _devices(count):
     ]
 
 
-class MonitoringProfileAPITest(_NoGraphQL, APIViewTestCases.APIViewTestCase):
-    model = MonitoringProfile
+class RequisitionAPITest(_NoGraphQL, APIViewTestCases.APIViewTestCase):
+    model = Requisition
     view_namespace = "plugins-api:netbox_opennms"
     brief_fields = ["display", "id", "name", "url"]
 
     @classmethod
     def setUpTestData(cls):
-        for name in ("P1", "P2", "P3"):
-            MonitoringProfile.objects.create(name=name)
+        for name in ("r1", "r2", "r3"):
+            Requisition.objects.create(name=name, filter_params=FILTER)
         cls.create_data = [
-            {"name": "P4", "scan_interval": "1d"},
-            {"name": "P5", "scan_interval": "30m"},
-            {"name": "P6"},
+            {"name": "r4", "object_types": "both", "filter_params": {"site": ["rdu"]}},
+            {"name": "r5", "filter_params": {"role": ["router"]}},
+            {"name": "r6", "filter_params": {"site": ["raleigh"]}},
         ]
 
 
@@ -82,15 +82,15 @@ class MonitoringDetectorAPITest(_NoGraphQL, APIViewTestCases.APIViewTestCase):
 
     @classmethod
     def setUpTestData(cls):
-        profile = MonitoringProfile.objects.create(name="P")
+        req = Requisition.objects.create(name="req", filter_params=FILTER)
         for name in ("d1", "d2", "d3"):
             MonitoringDetector.objects.create(
-                profile=profile, name=name, rule_class=DETECTOR_CLASS
+                requisition=req, name=name, rule_class=DETECTOR_CLASS
             )
         cls.create_data = [
-            {"profile": profile.pk, "name": "d4", "rule_class": DETECTOR_CLASS},
-            {"profile": profile.pk, "name": "d5", "rule_class": DETECTOR_CLASS},
-            {"profile": profile.pk, "name": "d6", "rule_class": DETECTOR_CLASS},
+            {"requisition": req.pk, "name": "d4", "rule_class": DETECTOR_CLASS},
+            {"requisition": req.pk, "name": "d5", "rule_class": DETECTOR_CLASS},
+            {"requisition": req.pk, "name": "d6", "rule_class": DETECTOR_CLASS},
         ]
 
 
@@ -101,39 +101,15 @@ class MonitoringPolicyAPITest(_NoGraphQL, APIViewTestCases.APIViewTestCase):
 
     @classmethod
     def setUpTestData(cls):
-        profile = MonitoringProfile.objects.create(name="P")
+        req = Requisition.objects.create(name="req", filter_params=FILTER)
         for name in ("p1", "p2", "p3"):
             MonitoringPolicy.objects.create(
-                profile=profile, name=name, rule_class=POLICY_CLASS
+                requisition=req, name=name, rule_class=POLICY_CLASS
             )
         cls.create_data = [
-            {"profile": profile.pk, "name": "p4", "rule_class": POLICY_CLASS},
-            {"profile": profile.pk, "name": "p5", "rule_class": POLICY_CLASS},
-            {"profile": profile.pk, "name": "p6", "rule_class": POLICY_CLASS},
-        ]
-
-
-class MonitoringAssignmentAPITest(_NoGraphQL, APIViewTestCases.APIViewTestCase):
-    model = MonitoringAssignment
-    view_namespace = "plugins-api:netbox_opennms"
-    brief_fields = ["display", "id", "profile", "role", "site", "url"]
-
-    @classmethod
-    def setUpTestData(cls):
-        profile = MonitoringProfile.objects.create(name="P")
-        site = Site.objects.create(name="Raleigh", slug="raleigh")
-        roles = [
-            DeviceRole.objects.create(name=f"Role {i}", slug=f"role-{i}")
-            for i in range(6)
-        ]
-        for role in roles[:3]:
-            MonitoringAssignment.objects.create(
-                profile=profile, site=site, role=role
-            )
-        cls.create_data = [
-            {"profile": profile.pk, "site": site.pk, "role": roles[3].pk},
-            {"profile": profile.pk, "site": site.pk, "role": roles[4].pk},
-            {"profile": profile.pk, "site": site.pk, "role": roles[5].pk},
+            {"requisition": req.pk, "name": "p4", "rule_class": POLICY_CLASS},
+            {"requisition": req.pk, "name": "p5", "rule_class": POLICY_CLASS},
+            {"requisition": req.pk, "name": "p6", "rule_class": POLICY_CLASS},
         ]
 
 

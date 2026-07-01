@@ -5,11 +5,12 @@
 The render half of render-and-replace. Deterministic and side-effect-free (no
 network, no DB writes): the requisition reads pre-resolved ``NodeSpec`` objects
 (the ``membership`` layer owns the ORM lookups), and the foreign-source
-definition reads a ``MonitoringProfile``'s detectors/policies. ``date_stamp`` is
-a parameter so output is reproducible.
+definition reads a ``Requisition``'s detectors/policies. ``date_stamp`` is a
+parameter so output is reproducible.
 
-Epic 5 reverses AD-11: the definition now emits the profile's detectors so
-OpenNMS auto-discovers services, instead of shipping an empty ``<detectors/>``.
+The definition emits the Requisition's detectors so OpenNMS auto-discovers
+services (reverses v1's AD-11 empty ``<detectors/>``), alongside the declared
+services the membership layer places on each interface.
 """
 
 from lxml import etree
@@ -84,18 +85,17 @@ def render_requisition(foreign_source, nodes, date_stamp=None, default_location=
     return etree.tostring(root, xml_declaration=True, encoding="UTF-8")
 
 
-def render_foreign_source_definition(foreign_source, profile, date_stamp=None):
-    """Render a foreign-source definition named ``foreign_source`` from a profile.
+def render_foreign_source_definition(foreign_source, requisition, date_stamp=None):
+    """Render a foreign-source definition named ``foreign_source`` from a Requisition.
 
-    Emits ``<scan-interval>`` plus the profile's detectors (OpenNMS auto-discovers
-    the matching services) and policies (categories, interface management). This
-    reverses v1's AD-11 empty ``<detectors/>``: detection is now the default
-    service source.
+    Emits ``<scan-interval>`` plus the Requisition's detectors (OpenNMS
+    auto-discovers the matching services) and policies (categories, interface
+    management). This reverses v1's AD-11 empty ``<detectors/>``: detection is a
+    service source alongside the Requisition's declared services.
 
-    The definition's ``name`` MUST be the Foreign Source (the requisition's
-    ``foreign-source``), not the profile name — OpenNMS links a definition to a
-    requisition by name, and a mismatch silently falls back to OpenNMS's built-in
-    default detectors. Returns bytes.
+    The definition's ``name`` is the Foreign Source (the Requisition's name) —
+    OpenNMS links a definition to a requisition by name, and a mismatch silently
+    falls back to OpenNMS's built-in default detectors. Returns bytes.
     """
     root = etree.Element(
         f"{{{FOREIGN_SOURCE_NS}}}foreign-source", nsmap={None: FOREIGN_SOURCE_NS}
@@ -105,14 +105,14 @@ def render_foreign_source_definition(foreign_source, profile, date_stamp=None):
         root.set("date-stamp", date_stamp)
 
     scan_interval = etree.SubElement(root, f"{{{FOREIGN_SOURCE_NS}}}scan-interval")
-    scan_interval.text = profile.scan_interval or "1d"
+    scan_interval.text = requisition.scan_interval or "1d"
 
     detectors = etree.SubElement(root, f"{{{FOREIGN_SOURCE_NS}}}detectors")
-    for detector in profile.detectors.all():
+    for detector in requisition.detectors.all():
         if not detector.rule_class:
             raise RenderError(
-                f"detector {detector.name!r} on profile {profile.name!r} has no "
-                "class."
+                f"detector {detector.name!r} on requisition "
+                f"{requisition.name!r} has no class."
             )
         el = etree.SubElement(detectors, f"{{{FOREIGN_SOURCE_NS}}}detector")
         el.set("name", detector.name)
@@ -120,10 +120,11 @@ def render_foreign_source_definition(foreign_source, profile, date_stamp=None):
         _add_parameters(el, detector.parameters)
 
     policies = etree.SubElement(root, f"{{{FOREIGN_SOURCE_NS}}}policies")
-    for policy in profile.policies.all():
+    for policy in requisition.policies.all():
         if not policy.rule_class:
             raise RenderError(
-                f"policy {policy.name!r} on profile {profile.name!r} has no class."
+                f"policy {policy.name!r} on requisition {requisition.name!r} has "
+                "no class."
             )
         el = etree.SubElement(policies, f"{{{FOREIGN_SOURCE_NS}}}policy")
         el.set("name", policy.name)

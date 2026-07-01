@@ -173,10 +173,11 @@ class MonitoringDetector(_ProvisioningRule):
         verbose_name_plural = "monitoring detectors"
 
     def _apply_preset(self):
-        # A preset fills the class (and seeds defaults) so the rule is
-        # self-contained. Done in both clean() and save() so the resolved class is
-        # persisted on EVERY path — the API/bulk paths don't run clean().
-        if self.preset and not self.rule_class:
+        # The preset OWNS the class: whenever a preset is set, the rule class is
+        # (re)derived from it and cannot be overridden by the user. Defaults are
+        # merged UNDER any user-set parameters. Applied in both clean() and save()
+        # so it holds on every path — the API/bulk paths don't run clean().
+        if self.preset:
             cls, defaults = resolve_detector(self.preset)
             self.rule_class = cls or ""
             self.parameters = {**defaults, **(self.parameters or {})}
@@ -218,7 +219,8 @@ class MonitoringPolicy(_ProvisioningRule):
         verbose_name_plural = "monitoring policies"
 
     def _apply_preset(self):
-        if self.preset and not self.rule_class:
+        # The preset OWNS the class (see MonitoringDetector._apply_preset).
+        if self.preset:
             cls, defaults = resolve_policy(self.preset)
             self.rule_class = cls or ""
             self.parameters = {**defaults, **(self.parameters or {})}

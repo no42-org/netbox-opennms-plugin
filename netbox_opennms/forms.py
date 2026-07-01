@@ -101,24 +101,41 @@ class RequisitionForm(NetBoxModelForm):
         return self.cleaned_data
 
 
-class MonitoringDetectorForm(NetBoxModelForm):
-    """Add/edit a detector on a Requisition (a preset, or a freeform class)."""
+class _PresetRuleForm(NetBoxModelForm):
+    """Shared: the preset owns the rule class, so it isn't user-editable.
+
+    The class is filled from the preset by the model; the form makes ``rule_class``
+    optional (a preset provides it) and locks the field once a preset is set —
+    freeform entry is only for a rule with no preset.
+    """
 
     requisition = DynamicModelChoiceField(
         queryset=Requisition.objects.all(), label=_("Requisition")
     )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        field = self.fields["rule_class"]
+        field.required = False
+        field.help_text = _(
+            "Set automatically from the preset and locked; enter a class only for "
+            "a freeform rule (no preset selected)."
+        )
+        # An existing preset-backed rule: the class is fixed to the preset's.
+        if self.instance and self.instance.pk and self.instance.preset:
+            field.disabled = True
+
+
+class MonitoringDetectorForm(_PresetRuleForm):
+    """Add/edit a detector on a Requisition (a preset, or a freeform class)."""
 
     class Meta:
         model = MonitoringDetector
         fields = ("requisition", "name", "preset", "rule_class", "parameters", "tags")
 
 
-class MonitoringPolicyForm(NetBoxModelForm):
+class MonitoringPolicyForm(_PresetRuleForm):
     """Add/edit a policy on a Requisition (a preset, or a freeform class)."""
-
-    requisition = DynamicModelChoiceField(
-        queryset=Requisition.objects.all(), label=_("Requisition")
-    )
 
     class Meta:
         model = MonitoringPolicy

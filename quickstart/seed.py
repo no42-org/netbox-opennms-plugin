@@ -228,7 +228,7 @@ requisition(
     "netbox.raleigh.router",
     {"site": ["raleigh"], "role": ["router"]},
     detectors=[("ICMP", "icmp"), ("SNMP", "snmp")],
-    policies=[("Categorise", "set-category")],
+    policies=[("Categorise", "set-node-category")],
     services=["ICMP", "SNMP"],
     location="Default",
 )

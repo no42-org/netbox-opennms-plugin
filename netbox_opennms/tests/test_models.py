@@ -24,6 +24,7 @@ from netbox_opennms.models import (
     object_ip_pks,
     override_ip_pks,
 )
+from netbox_opennms.presets import resolve_policy
 
 FILTER = {"site": ["raleigh"], "role": ["router"]}
 
@@ -67,11 +68,33 @@ class RequisitionAndRuleTest(TestCase):
 
     def test_policy_preset_fills_class(self):
         policy = MonitoringPolicy(
-            requisition=self.req, name="cat", preset="set-category",
+            requisition=self.req, name="cat", preset="set-node-category",
             parameters={"category": "Routers"},
         )
         policy.clean()
         self.assertTrue(policy.rule_class.endswith("NodeCategorySettingPolicy"))
+
+    def test_preset_owns_rule_class(self):
+        # A preset always (re)derives the class — a user-supplied rule_class can't
+        # override it (hard association).
+        detector = MonitoringDetector(
+            requisition=self.req, name="ICMP", preset="icmp",
+            rule_class="org.example.NotThis",
+        )
+        detector.clean()
+        self.assertTrue(detector.rule_class.endswith("IcmpDetector"))
+
+    def test_all_policy_presets_resolve_to_a_class(self):
+        for preset, suffix in (
+            ("match-ip-interface", "MatchingIpInterfacePolicy"),
+            ("match-snmp-interface", "MatchingSnmpInterfacePolicy"),
+            ("script-policy", "ScriptPolicy"),
+            ("set-interface-metadata", "InterfaceMetadataSettingPolicy"),
+            ("set-node-category", "NodeCategorySettingPolicy"),
+            ("set-node-metadata", "NodeMetadataSettingPolicy"),
+        ):
+            cls, _params = resolve_policy(preset)
+            self.assertTrue(cls.endswith(suffix), f"{preset} → {cls}")
 
     def test_tcp_preset_requires_port(self):
         bad = MonitoringDetector(requisition=self.req, name="tcp", preset="tcp")
@@ -84,7 +107,7 @@ class RequisitionAndRuleTest(TestCase):
         ok.clean()
 
     def test_set_category_preset_requires_category(self):
-        bad = MonitoringPolicy(requisition=self.req, name="cat", preset="set-category")
+        bad = MonitoringPolicy(requisition=self.req, name="cat", preset="set-node-category")
         with self.assertRaises(ValidationError):
             bad.clean()
 

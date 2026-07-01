@@ -65,17 +65,22 @@ class DetectorPresetChoices(ChoiceSet):
 
 
 class PolicyPresetChoices(ChoiceSet):
-    """Provisioning policy presets a Monitoring Profile can select (Epic 5).
+    """Provisioning policy presets a Requisition can select.
 
-    Resolve via ``presets.POLICY_PRESETS``; blank = freeform policy class.
+    One preset per built-in OpenNMS provisioning policy class (labels match the
+    OpenNMS UI). Resolve via ``presets.POLICY_PRESETS``; the preset owns the
+    rule class (the user cannot change it). Blank = freeform policy class.
     """
 
     key = "MonitoringPolicy.preset"
 
     CHOICES = [
-        ("set-category", "Set node category"),
-        ("manage-ip-interfaces", "Manage IP interfaces"),
-        ("snmp-collection", "SNMP interface collection"),
+        ("match-ip-interface", "Match IP Interface"),
+        ("match-snmp-interface", "Match SNMP Interface"),
+        ("script-policy", "Script Policy"),
+        ("set-interface-metadata", "Set Interface Metadata"),
+        ("set-node-category", "Set Node Category"),
+        ("set-node-metadata", "Set Node Metadata"),
     ]
 
 

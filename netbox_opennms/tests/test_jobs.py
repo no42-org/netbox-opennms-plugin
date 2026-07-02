@@ -21,10 +21,9 @@ from netbox_opennms.client import OpenNMSError, OpenNMSHTTPError
 from netbox_opennms.jobs import (
     ReconcileOrphansJob,
     SyncForeignSourceJob,
-    enabled_foreign_sources,
     unknown_locations,
 )
-from netbox_opennms.membership import resolve
+from netbox_opennms.membership import monitored_foreign_sources, resolve
 from netbox_opennms.models import (
     DeployedForeignSource,
     MonitoringDetector,
@@ -135,6 +134,32 @@ class SyncForeignSourceJobTest(TestCase):
         client.import_requisition.return_value = mock.Mock(status_code=202)
         self._runner().run(foreign_source=FS)
         mock_lock.assert_called_once_with(f"netbox_opennms:fs:{FS}")
+
+    @mock.patch("netbox_opennms.jobs.advisory_lock")
+    @mock.patch("netbox_opennms.jobs.OpenNMSClient.from_config")
+    def test_conflict_freezes_sync(self, mock_from_config, _lock):
+        # C1: an overlap blocks Sync of the involved Requisition — JobFailed with
+        # the conflict error, and NOTHING is pushed to OpenNMS.
+        Requisition.objects.create(
+            name="overlap", filter_params={"site": ["raleigh"]}
+        )
+        with self.assertRaises(JobFailed):
+            self._runner().run(foreign_source=FS)
+        mock_from_config.assert_not_called()
+
+    @mock.patch("netbox_opennms.jobs.OpenNMSClient.from_config")
+    def test_reconcile_ignores_frozen_requisition(self, mock_from_config):
+        # C5: a frozen (conflicted) Requisition counts as monitored — the drift
+        # reconciler must never tear down the state the freeze protects.
+        DeployedForeignSource.objects.create(name=FS)
+        Requisition.objects.create(
+            name="overlap", filter_params={"site": ["raleigh"]}
+        )
+        client = mock_from_config.return_value.__enter__.return_value
+        client.list_requisition_names.return_value = {FS}
+        with mock.patch.object(SyncForeignSourceJob, "enqueue_sync") as enqueue:
+            ReconcileOrphansJob(job=mock.Mock()).run()
+        enqueue.assert_not_called()
 
     @mock.patch("netbox_opennms.jobs.advisory_lock")
     @mock.patch("netbox_opennms.jobs.OpenNMSClient.from_config")
@@ -311,7 +336,7 @@ class SyncForeignSourceJobTest(TestCase):
             RECONCILE_INTERVAL_MINUTES,
         )
 
-    def test_enabled_foreign_sources(self):
+    def test_monitored_foreign_sources_lists_syncable_requisitions(self):
         durham = Site.objects.create(name="Durham", slug="durham")
         Requisition.objects.create(
             name="netbox.durham.router",
@@ -319,6 +344,18 @@ class SyncForeignSourceJobTest(TestCase):
         )
         self._make_device("rtr-d", "10.0.1.1/24", site=durham)
         self.assertEqual(
-            enabled_foreign_sources(),
+            monitored_foreign_sources(),
             ["netbox.durham.router", "netbox.raleigh.router"],
         )
+
+    @mock.patch("netbox_opennms.jobs.advisory_lock")
+    @mock.patch("netbox_opennms.jobs.OpenNMSClient.from_config")
+    def test_rejected_filter_blocks_sync(self, mock_from_config, _lock):
+        # Review #8: an unknown-key filter fails the job loudly (JobFailed),
+        # never a quiet skip with a green COMPLETED job.
+        Requisition.objects.filter(pk=self.requisition.pk).update(
+            filter_params={"bogus_key": ["x"]}
+        )
+        with self.assertRaises(JobFailed):
+            self._runner().run(foreign_source=FS)
+        mock_from_config.assert_not_called()

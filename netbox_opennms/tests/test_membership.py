@@ -22,8 +22,9 @@ from virtualization.models import (
 from netbox_opennms.choices import InterfaceScopeChoices
 from netbox_opennms.membership import (
     filter_errors,
-    governing_requisition,
+    matching_requisitions,
     monitored_foreign_sources,
+    requisition_conflicts,
     resolve,
     resolve_all,
     resolve_node,
@@ -164,30 +165,129 @@ class MembershipTest(TestCase):
         )
         self.assertEqual(filter_errors(req), [])
 
-    # --- priority-ordered overlap ------------------------------------------
+    # --- conflicts (C1/C3/C4) ------------------------------------------------
 
-    def test_higher_priority_requisition_claims_a_shared_object(self):
+    def test_overlap_is_a_conflict_on_every_involved_requisition(self):
         device, _ = self._device("rtr-1")
-        high = self._requisition(
-            name="high", filter_params={"role": ["router"]}, priority=1
-        )
-        self._requisition(name="low", filter_params={"role": ["router"]}, priority=2)
+        self._requisition(name="a", filter_params={"role": ["router"]})
+        self._requisition(name="b", filter_params={"site": ["raleigh"]})
+        by_name = {r.foreign_source: r for r in resolve_all()}
+        for name in ("a", "b"):
+            resolution = by_name[name]
+            self.assertEqual(resolution.nodes, [])  # conflicted → rendered nowhere
+            self.assertEqual(len(resolution.conflicts), 1)
+            conflict = resolution.conflicts[0]
+            self.assertEqual(conflict.foreign_id, f"device-{device.pk}")
+            self.assertEqual(conflict.requisition_names, ["a", "b"])
+
+    def test_matching_requisitions_single_then_conflicted(self):
+        device, _ = self._device("rtr-1")
+        a = self._requisition(name="a", filter_params={"role": ["router"]})
+        self.assertEqual(matching_requisitions(device), [a])
+        b = self._requisition(name="b", filter_params={"site": ["raleigh"]})
+        self.assertEqual(set(matching_requisitions(device)), {a, b})
+
+    def test_exclusion_resolves_a_conflict(self):
+        # C3: an excluded object is monitored nowhere — no ambiguity, no conflict.
+        device, _ = self._device("rtr-1")
+        self._requisition(name="a", filter_params={"role": ["router"]})
+        self._requisition(name="b", filter_params={"site": ["raleigh"]})
+        MonitoringOverride.objects.create(assigned_object=device, exclude=True)
+        for resolution in resolve_all():
+            self.assertEqual(resolution.conflicts, [])
+            self.assertEqual(resolution.nodes, [])
+
+    def test_resolution_is_order_independent(self):
+        # C4/3.6: disjoint filters resolve identically regardless of name/creation
+        # order — nothing claims, nothing is order-dependent.
+        d1, _ = self._device("rtr-1")
+        d2, _ = self._device("srv-1", role=self.server, ip="10.0.0.2/24")
+        self._requisition(name="zz-routers", filter_params={"role": ["router"]})
+        self._requisition(name="aa-servers", filter_params={"role": ["server"]})
         by_name = {r.foreign_source: r for r in resolve_all()}
         self.assertEqual(
-            [n.foreign_id for n in by_name["high"].nodes], [f"device-{device.pk}"]
+            [n.foreign_id for n in by_name["zz-routers"].nodes],
+            [f"device-{d1.pk}"],
         )
-        self.assertEqual(by_name["low"].nodes, [])
-        self.assertEqual(governing_requisition(device), high)
+        self.assertEqual(
+            [n.foreign_id for n in by_name["aa-servers"].nodes],
+            [f"device-{d2.pk}"],
+        )
+        self.assertEqual(by_name["zz-routers"].conflicts, [])
+        self.assertEqual(by_name["aa-servers"].conflicts, [])
 
-    def test_reorder_moves_membership(self):
+    def test_negated_filter_resolves_layering(self):
+        # C7/6.2: the layering escape hatch — tag__n makes overlapping intents
+        # disjoint ("critical here, the remaining routers there").
+        from extras.models import Tag
+
+        tag = Tag.objects.create(name="critical", slug="critical")
+        tagged, _ = self._device("rtr-critical")
+        tagged.tags.add(tag)
+        plain, _ = self._device("rtr-plain", ip="10.0.0.2/24")
+        self._requisition(name="critical", filter_params={"tag": ["critical"]})
+        self._requisition(
+            name="routers",
+            filter_params={"role": ["router"], "tag__n": ["critical"]},
+        )
+        by_name = {r.foreign_source: r for r in resolve_all()}
+        self.assertEqual(by_name["critical"].conflicts, [])
+        self.assertEqual(by_name["routers"].conflicts, [])
+        self.assertEqual(
+            [n.foreign_id for n in by_name["critical"].nodes],
+            [f"device-{tagged.pk}"],
+        )
+        self.assertEqual(
+            [n.foreign_id for n in by_name["routers"].nodes],
+            [f"device-{plain.pk}"],
+        )
+
+    def test_frozen_requisition_counts_as_monitored(self):
+        # C5: frozen ≠ orphan — a conflicted requisition must never drop out of
+        # the monitored set, or the drift reconciler would tear it down.
+        self._device("rtr-1")
+        self._requisition(name="a", filter_params={"role": ["router"]})
+        self._requisition(name="b", filter_params={"site": ["raleigh"]})
+        self.assertEqual(monitored_foreign_sources(), ["a", "b"])
+
+    def test_warning_state_requisition_counts_as_monitored(self):
+        # Review #1: a requisition whose filter value went stale (warning, no
+        # nodes, no conflicts) must NOT drop out of the monitored set — the
+        # reconciler would delete its live OpenNMS nodes on a NetBox rename.
+        self._device("rtr-1")
+        self._requisition(filter_params={"role": ["renamed-away"]})
+        self.assertEqual(monitored_foreign_sources(), [FS])
+
+    def test_mixed_frozen_resolution_keeps_unconflicted_nodes(self):
+        # Review #14: a frozen requisition still resolves its unconflicted
+        # members into nodes (shown in the preview) while the conflicted one
+        # becomes a Conflict — and the whole requisition stays sync-blocked.
+        shared, _ = self._device("rtr-shared")
+        only_a, _ = self._device("srv-only", role=self.server, ip="10.0.0.2/24")
+        self._requisition(name="a", filter_params={"site": ["raleigh"]})
+        self._requisition(name="b", filter_params={"role": ["router"]})
+        by_name = {r.foreign_source: r for r in resolve_all()}
+        a = by_name["a"]
+        self.assertEqual(
+            [c.foreign_id for c in a.conflicts], [f"device-{shared.pk}"]
+        )
+        self.assertEqual(
+            [n.foreign_id for n in a.nodes], [f"device-{only_a.pk}"]
+        )
+        b = by_name["b"]
+        self.assertEqual(len(b.conflicts), 1)
+        self.assertEqual(b.nodes, [])
+
+    def test_requisition_conflicts_without_fleet_pass(self):
+        # Review #12: the detail-page banner's narrow check matches resolve_all.
         device, _ = self._device("rtr-1")
-        a = self._requisition(name="a", filter_params={"role": ["router"]}, priority=1)
-        b = self._requisition(name="b", filter_params={"role": ["router"]}, priority=2)
-        self.assertEqual(governing_requisition(device), a)
-        a.priority, b.priority = 2, 1
-        a.save()
-        b.save()
-        self.assertEqual(governing_requisition(device), b)
+        a = self._requisition(name="a", filter_params={"role": ["router"]})
+        self.assertEqual(requisition_conflicts(a), [])
+        self._requisition(name="b", filter_params={"site": ["raleigh"]})
+        conflicts = requisition_conflicts(a)
+        self.assertEqual(len(conflicts), 1)
+        self.assertEqual(conflicts[0].foreign_id, f"device-{device.pk}")
+        self.assertEqual(conflicts[0].requisition_names, ["a", "b"])
 
     # --- resolve_node -------------------------------------------------------
 

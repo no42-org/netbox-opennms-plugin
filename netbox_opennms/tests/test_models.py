@@ -150,12 +150,6 @@ class RequisitionModelTest(TestCase):
         with self.assertRaises(ValidationError):
             req.clean()
 
-    def test_priority_is_not_unique(self):
-        # Two Requisitions may share a priority (reorder-safe — no DB unique).
-        Requisition.objects.create(name="a", priority=5, filter_params=FILTER)
-        # No IntegrityError:
-        Requisition.objects.create(name="b", priority=5, filter_params=FILTER)
-
     def test_invalid_service_name_rejected(self):
         req = Requisition(name="x", filter_params=FILTER, services=["BOGUS"])
         with self.assertRaises(ValidationError):

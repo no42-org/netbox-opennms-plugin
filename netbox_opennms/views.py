@@ -18,10 +18,9 @@ from .client import OpenNMSClient, OpenNMSError
 from .dryrun import dry_run
 from .jobs import (
     SyncForeignSourceJob,
-    enabled_foreign_sources,
     unknown_locations,
 )
-from .membership import resolve, resolve_all
+from .membership import requisition_conflicts, resolve, resolve_all
 from .models import (
     MonitoredService,
     MonitoringDetector,
@@ -89,7 +88,15 @@ class RequisitionView(generic.ObjectView):
     queryset = Requisition.objects.prefetch_related("detectors", "policies")
 
     def get_extra_context(self, request, instance):
-        return {"no_worker_warning": _no_worker_running()}
+        # The post-save landing page doubles as the overlap warning surface (C2):
+        # a save with an overlapping filter succeeds, and the conflict banner here
+        # names the object + parties immediately. requisition_conflicts tests only
+        # THIS requisition's members against the other filters — narrow queries,
+        # no fleet-wide node resolution (review #12).
+        return {
+            "no_worker_warning": _no_worker_running(),
+            "conflicts": requisition_conflicts(instance),
+        }
 
 
 class RequisitionListView(generic.ObjectListView):
@@ -134,7 +141,6 @@ class RequisitionDuplicateView(PermissionRequiredMixin, View):
         clone = Requisition(
             name=name,
             description=source.description,
-            priority=source.priority,
             object_types=source.object_types,
             filter_params=deepcopy(source.filter_params),
             scan_interval=source.scan_interval,
@@ -160,6 +166,14 @@ class RequisitionDuplicateView(PermissionRequiredMixin, View):
                 parameters=deepcopy(policy.parameters),
             )
         messages.success(request, f"Duplicated {source.name} → {clone.name}.")
+        # A verbatim filter copy overlaps the source on EVERY member — both are
+        # frozen until the filters diverge (review #4). Say so immediately.
+        messages.warning(
+            request,
+            f"{clone.name} has the same filter as {source.name}: every shared "
+            "member is now a conflict and BOTH requisitions are frozen. Edit "
+            f"{clone.name}'s filter (or delete it) to unfreeze.",
+        )
         return redirect(clone.get_absolute_url())
 
 
@@ -345,17 +359,37 @@ class ForeignSourceSyncView(PermissionRequiredMixin, View):
 
 
 class MonitoringSyncAllView(PermissionRequiredMixin, View):
-    """Enqueue a Sync for every Requisition that resolves to members (FR-9)."""
+    """Enqueue a Sync for every syncable Requisition (FR-9).
+
+    Fans out over one ``resolve_all()`` pass: requisitions that resolve to nodes
+    are enqueued; **frozen** ones (conflicts) are skipped with a warning instead
+    of being enqueued into a guaranteed-failed Job (review #2) — the freeze is
+    enforced here just as it is on the per-requisition Sync path.
+    """
 
     permission_required = SYNC_PERM
 
     def post(self, request):
-        foreign_sources = enabled_foreign_sources()
-        for foreign_source in foreign_sources:
-            SyncForeignSourceJob.enqueue_sync(foreign_source, user=request.user)
-        if foreign_sources:
+        submitted, frozen = 0, 0
+        for resolution in resolve_all():
+            if resolution.conflicts:
+                frozen += 1
+                continue
+            if not resolution.nodes:
+                continue
+            SyncForeignSourceJob.enqueue_sync(
+                resolution.foreign_source, user=request.user
+            )
+            submitted += 1
+        if frozen:
+            messages.warning(
+                request,
+                f"Skipped {frozen} frozen requisition(s) — resolve their filter "
+                "conflicts before they can sync.",
+            )
+        if submitted:
             messages.success(
-                request, f"Submitted {len(foreign_sources)} Foreign Source sync(s)."
+                request, f"Submitted {submitted} Foreign Source sync(s)."
             )
         else:
             messages.info(request, "Nothing to sync.")
@@ -365,10 +399,11 @@ class MonitoringSyncAllView(PermissionRequiredMixin, View):
 class SyncPreviewView(LoginRequiredMixin, View):
     """The preview-and-sync overview: every Requisition + its resolved members.
 
-    Lists every Requisition in priority order with its node count and any
-    resolution warnings (rejected filters, member skips), so the operator sees
-    what will go before pressing Sync. The per-node dry-run diff against OpenNMS is
-    a per-Requisition action (RequisitionDryRunView).
+    Lists every Requisition with its node count, any resolution warnings
+    (rejected filters, member skips), and its blocking conflicts (a frozen
+    Requisition cannot sync until the overlap is resolved — C1), so the operator
+    sees what will go before pressing Sync. The per-node dry-run diff against
+    OpenNMS is a per-Requisition action (RequisitionDryRunView).
     """
 
     template_name = "netbox_opennms/sync_preview.html"
@@ -382,6 +417,7 @@ class SyncPreviewView(LoginRequiredMixin, View):
                     "requisition": resolution.requisition,
                     "node_count": len(resolution.nodes),
                     "warnings": resolution.warnings,
+                    "conflicts": resolution.conflicts,
                 }
             )
         return render(

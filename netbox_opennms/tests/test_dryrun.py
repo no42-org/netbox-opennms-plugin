@@ -5,7 +5,7 @@
 from django.test import SimpleTestCase
 
 from netbox_opennms.dryrun import diff
-from netbox_opennms.membership import InterfaceSpec, NodeSpec, Resolution
+from netbox_opennms.membership import Conflict, InterfaceSpec, NodeSpec, Resolution
 
 
 class _Rules:
@@ -91,6 +91,18 @@ class DryRunDiffTest(SimpleTestCase):
         self.assertTrue(
             any("scan-interval" in c for c in result.definition_changes)
         )
+
+    def test_conflict_reports_freeze_instead_of_diff(self):
+        # C1: a frozen Requisition's dry-run reports the conflicts, not a node
+        # diff of a push that is blocked anyway.
+        resolution = _resolution([_node()])
+        resolution.conflicts = [Conflict("rtr-1", "device-1", ["a", "b"])]
+        result = diff(resolution, _current(), {"scan-interval": "1d"})
+        self.assertEqual(len(result.conflicts), 1)
+        self.assertEqual(result.added, [])
+        self.assertEqual(result.removed, [])
+        self.assertEqual(result.changed, [])
+        self.assertEqual(result.unchanged, 0)
 
     def test_blank_location_matches_configured_default(self):
         # Node location blank + OpenNMS holds the configured default_location →

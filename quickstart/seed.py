@@ -11,12 +11,13 @@ Run it with `quickstart/seed.sh`, or by hand inside the NetBox container (the OR
 Idempotent — every object is get_or_create'd, so re-running is safe.
 
 It builds enough to exercise every path: user-named **Requisitions** (each a
-filter over Devices/VMs + inline detectors/policies + declared services),
-priority-ordered membership, per-object **Monitoring Overrides** (extra IPs, an
-added service, a suppressed declared service, an excluded object, an
-OpenNMS-unknown location to trip the no-Minion warning), a multi-node Foreign
-Source mixing devices and VMs, and an object in no requisition (unmonitored). A
-node's management IP is its primary IP.
+disjoint filter over Devices/VMs + inline detectors/policies + declared
+services), per-object **Monitoring Overrides** (extra IPs, an added service, a
+suppressed declared service, an excluded object, an OpenNMS-unknown location to
+trip the no-Minion warning), a multi-node Foreign Source mixing devices and VMs,
+and an object in no requisition (unmonitored). Filters are pairwise disjoint —
+an overlap would be a blocking conflict. A node's management IP is its primary
+IP.
 """
 
 from dcim.models import (
@@ -112,7 +113,6 @@ def requisition(
     detectors=(),
     policies=(),
     services=(),
-    priority=100,
     location="",
     object_types="both",
 ):
@@ -120,7 +120,6 @@ def requisition(
     req = Requisition.objects.get_or_create(
         name=name,
         defaults={
-            "priority": priority,
             "object_types": object_types,
             "filter_params": filter_params,
             "services": list(services),

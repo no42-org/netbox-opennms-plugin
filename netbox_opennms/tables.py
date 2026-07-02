@@ -24,7 +24,6 @@ class RequisitionTable(NetBoxTable):
             "id",
             "name",
             "description",
-            "priority",
             "object_types",
             "scan_interval",
             "default_interfaces",
@@ -35,7 +34,6 @@ class RequisitionTable(NetBoxTable):
         )
         default_columns = (
             "name",
-            "priority",
             "object_types",
             "scan_interval",
             "location",

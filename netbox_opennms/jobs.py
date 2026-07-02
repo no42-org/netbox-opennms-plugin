@@ -37,7 +37,7 @@ from virtualization.models import VirtualMachine
 from .client import OpenNMSClient, OpenNMSError
 from .derivation import validate_location_name
 from .membership import (
-    governing_requisition,
+    matching_requisitions,
     monitored_foreign_sources,
     resolve,
 )
@@ -54,15 +54,6 @@ PLUGIN_NAME = "netbox_opennms"
 # evaluated at import, before plugin config is available; operators disable the
 # pass entirely via the ``reconcile_orphans`` config flag, not the cadence.
 RECONCILE_INTERVAL_MINUTES = 60
-
-
-def enabled_foreign_sources():
-    """The sorted set of Foreign Sources with a governing assignment + members.
-
-    Used by the bulk / 'Sync all' actions to fan out one job per Foreign Source
-    (AD-5: render-and-replace is per whole Foreign Source).
-    """
-    return monitored_foreign_sources()
 
 
 def unknown_locations(client, locations):
@@ -157,24 +148,13 @@ class SyncForeignSourceJob(JobRunner):
 
         if resolution is None and not allow_empty:
             self.logger.info(
-                f"{foreign_source} has no governing assignment — skipped."
+                f"{foreign_source} has no Requisition — skipped."
             )
             return False
 
-        if resolution is not None and not resolution.nodes and not allow_empty:
-            # A Sync must never mass-delete. An empty requisition tells OpenNMS to
-            # remove every node — the deliberate Remove path (allow_empty), not
-            # Sync. Surface why nothing resolved, then skip rather than wipe.
-            for warning in resolution.warnings:
-                self.logger.warning(warning)
-            self.logger.info(
-                f"nothing to sync for {foreign_source} (no monitorable members) "
-                "— skipped; use Remove to clear the Foreign Source."
-            )
-            return False
-
-        # Re-validate intent as a safety net (FR-8): the view blocks on errors,
-        # but non-UI triggers must fail cleanly too, not push bad intent (AD-12).
+        # Validate FIRST (FR-8/AD-12): conflicts (C1 freeze) and rejected filters
+        # fail the job loudly even when they resolve to ZERO nodes — the quiet
+        # empty-skip below must never swallow a blocking error (review #8).
         validation = validate_resolution(resolution)
         for warning in validation.warnings:
             self.logger.warning(warning)
@@ -182,6 +162,16 @@ class SyncForeignSourceJob(JobRunner):
             for error in validation.errors:
                 self.logger.error(error)
             raise JobFailed()
+
+        if resolution is not None and not resolution.nodes and not allow_empty:
+            # Validated clean but nothing resolved. A Sync must never mass-delete:
+            # an empty requisition tells OpenNMS to remove every node — that is
+            # the deliberate Remove path (allow_empty), not Sync.
+            self.logger.info(
+                f"nothing to sync for {foreign_source} (no monitorable members) "
+                "— skipped; use Remove to clear the Foreign Source."
+            )
+            return False
 
         nodes = resolution.nodes if resolution is not None else []
         locations = {default_location}
@@ -295,31 +285,42 @@ def sync_status_for(target):
     """Last-sync state for a Device/VM — the single source the Device/VM template
     extension renders (Story 4.2).
 
-    Runs the priority resolver to find the Requisition that governs the object (if
-    any) and whether an override excludes it, and attaches the latest Job for that
-    Requisition's Foreign Source. Returns ``None`` for a missing or non-Device/VM
-    target.
+    Finds every Requisition whose filter matches the object: exactly one =
+    governed by it; several = **conflicted** between them (C1 — the panel names
+    the parties); none = unmonitored. Also reports whether an override excludes
+    it, and attaches the latest Job for the governing Foreign Source. Returns
+    ``None`` for a missing or non-Device/VM target.
     """
     if target is None or not isinstance(target, (Device, VirtualMachine)):
         return None
-    # governing_requisition returns the CLAIMING requisition even for an excluded
-    # object, so the panel keeps the Foreign Source + last-sync Job (review #9);
-    # `governed` (actively monitored) then excludes the excluded ones.
-    requisition = governing_requisition(target)
+    # matching_requisitions includes matches for an excluded object, so the panel
+    # keeps the Foreign Source + last-sync Job (review #9); `governed` (actively
+    # monitored) then excludes the excluded ones. An excluded object never
+    # conflicts (C3) — its first match is shown as the (inactive) requisition.
+    matches = matching_requisitions(target)
     content_type = ContentType.objects.get_for_model(type(target))
     override = MonitoringOverride.objects.filter(
         assigned_object_type=content_type, assigned_object_id=target.pk
     ).first()
     excluded = bool(override and override.exclude)
-    governed = requisition is not None and not excluded
+    conflicted = len(matches) >= 2 and not excluded
+    requisition = None
+    if matches and (len(matches) == 1 or excluded):
+        requisition = matches[0]
+    governed = requisition is not None and not excluded and not conflicted
     foreign_source = requisition.name if requisition is not None else None
-    job = latest_sync_job(foreign_source) if foreign_source else None
+    # Look up the last sync across EVERY matching Foreign Source (reviews #3/#9):
+    # a conflicted/excluded multi-match object's node and Job history live under
+    # whichever requisition actually synced it — the panel must keep them.
+    names = [r.name for r in matches]
+    job = latest_sync_job(names) if names else None
     is_removal = bool(job) and job.name.endswith(" (remove)")
     return {
         "foreign_source": foreign_source,
         "requisition": requisition,
         "governed": governed,
         "excluded": excluded,
+        "conflicts": sorted(r.name for r in matches) if conflicted else [],
         "job": job,
         "outcome": sync_outcome(job, is_removal=is_removal, governed=governed),
     }

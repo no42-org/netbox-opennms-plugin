@@ -67,6 +67,19 @@ class SyncViewTest(TestCase):
         self.assertEqual(mock_enqueue.call_args.kwargs["allow_empty"], True)
 
     @mock.patch("netbox_opennms.views.SyncForeignSourceJob.enqueue_sync")
+    def test_sync_all_skips_frozen_requisitions(self, mock_enqueue):
+        # Review #2: Sync-all must not enqueue a guaranteed-failed job for a
+        # frozen requisition — it skips it with a warning.
+        Requisition.objects.create(
+            name="overlap", filter_params={"site": ["raleigh"]}
+        )
+        self.client.force_login(self.superuser)
+        url = reverse("plugins:netbox_opennms:sync_all")
+        response = self.client.post(url, follow=True)
+        mock_enqueue.assert_not_called()
+        self.assertContains(response, "frozen")
+
+    @mock.patch("netbox_opennms.views.SyncForeignSourceJob.enqueue_sync")
     def test_sync_all_enqueues_governed_foreign_sources(self, mock_enqueue):
         mock_enqueue.return_value = mock.Mock(pk=13)
         self.client.force_login(self.superuser)

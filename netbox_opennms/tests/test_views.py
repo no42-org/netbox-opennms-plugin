@@ -62,7 +62,6 @@ class RequisitionViewTest(
             Requisition.objects.create(name=name, filter_params=FILTER)
         cls.form_data = {
             "name": "req-4",
-            "priority": 100,
             "object_types": "both",
             "filter_params": '{"site": ["site-1"]}',
             "scan_interval": "1d",

@@ -26,13 +26,17 @@
     </div>
     <table class="table table-hover">
       <thead>
-        <tr><th>Requisition</th><th>Priority</th><th>Nodes</th><th>Warnings</th><th></th></tr>
+        <tr><th>Requisition</th><th>Conflicts</th><th>Nodes</th><th>Warnings</th><th></th></tr>
       </thead>
       <tbody>
         {% for row in rows %}
           <tr>
             <td>{{ row.requisition|linkify }} <code class="text-muted">{{ row.foreign_source }}</code></td>
-            <td>{{ row.requisition.priority }}</td>
+            <td>
+              {% if row.conflicts %}
+                <span class="badge text-bg-danger" title="Sync blocked — resolve the filter overlap">{{ row.conflicts|length }} — frozen</span>
+              {% else %}{{ ''|placeholder }}{% endif %}
+            </td>
             <td>{{ row.node_count }}</td>
             <td>
               {% if row.warnings %}
@@ -44,7 +48,7 @@
               {% if perms.netbox_opennms.change_requisition %}
                 <form method="post" action="{% url 'plugins:netbox_opennms:requisition_sync' pk=row.requisition.pk %}" class="d-inline">
                   {% csrf_token %}
-                  <button type="submit" class="btn btn-sm btn-primary">Sync</button>
+                  <button type="submit" class="btn btn-sm btn-primary" {% if row.conflicts %}disabled title="Frozen — resolve the filter conflicts first"{% endif %}>Sync</button>
                 </form>
               {% endif %}
             </td>

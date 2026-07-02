@@ -15,10 +15,12 @@ declared services are the guaranteed-present floor. A per-object **Monitoring
 Override** is the escape hatch (exclude an object, pin a different management IP,
 add extra interfaces, add/suppress a service, or change its location).
 
-Requisitions are resolved in **priority order**: an object matched by more than
-one Requisition's filter is claimed by the highest-priority one, so a node lives
-in exactly one Foreign Source. A **dry-run** shows, per node, exactly what a Sync
-would add / remove / change against the live OpenNMS state before you commit.
+Requisition filters must be **disjoint**: an object matched by more than one
+Requisition's filter is a **conflict** — Sync of every involved Requisition is
+blocked (their OpenNMS state stays untouched) until you resolve the overlap, so a
+node always lives in exactly one Foreign Source and nothing ever moves or
+disappears implicitly. A **dry-run** shows, per node, exactly what a Sync would
+add / remove / change against the live OpenNMS state before you commit.
 
 **Sync** renders the complete OpenNMS *foreign-source definition* + *requisition*
 and imports it. Membership is a live NetBox query, so adding/removing a Device or
@@ -135,16 +137,23 @@ not derived. Its membership is a NetBox **filter** (FilterSet parameters, e.g.
 VirtualMachines per its *object types*; you can seed the filter by **importing a
 NetBox Saved Filter** (a one-time copy — no live link). A filter must actually
 constrain each selected object type, so a typo or empty value can't silently
-become a fleet-wide catch-all. When several Requisitions match the same object,
-the highest-**priority** (lowest number) one claims it, so every node belongs to
-exactly one Foreign Source.
+become a fleet-wide catch-all.
+
+Filters must be **disjoint**. When several Requisitions match the same object it
+is a **conflict**: the object is rendered into none of them and Sync of every
+involved Requisition is blocked (frozen — the OpenNMS state stays exactly as last
+synced) until you resolve it. Resolve by narrowing a filter — typically with a
+negated parameter, e.g. `{"role": ["switch"], "tag__n": ["critical"]}` — or by
+excluding the object (an excluded object never conflicts; it is monitored
+nowhere). Conflicts are shown on the Requisition page, the Sync preview, the
+dry-run, and the affected Device/VM page.
 
 Node identity is the pair *(Foreign Source, type-qualified Foreign ID)* —
 `device-{pk}` / `vm-{pk}` — so a re-sync updates a node in place and renaming a
 Device only relabels it (never a duplicate). Moving an object between Requisitions
-(a filter or priority change) changes its Foreign Source, which OpenNMS treats as
-a new node; the per-node **dry-run** surfaces such moves — and every add / remove /
-change against the live OpenNMS state — before you Sync.
+(a filter change) changes its Foreign Source, which OpenNMS treats as a new node;
+the per-node **dry-run** surfaces such moves — and every add / remove / change
+against the live OpenNMS state — before you Sync.
 
 ## Development
 

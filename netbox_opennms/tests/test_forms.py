@@ -72,7 +72,6 @@ class RequisitionSavedFilterImportTest(TestCase):
     def _form(self, **overrides):
         data = {
             "name": "core-switches",
-            "priority": 100,
             "object_types": "device",
             "filter_params": "{}",
             "scan_interval": "1d",

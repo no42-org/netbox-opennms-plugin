@@ -57,6 +57,9 @@ class DryRun:
     unchanged: int = 0
     definition_changes: list = field(default_factory=list)
     warnings: list = field(default_factory=list)
+    # Non-empty = the Requisition is FROZEN (C1): the conflicts are reported
+    # instead of a node diff, because no sync could push what the diff shows.
+    conflicts: list = field(default_factory=list)
 
     @property
     def has_changes(self):
@@ -194,6 +197,11 @@ def diff(resolution, current_requisition, current_definition, default_location="
     )
     if resolution is not None:
         result.warnings = list(resolution.warnings)
+        if resolution.conflicts:
+            # Frozen: report the conflicts INSTEAD of a node diff — a diff of a
+            # push that is blocked would only mislead (C1).
+            result.conflicts = list(resolution.conflicts)
+            return result
 
     desired = _desired_nodes(resolution, default_location)
     current = _current_nodes(current_requisition)
@@ -219,9 +227,16 @@ def diff(resolution, current_requisition, current_definition, default_location="
 
 
 def dry_run(foreign_source):
-    """Fetch OpenNMS state for *foreign_source* and diff the rendered intent (R7)."""
+    """Fetch OpenNMS state for *foreign_source* and diff the rendered intent (R7).
+
+    Resolved FIRST: a frozen Requisition's report needs no remote data, so the
+    conflict freeze is shown even when OpenNMS is unreachable (review #6) — and
+    two live GETs are skipped when their result would be discarded anyway.
+    """
     default_location = get_plugin_config(PLUGIN_NAME, "default_location") or ""
     resolution = resolve(foreign_source)
+    if resolution is not None and resolution.conflicts:
+        return diff(resolution, None, None, default_location)
     with OpenNMSClient.from_config() as client:
         current_requisition = client.get_requisition(foreign_source)
         current_definition = client.get_foreign_source(foreign_source)

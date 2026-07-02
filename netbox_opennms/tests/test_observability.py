@@ -29,6 +29,7 @@ from netbox_opennms.template_content import (
 
 User = get_user_model()
 FS = "netbox.raleigh.router"
+OVERLAP_FILTER = {"site": ["raleigh"]}
 
 
 class ObservabilityTest(TestCase):
@@ -95,6 +96,31 @@ class ObservabilityTest(TestCase):
 
     def test_none_target(self):
         self.assertIsNone(sync_status_for(None))
+
+    def test_conflicted_device(self):
+        # C1: two matching filters → conflicted, named parties, not governed.
+        Requisition.objects.create(name="overlap", filter_params=OVERLAP_FILTER)
+        status = sync_status_for(self.device)
+        self.assertEqual(status["conflicts"], [FS, "overlap"])
+        self.assertFalse(status["governed"])
+        self.assertIsNone(status["requisition"])
+
+    def test_conflicted_device_keeps_job_history(self):
+        # Reviews #3/#9: the last-sync Job lives under whichever requisition
+        # actually synced the object — a conflict must not hide it. And the
+        # outcome must NOT read "removed": the node is frozen-in-place (#2).
+        self._completed_job()
+        Requisition.objects.create(name="overlap", filter_params=OVERLAP_FILTER)
+        status = sync_status_for(self.device)
+        self.assertEqual(status["conflicts"], [FS, "overlap"])
+        self.assertIsNotNone(status["job"])
+        self.assertEqual(status["outcome"][0], "succeeded-accepted")
+
+    def test_panel_renders_conflicted_state(self):
+        Requisition.objects.create(name="overlap", filter_params=OVERLAP_FILTER)
+        html = self._panel_html(DeviceSyncStatusPanel, self.device)
+        self.assertIn("Conflicted between", html)
+        self.assertIn("overlap", html)
 
     # --- sync_outcome -------------------------------------------------------
 

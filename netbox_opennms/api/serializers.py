@@ -42,7 +42,6 @@ class RequisitionSerializer(NetBoxModelSerializer):
             "display",
             "name",
             "description",
-            "priority",
             "object_types",
             "filter_params",
             "scan_interval",

@@ -5,12 +5,13 @@
 A **Requisition** is one user-named OpenNMS Foreign Source: it owns the
 foreign-source *definition* (inline detectors + policies + scan-interval) and the
 *requisition* (a live NetBox **filter** over Devices/VMs → nodes → interfaces →
-services). Requisitions are resolved in **priority order** — the highest-priority
-Requisition whose filter matches an object claims it, and a node lives in exactly
-one Foreign Source. A **MonitoringOverride** is an optional per-object exception
-(exclude / override management IP / add interfaces / add-or-suppress services /
-override location). See the OpenSpec change ``requisition-redesign`` for the full
-design (R1–R8).
+services). Filters must be **disjoint**: an object matching two Requisitions is a
+blocking *conflict* the user resolves (a node lives in exactly one Foreign
+Source), so membership is deterministic and order-free. A **MonitoringOverride**
+is an optional per-object exception (exclude / override management IP / add
+interfaces / add-or-suppress services / override location). See the OpenSpec
+changes ``requisition-redesign`` (R1–R8) and ``replace-priority-with-conflicts``
+(C1–C7) for the full design.
 """
 
 from django.contrib.contenttypes.fields import GenericForeignKey
@@ -72,17 +73,15 @@ class Requisition(NetBoxModel):
     """A user-named OpenNMS Foreign Source (definition + filter-scoped requisition).
 
     The **name** is the Foreign Source name (URL-path-safe, R1/H7). Membership is a
-    live NetBox **filter** over the selected ``object_types``; overlap between
-    Requisitions is resolved by **priority** (lower number wins, R3). It owns its
-    detectors/policies/scan-interval (the definition) and a set of declared
-    ``services`` applied to every member's interfaces (R5).
+    live NetBox **filter** over the selected ``object_types``; an object matching
+    two Requisitions' filters is a blocking **conflict** the user resolves (C1) —
+    there is no automatic precedence. It owns its detectors/policies/scan-interval
+    (the definition) and a set of declared ``services`` applied to every member's
+    interfaces (R5).
     """
 
     name = models.CharField(max_length=100, unique=True)
     description = models.CharField(max_length=200, blank=True)
-    # Lower number = higher priority. Ordered + pk-tiebroken, but deliberately NOT
-    # a DB-unique constraint so a reorder can't throw an IntegrityError (R3/M6).
-    priority = models.PositiveIntegerField(default=100, db_index=True)
     # Which NetBox object types this Requisition's filter draws from.
     object_types = models.CharField(
         max_length=10,
@@ -108,7 +107,7 @@ class Requisition(NetBoxModel):
     location = models.CharField(max_length=255, blank=True, default="")
 
     class Meta:
-        ordering = ("priority", "pk")
+        ordering = ("name",)
         verbose_name = "requisition"
         verbose_name_plural = "requisitions"
 
@@ -268,8 +267,8 @@ class MonitoringOverride(NetBoxModel):
         ct_field="assigned_object_type",
         fk_field="assigned_object_id",
     )
-    # Drop this object from monitoring entirely (monitored nowhere — no
-    # fall-through to a lower-priority Requisition, M2).
+    # Drop this object from monitoring entirely (monitored nowhere, M2; an
+    # excluded object also never counts as a filter conflict, C3).
     exclude = models.BooleanField(default=False)
     # Override the management (primary) interface; null = use the object's primary_ip.
     management_ip = models.ForeignKey(

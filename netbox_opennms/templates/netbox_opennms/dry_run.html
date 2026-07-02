@@ -12,7 +12,9 @@
       {% if perms.netbox_opennms.change_requisition %}
         <form method="post" action="{% url 'plugins:netbox_opennms:requisition_sync' pk=object.pk %}">
           {% csrf_token %}
-          <button type="submit" class="btn btn-sm btn-primary"><i class="mdi mdi-sync"></i> Sync to OpenNMS</button>
+          <button type="submit" class="btn btn-sm btn-primary" {% if dryrun.conflicts %}disabled title="Frozen — resolve the filter conflicts first"{% endif %}>
+            <i class="mdi mdi-sync"></i> Sync to OpenNMS
+          </button>
         </form>
       {% endif %}
     </div>
@@ -21,6 +23,22 @@
         <div class="alert alert-danger" role="alert">
           <i class="mdi mdi-alert"></i> Could not reach OpenNMS: {{ error }}
         </div>
+      {% elif dryrun.conflicts %}
+        <div class="alert alert-danger" role="alert">
+          <i class="mdi mdi-alert-octagon"></i>
+          <strong>Frozen — nothing can be synced until these conflicts are resolved:</strong>
+          <ul class="mb-0">
+            {% for conflict in dryrun.conflicts|slice:":10" %}<li>{{ conflict }}</li>{% endfor %}
+            {% if dryrun.conflicts|length > 10 %}
+              <li>… and {{ dryrun.conflicts|length|add:"-10" }} more conflicted object(s).</li>
+            {% endif %}
+          </ul>
+          Make the filters disjoint (e.g. a negated filter such as <code>tag__n</code>)
+          or exclude the object; the OpenNMS state is untouched while frozen.
+        </div>
+        {% for warning in dryrun.warnings %}
+          <div class="alert alert-warning py-1" role="alert">{{ warning }}</div>
+        {% endfor %}
       {% elif dryrun %}
         {% if not dryrun.exists %}
           <div class="alert alert-info" role="alert">

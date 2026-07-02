@@ -1,7 +1,8 @@
 {# Copyright 2026 Ronny Trommer <ronny@no42.org> #}
 {# SPDX-License-Identifier: MIT #}
 {# Last-sync panel (Story 4.2). Expects `sync_status` in context: a dict
-   with `foreign_source`, `requisition`, `governed`, `excluded`, `job`,
+   with `foreign_source`, `requisition`, `governed`, `excluded`, `conflicts`
+   (list of requisition names when the object is matched by ≥2 filters), `job`,
    `outcome` (label, color) — or None. Shown on the Device/VM detail page. #}
 {% load helpers %}
 <div class="card">
@@ -9,12 +10,22 @@
   <table class="table table-hover attr-table">
     <tr>
       <th scope="row">Foreign Source</th>
-      <td><code>{{ sync_status.foreign_source }}</code></td>
+      <td>
+        {% if sync_status.foreign_source %}
+          <code>{{ sync_status.foreign_source }}</code>
+        {% else %}{{ ''|placeholder }}{% endif %}
+      </td>
     </tr>
     <tr>
       <th scope="row">Monitored</th>
       <td>
-        {% if sync_status.excluded %}
+        {% if sync_status.conflicts %}
+          <span class="text-danger">
+            <i class="mdi mdi-alert-octagon"></i>
+            Conflicted between {{ sync_status.conflicts|join:", " }} — resolve the
+            filter overlap before this object can be synced.
+          </span>
+        {% elif sync_status.excluded %}
           <span class="text-muted">Excluded by override</span>
         {% elif sync_status.governed %}
           {% checkmark True %} via {{ sync_status.requisition|linkify }}

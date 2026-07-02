@@ -20,7 +20,6 @@ class RequisitionFilterSet(NetBoxModelFilterSet):
         fields = (
             "id",
             "name",
-            "priority",
             "object_types",
             "scan_interval",
             "default_interfaces",

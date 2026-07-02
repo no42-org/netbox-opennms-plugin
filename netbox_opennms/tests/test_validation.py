@@ -4,7 +4,7 @@
 
 from django.test import SimpleTestCase
 
-from netbox_opennms.membership import NodeSpec, Resolution
+from netbox_opennms.membership import Conflict, NodeSpec, Resolution
 from netbox_opennms.validation import validate_resolution
 
 
@@ -46,3 +46,41 @@ class ValidateResolutionTest(SimpleTestCase):
         node = NodeSpec("rtr-1", "device-1", location="edge-1", interfaces=[])
         resolution = Resolution("fs", _Requisition(location="core"), nodes=[node])
         self.assertTrue(validate_resolution(resolution).ok)
+
+    def test_conflict_is_a_blocking_error(self):
+        # C1: conflicts are errors (freeze), never warnings.
+        resolution = Resolution(
+            "fs",
+            _Requisition(),
+            conflicts=[Conflict("rtr-1", "device-1", ["a", "b"])],
+        )
+        result = validate_resolution(resolution)
+        self.assertFalse(result.ok)
+        self.assertTrue(any("resolve the overlap" in e for e in result.errors))
+
+    def test_rejected_filter_is_blocking_error_except_on_removal(self):
+        # Round-2 review #3: rejected filters block Sync but NOT a deliberate
+        # Remove (the teardown escape hatch); conflicts block both.
+        resolution = Resolution(
+            "fs", _Requisition(), rejected=["Filter contains keys …"]
+        )
+        result = validate_resolution(resolution)
+        self.assertFalse(result.ok)
+        self.assertTrue(any("rejected filter" in e for e in result.errors))
+        self.assertTrue(validate_resolution(resolution, removing=True).ok)
+        frozen = Resolution(
+            "fs",
+            _Requisition(),
+            conflicts=[Conflict("rtr-1", "device-1", ["a", "b"])],
+        )
+        self.assertFalse(validate_resolution(frozen, removing=True).ok)
+
+    def test_conflict_errors_are_bounded(self):
+        # Review #5: a broad overlap must not flood messages — first N + summary.
+        conflicts = [
+            Conflict(f"d{i}", f"device-{i}", ["a", "b"]) for i in range(8)
+        ]
+        resolution = Resolution("fs", _Requisition(), conflicts=conflicts)
+        result = validate_resolution(resolution)
+        self.assertEqual(len(result.errors), 6)  # 5 detailed + 1 summary
+        self.assertIn("3 more conflicted", result.errors[-1])

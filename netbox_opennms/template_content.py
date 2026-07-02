@@ -23,9 +23,12 @@ class _SyncStatusPanel(PluginTemplateExtension):
         try:
             obj = self.context["object"]
             status = sync_status_for(obj)
-            # Show the panel only when the object is in a monitored scope or has a
-            # sync history; an unmonitored object gets nothing.
-            if status is None or not (status["governed"] or status["job"]):
+            # Show the panel when the object is monitored, has sync history, or is
+            # CONFLICTED (the conflict must be visible where the operator looks —
+            # C1); an unmonitored object gets nothing.
+            if status is None or not (
+                status["governed"] or status["job"] or status["conflicts"]
+            ):
                 return ""
             return self.render(PANEL, extra_context={"sync_status": status})
         except Exception:

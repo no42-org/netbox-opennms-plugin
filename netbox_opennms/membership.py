@@ -1,22 +1,26 @@
 # Copyright 2026 Ronny Trommer <ronny@no42.org>
 # SPDX-License-Identifier: MIT
-"""Requisition membership + node resolution (Requisition redesign).
+"""Requisition membership + node resolution (conflict model).
 
 A Foreign Source is a user-named **Requisition** whose members are a live NetBox
-**filter** over Devices/VMs. Overlap is resolved in **priority order**: a single
-global pass claims each object for the highest-priority Requisition whose filter
-matches it, then removes it from the pool so lower-priority filters never see it
-(R3). This module answers:
+**filter** over Devices/VMs. Each Requisition resolves **independently** — there
+is no priority and no ordering. An object matching two or more Requisitions'
+filters is a blocking **conflict** (C1): it is rendered into none of them, and
+every involved Requisition is frozen (Sync blocked) until the user makes the
+filters disjoint or excludes the object. Excluded objects never conflict — they
+are monitored nowhere regardless (C3). This module answers:
 
-* which objects a Requisition **claims** (the priority-ordered global resolver),
-* what each claimed object **resolves to** after per-object overrides
+* which objects each Requisition **matches** and which of those **conflict**
+  (the order-free global resolver, ``resolve_all``),
+* what each unconflicted member **resolves to** after per-object overrides
   (``resolve_node`` → a ``NodeSpec`` the renderer emits),
-* which Requisition **governs** a given Device/VM (``governing_requisition``).
+* which Requisitions **match** a given Device/VM (``matching_requisitions`` —
+  one match = governed, several = conflicted).
 
 It reads the ORM but performs no writes/network. The unknown-key guard is a
 **key-set diff** against the filtersets' known keys (NOT ``is_valid()``, which
-silently ignores unknown keys — C1); an empty/no-effective-key filter is rejected
-(H1); a recognized key with a stale value is a warning, not a silent empty (L4).
+silently ignores unknown keys); an empty/no-effective-key filter is rejected;
+a recognized key with a stale value is a warning, not a silent empty.
 ``foreign_id_for`` is unchanged (R6): node identity survives renames.
 """
 
@@ -60,13 +64,36 @@ class NodeSpec:
 
 
 @dataclass
+class Conflict:
+    """One object claimed by ≥2 Requisitions' filters — blocks Sync of all of them."""
+
+    label: str
+    foreign_id: str
+    requisition_names: list = field(default_factory=list)
+
+    def __str__(self):
+        return (
+            f"{self.label} is matched by {len(self.requisition_names)} requisitions "
+            f"({', '.join(self.requisition_names)})"
+        )
+
+
+@dataclass
 class Resolution:
-    """The resolved state of one Requisition: the Requisition + its nodes."""
+    """The resolved state of one Requisition: nodes, warnings, blocking states.
+
+    ``conflicts`` (filter overlap) and ``rejected`` (unknown-key / no-effective-
+    constraint filter) both block Sync via ``validate_resolution``; ``warnings``
+    never block. ``rejected`` is kept apart from ``warnings`` so the same text is
+    not reported twice (once as warning, once as error).
+    """
 
     foreign_source: str
     requisition: object
     nodes: list = field(default_factory=list)
     warnings: list = field(default_factory=list)
+    conflicts: list = field(default_factory=list)
+    rejected: list = field(default_factory=list)
 
 
 def _bare_ip(ip):
@@ -117,9 +144,9 @@ def filter_errors(requisition):
     """Blocking filter problems for a Requisition (unknown keys / no effective key).
 
     Returns a list of error strings (empty = OK). The unknown-key check is a
-    key-set diff, not ``is_valid()`` (C1); an empty filter or one whose every key
-    is unknown has no effective constraint and is rejected so it can't become a
-    catch-all at priority 1 (H1).
+    key-set diff, not ``is_valid()`` (which silently ignores unknown keys); an
+    empty filter or one whose every key is unknown has no effective constraint
+    and is rejected so it can't become a fleet-wide catch-all.
     """
     params = requisition.filter_params or {}
     known = known_filter_keys(requisition)
@@ -294,57 +321,110 @@ def resolve_node(obj, requisition, override):
     return node, None
 
 
+def _matched_objects(requisition, warnings):
+    """The objects a Requisition's filter matches, independent of every other one."""
+    matched = []
+    params = requisition.filter_params or {}
+    if _wants_devices(requisition):
+        qs = Device.objects.select_related(*_DEVICE_RELATED)
+        matched.extend(_apply_filterset(DeviceFilterSet, params, qs, warnings))
+    if _wants_vms(requisition):
+        qs = VirtualMachine.objects.select_related(*_VM_RELATED)
+        qs, vm_params = _vm_queryset_for_site(params, qs)
+        matched.extend(
+            _apply_filterset(VirtualMachineFilterSet, vm_params, qs, warnings)
+        )
+    return matched
+
+
 def resolve_all():
-    """Resolve every Requisition in priority order (the single global pass, R3).
+    """Resolve every Requisition independently and detect conflicts (C1/C4).
 
-    Builds the Device/VM pool once, then for each Requisition (ascending priority,
-    pk-tiebroken) applies its filter to the remaining pool, claims the matches, and
-    removes them so a lower-priority Requisition never re-claims them. Returns a
-    list of ``Resolution`` — one per Requisition, in priority order (a Requisition
-    that resolves to zero nodes is still present, with its warnings).
+    Order-free: each Requisition's filter is applied on its own (no priority, no
+    claim pool), then a global object→requisitions map is derived. An object
+    matched by ≥2 Requisitions (after exclusion, C3) is a **conflict** recorded on
+    EVERY involved Resolution — those objects render nowhere and the involved
+    Requisitions are frozen (Sync blocked) until the user resolves the overlap.
+    Returns one ``Resolution`` per Requisition (zero-node/frozen ones included).
     """
-    device_pool = set(Device.objects.values_list("pk", flat=True))
-    vm_pool = set(VirtualMachine.objects.values_list("pk", flat=True))
+    requisitions = list(Requisition.objects.all())
 
-    resolutions = []
-    for requisition in Requisition.objects.all():  # Meta.ordering = (priority, pk)
-        warnings = list(filter_errors(requisition))
-        matched = []
-        if not warnings:  # a rejected filter contributes no members (and blocks Sync)
-            params = requisition.filter_params or {}
-            if _wants_devices(requisition):
-                qs = Device.objects.filter(pk__in=device_pool).select_related(
-                    *_DEVICE_RELATED
-                )
-                matched.extend(_apply_filterset(DeviceFilterSet, params, qs, warnings))
-            if _wants_vms(requisition):
-                qs = VirtualMachine.objects.filter(pk__in=vm_pool).select_related(
-                    *_VM_RELATED
-                )
-                qs, vm_params = _vm_queryset_for_site(params, qs)
-                matched.extend(
-                    _apply_filterset(VirtualMachineFilterSet, vm_params, qs, warnings)
-                )
-            for obj in matched:
-                if isinstance(obj, Device):
-                    device_pool.discard(obj.pk)
-                else:
-                    vm_pool.discard(obj.pk)
-
-        overrides = _overrides_by_object(matched)
-        nodes = []
+    # Pass 1: independent membership per Requisition. A rejected filter (unknown
+    # key / no effective constraint) contributes no members; the rejection lands
+    # in Resolution.rejected, which validate_resolution raises as blocking
+    # errors — Sync fails loudly rather than quietly skipping. Matched rows are
+    # deduped by (ct, pk): a to-many join filter yielding the same object twice
+    # must not become a false self-conflict or a duplicate node (review #7).
+    membership, req_warnings, req_rejected = {}, {}, {}
+    for requisition in requisitions:
+        rejected = filter_errors(requisition)
+        warnings = []
+        matched = [] if rejected else _matched_objects(requisition, warnings)
+        unique, seen = [], set()
         for obj in matched:
             ct = ContentType.objects.get_for_model(type(obj))
-            node, warning = resolve_node(
-                obj, requisition, overrides.get((ct.id, obj.pk))
-            )
+            key = (ct.id, obj.pk)
+            if key not in seen:
+                seen.add(key)
+                unique.append(obj)
+        membership[requisition.pk] = unique
+        req_warnings[requisition.pk] = warnings
+        req_rejected[requisition.pk] = rejected
+
+    # Bulk-load overrides once across every matched object.
+    seen_objects = {}
+    for objects in membership.values():
+        for obj in objects:
+            ct = ContentType.objects.get_for_model(type(obj))
+            seen_objects.setdefault((ct.id, obj.pk), obj)
+    overrides = _overrides_by_object(list(seen_objects.values()))
+
+    # Conflict detection runs POST-exclusion (C3): an excluded object is monitored
+    # nowhere regardless of how many filters match it — no ambiguity, no conflict.
+    claims = defaultdict(list)
+    for requisition in requisitions:
+        for obj in membership[requisition.pk]:
+            ct = ContentType.objects.get_for_model(type(obj))
+            key = (ct.id, obj.pk)
+            override = overrides.get(key)
+            if override is not None and override.exclude:
+                continue
+            claims[key].append(requisition.name)
+    conflicted = {key: names for key, names in claims.items() if len(names) >= 2}
+
+    # Pass 2: resolve nodes; conflicted objects become Conflict entries instead.
+    resolutions = []
+    for requisition in requisitions:
+        warnings = req_warnings[requisition.pk]
+        nodes, conflicts = [], []
+        for obj in membership[requisition.pk]:
+            ct = ContentType.objects.get_for_model(type(obj))
+            key = (ct.id, obj.pk)
+            if key in conflicted:
+                conflicts.append(
+                    Conflict(
+                        label=obj.name or str(obj),
+                        foreign_id=foreign_id_for(obj),
+                        requisition_names=sorted(conflicted[key]),
+                    )
+                )
+                continue
+            node, warning = resolve_node(obj, requisition, overrides.get(key))
             if warning:
                 warnings.append(warning)
             if node is not None:
                 nodes.append(node)
         nodes.sort(key=lambda n: n.foreign_id)
+        conflicts.sort(key=lambda c: c.foreign_id)
         resolutions.append(
-            Resolution(requisition.name, requisition, nodes, warnings)
+            Resolution(
+                requisition.name,
+                requisition,
+                nodes=nodes,
+                warnings=warnings,
+                conflicts=conflicts,
+                rejected=req_rejected[requisition.pk],
+            )
         )
     return resolutions
 
@@ -352,9 +432,9 @@ def resolve_all():
 def resolve(foreign_source):
     """Resolve one Foreign Source (Requisition name) to its ``Resolution``, or None.
 
-    Runs the global priority pass (membership is order-dependent, so a single
-    Requisition cannot be resolved in isolation) and returns the matching
-    ``Resolution``. ``None`` when no Requisition has that name.
+    Runs the global pass (conflict detection needs every Requisition's member set,
+    so a single Requisition cannot be resolved in isolation) and returns the
+    matching ``Resolution``. ``None`` when no Requisition has that name.
     """
     for resolution in resolve_all():
         if resolution.foreign_source == foreign_source:
@@ -362,23 +442,23 @@ def resolve(foreign_source):
     return None
 
 
-def governing_requisition(target):
-    """The Requisition that CLAIMS a given Device/VM, or None — without a fleet pass.
+def matching_requisitions(target):
+    """Every Requisition whose filter matches a given Device/VM — no fleet pass.
 
-    Drives the Device/VM observability panel, called on every detail-page render, so
-    it must NOT run the whole-fleet ``resolve_all()`` (review #8). For a single
-    object the governing Requisition is the highest-priority one whose filter matches
-    it (higher priority claims first), tested by applying each Requisition's
-    filterset to just this object — O(requisitions), not O(fleet).
+    Drives the Device/VM observability panel, called on every detail-page render,
+    so it tests each Requisition's filterset against just this object —
+    O(requisitions), not O(fleet). One match = governed by it; several = the
+    object is **conflicted** between them (C1); none = unmonitored.
 
-    Exclusion is deliberately NOT applied here: an excluded object is still *claimed*
-    by its Requisition and should show it (review #9); the caller checks the override
-    for the excluded/monitored distinction.
+    Exclusion is deliberately NOT applied here: an excluded object still shows
+    which Requisition matches it (review #9); the caller checks the override for
+    the excluded/monitored distinction.
     """
     if not isinstance(target, (Device, VirtualMachine)):
-        return None
+        return []
     is_device = isinstance(target, Device)
-    for requisition in Requisition.objects.all():  # Meta.ordering = (priority, pk)
+    matches = []
+    for requisition in Requisition.objects.all():
         if is_device and not _wants_devices(requisition):
             continue
         if not is_device and not _wants_vms(requisition):
@@ -394,15 +474,96 @@ def governing_requisition(target):
             base, vm_params = _vm_queryset_for_site(params, base)
             matched = _apply_filterset(VirtualMachineFilterSet, vm_params, base, [])
         if matched.filter(pk=target.pk).exists():
-            return requisition
-    return None
+            matches.append(requisition)
+    return matches
+
+
+def requisition_conflicts(requisition, warnings=None):
+    """Conflicts for ONE Requisition without a fleet pass (the detail-page banner).
+
+    Computes this Requisition's own (deduped, post-exclusion) members, then tests
+    every OTHER Requisition's filterset restricted to just those pks — narrow
+    queries, no node resolution, no whole-fleet ``resolve_all()`` (review #12).
+    Returns the same ``Conflict`` shape ``resolve_all`` produces. Pass a
+    ``warnings`` list to collect this requisition's stale-value warnings — the
+    detail page is the post-save surface and must not be silent about a filter
+    that now matches nothing.
+    """
+    if filter_errors(requisition):
+        return []
+    matched = _matched_objects(
+        requisition, warnings if warnings is not None else []
+    )
+    overrides = _overrides_by_object(matched)
+    members = {}
+    for obj in matched:
+        ct = ContentType.objects.get_for_model(type(obj))
+        key = (ct.id, obj.pk)
+        override = overrides.get(key)
+        if override is not None and override.exclude:
+            continue
+        members.setdefault(key, obj)
+    if not members:
+        return []
+
+    device_ct = ContentType.objects.get_for_model(Device)
+    vm_ct = ContentType.objects.get_for_model(VirtualMachine)
+    device_pks = [pk for (ct_id, pk) in members if ct_id == device_ct.id]
+    vm_pks = [pk for (ct_id, pk) in members if ct_id == vm_ct.id]
+
+    names_by_key = defaultdict(set)
+    for other in Requisition.objects.exclude(pk=requisition.pk):
+        if filter_errors(other):
+            continue  # a rejected filter contributes nothing (as in resolve_all)
+        params = other.filter_params or {}
+        if device_pks and _wants_devices(other):
+            qs = Device.objects.filter(pk__in=device_pks)
+            hits = _apply_filterset(DeviceFilterSet, params, qs, [])
+            for pk in hits.values_list("pk", flat=True):
+                names_by_key[(device_ct.id, pk)].add(other.name)
+        if vm_pks and _wants_vms(other):
+            qs = VirtualMachine.objects.filter(pk__in=vm_pks)
+            qs, vm_params = _vm_queryset_for_site(params, qs)
+            hits = _apply_filterset(VirtualMachineFilterSet, vm_params, qs, [])
+            for pk in hits.values_list("pk", flat=True):
+                names_by_key[(vm_ct.id, pk)].add(other.name)
+
+    conflicts = []
+    for key, names in names_by_key.items():
+        obj = members[key]
+        conflicts.append(
+            Conflict(
+                label=obj.name or str(obj),
+                foreign_id=foreign_id_for(obj),
+                requisition_names=sorted({requisition.name, *names}),
+            )
+        )
+    conflicts.sort(key=lambda c: c.foreign_id)
+    return conflicts
 
 
 def monitored_foreign_sources():
-    """Every Foreign Source (Requisition name) that resolves to ≥1 node.
+    """Every Foreign Source that is NOT cleanly empty — the reconciler's guard.
 
-    Drives 'sync all' / the preview / the drift reconciler. A Requisition that
-    resolves to zero nodes is omitted so an empty requisition is never pushed
-    (which would wipe a live Foreign Source — M3).
+    Drives the preview / the drift reconciler. A Foreign Source is subject to
+    orphan teardown ONLY when its Requisition resolves **cleanly** to zero
+    members: no nodes, no conflicts, AND no warnings. Anything else counts as
+    monitored:
+
+    * ≥1 node — actively synced;
+    * ≥1 conflict — frozen (C5): the freeze exists to protect the deployed state;
+    * a rejected filter — blocked from syncing, so it must be equally blocked
+      from teardown;
+    * ≥1 warning — a possibly-broken filter (stale value, members skipped):
+      tearing down on a warning would let a NetBox rename silently delete live
+      OpenNMS nodes (review #1) — the reconciler must never destroy state it
+      cannot prove is intentionally empty.
+
+    A requisition whose members were genuinely removed (or deliberately excluded)
+    resolves cleanly empty and is reconciled away, as intended.
     """
-    return sorted(r.foreign_source for r in resolve_all() if r.nodes)
+    return sorted(
+        r.foreign_source
+        for r in resolve_all()
+        if r.nodes or r.conflicts or r.warnings or r.rejected
+    )

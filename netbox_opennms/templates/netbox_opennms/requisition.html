@@ -10,7 +10,9 @@
     </a>
     <form method="post" action="{% url 'plugins:netbox_opennms:requisition_sync' pk=object.pk %}" class="d-inline">
       {% csrf_token %}
-      <button type="submit" class="btn btn-sm btn-primary"><i class="mdi mdi-sync"></i> Sync to OpenNMS</button>
+      <button type="submit" class="btn btn-sm btn-primary" {% if conflicts %}disabled title="Frozen — resolve the filter conflicts first"{% endif %}>
+        <i class="mdi mdi-sync"></i> Sync to OpenNMS
+      </button>
     </form>
   {% endif %}
   {% if perms.netbox_opennms.add_requisition %}
@@ -27,6 +29,32 @@
       <i class="mdi mdi-alert"></i> No background worker is running — Sync jobs will stay pending.
     </div>
   {% endif %}
+  {% if filter_problems %}
+    <div class="alert alert-danger" role="alert">
+      <i class="mdi mdi-alert-octagon"></i>
+      <strong>Filter rejected — Sync is blocked:</strong>
+      <ul class="mb-0">
+        {% for problem in filter_problems %}<li>{{ problem }}</li>{% endfor %}
+      </ul>
+    </div>
+  {% endif %}
+  {% for warning in resolution_warnings %}
+    <div class="alert alert-warning py-1" role="alert">{{ warning }}</div>
+  {% endfor %}
+  {% if conflicts %}
+    <div class="alert alert-danger" role="alert">
+      <i class="mdi mdi-alert-octagon"></i>
+      <strong>Frozen — Sync is blocked by {{ conflicts|length }} conflict(s).</strong>
+      Resolve each overlap by making the filters disjoint (e.g. a negated filter such as
+      <code>tag__n</code>) or by excluding the object:
+      <ul class="mb-0">
+        {% for conflict in conflicts|slice:":10" %}<li>{{ conflict }}</li>{% endfor %}
+        {% if conflicts|length > 10 %}
+          <li>… and {{ conflicts|length|add:"-10" }} more conflicted object(s).</li>
+        {% endif %}
+      </ul>
+    </div>
+  {% endif %}
   <div class="row">
     <div class="col col-md-6">
       <div class="card">
@@ -34,7 +62,6 @@
         <table class="table table-hover attr-table">
           <tr><th scope="row">Name (Foreign Source)</th><td><code>{{ object.name }}</code></td></tr>
           <tr><th scope="row">Description</th><td>{{ object.description|placeholder }}</td></tr>
-          <tr><th scope="row">Priority</th><td>{{ object.priority }}</td></tr>
           <tr><th scope="row">Object types</th><td>{{ object.get_object_types_display }}</td></tr>
           <tr><th scope="row">Scan interval</th><td>{{ object.scan_interval }}</td></tr>
           <tr><th scope="row">Default interfaces</th><td>{{ object.get_default_interfaces_display }}</td></tr>

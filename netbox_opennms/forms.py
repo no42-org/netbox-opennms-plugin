@@ -69,7 +69,6 @@ class RequisitionForm(NetBoxModelForm):
         fields = (
             "name",
             "description",
-            "priority",
             "object_types",
             "import_from_saved_filter",
             "filter_params",
@@ -98,7 +97,7 @@ class RequisitionForm(NetBoxModelForm):
             else:
                 self.cleaned_data["filter_params"] = dict(saved.parameters or {})
         # Reject unknown/empty filters here (the same guard the resolver uses), so a
-        # typo can't be saved into a priority-1 catch-all (C1/H1). Read from
+        # typo can't be saved into a fleet-wide catch-all (H1). Read from
         # cleaned_data — self.instance isn't populated until _post_clean(), after this.
         if not self.errors:
             probe = Requisition(

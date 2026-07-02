@@ -80,13 +80,20 @@ class Conflict:
 
 @dataclass
 class Resolution:
-    """The resolved state of one Requisition: nodes + warnings + blocking conflicts."""
+    """The resolved state of one Requisition: nodes, warnings, blocking states.
+
+    ``conflicts`` (filter overlap) and ``rejected`` (unknown-key / no-effective-
+    constraint filter) both block Sync via ``validate_resolution``; ``warnings``
+    never block. ``rejected`` is kept apart from ``warnings`` so the same text is
+    not reported twice (once as warning, once as error).
+    """
 
     foreign_source: str
     requisition: object
     nodes: list = field(default_factory=list)
     warnings: list = field(default_factory=list)
     conflicts: list = field(default_factory=list)
+    rejected: list = field(default_factory=list)
 
 
 def _bare_ip(ip):
@@ -343,16 +350,16 @@ def resolve_all():
     requisitions = list(Requisition.objects.all())
 
     # Pass 1: independent membership per Requisition. A rejected filter (unknown
-    # key / no effective constraint) contributes no members; its rejection is
-    # recorded as a warning here AND re-raised as a blocking error by
-    # validate_resolution, so Sync fails loudly rather than quietly skipping.
-    # Matched rows are deduped by (ct, pk): a to-many join filter yielding the
-    # same object twice must not become a false self-conflict or a duplicate
-    # node (review #7).
-    membership, req_warnings = {}, {}
+    # key / no effective constraint) contributes no members; the rejection lands
+    # in Resolution.rejected, which validate_resolution raises as blocking
+    # errors — Sync fails loudly rather than quietly skipping. Matched rows are
+    # deduped by (ct, pk): a to-many join filter yielding the same object twice
+    # must not become a false self-conflict or a duplicate node (review #7).
+    membership, req_warnings, req_rejected = {}, {}, {}
     for requisition in requisitions:
-        warnings = list(filter_errors(requisition))
-        matched = [] if warnings else _matched_objects(requisition, warnings)
+        rejected = filter_errors(requisition)
+        warnings = []
+        matched = [] if rejected else _matched_objects(requisition, warnings)
         unique, seen = [], set()
         for obj in matched:
             ct = ContentType.objects.get_for_model(type(obj))
@@ -362,6 +369,7 @@ def resolve_all():
                 unique.append(obj)
         membership[requisition.pk] = unique
         req_warnings[requisition.pk] = warnings
+        req_rejected[requisition.pk] = rejected
 
     # Bulk-load overrides once across every matched object.
     seen_objects = {}
@@ -409,7 +417,14 @@ def resolve_all():
         nodes.sort(key=lambda n: n.foreign_id)
         conflicts.sort(key=lambda c: c.foreign_id)
         resolutions.append(
-            Resolution(requisition.name, requisition, nodes, warnings, conflicts)
+            Resolution(
+                requisition.name,
+                requisition,
+                nodes=nodes,
+                warnings=warnings,
+                conflicts=conflicts,
+                rejected=req_rejected[requisition.pk],
+            )
         )
     return resolutions
 
@@ -463,17 +478,22 @@ def matching_requisitions(target):
     return matches
 
 
-def requisition_conflicts(requisition):
+def requisition_conflicts(requisition, warnings=None):
     """Conflicts for ONE Requisition without a fleet pass (the detail-page banner).
 
     Computes this Requisition's own (deduped, post-exclusion) members, then tests
     every OTHER Requisition's filterset restricted to just those pks — narrow
     queries, no node resolution, no whole-fleet ``resolve_all()`` (review #12).
-    Returns the same ``Conflict`` shape ``resolve_all`` produces.
+    Returns the same ``Conflict`` shape ``resolve_all`` produces. Pass a
+    ``warnings`` list to collect this requisition's stale-value warnings — the
+    detail page is the post-save surface and must not be silent about a filter
+    that now matches nothing.
     """
     if filter_errors(requisition):
         return []
-    matched = _matched_objects(requisition, [])
+    matched = _matched_objects(
+        requisition, warnings if warnings is not None else []
+    )
     overrides = _overrides_by_object(matched)
     members = {}
     for obj in matched:
@@ -532,10 +552,12 @@ def monitored_foreign_sources():
 
     * ≥1 node — actively synced;
     * ≥1 conflict — frozen (C5): the freeze exists to protect the deployed state;
-    * ≥1 warning — a possibly-broken filter (stale value, unknown key, members
-      skipped): tearing down on a warning would let a NetBox rename silently
-      delete live OpenNMS nodes (review #1) — the reconciler must never destroy
-      state it cannot prove is intentionally empty.
+    * a rejected filter — blocked from syncing, so it must be equally blocked
+      from teardown;
+    * ≥1 warning — a possibly-broken filter (stale value, members skipped):
+      tearing down on a warning would let a NetBox rename silently delete live
+      OpenNMS nodes (review #1) — the reconciler must never destroy state it
+      cannot prove is intentionally empty.
 
     A requisition whose members were genuinely removed (or deliberately excluded)
     resolves cleanly empty and is reconciled away, as intended.
@@ -543,5 +565,5 @@ def monitored_foreign_sources():
     return sorted(
         r.foreign_source
         for r in resolve_all()
-        if r.nodes or r.conflicts or r.warnings
+        if r.nodes or r.conflicts or r.warnings or r.rejected
     )

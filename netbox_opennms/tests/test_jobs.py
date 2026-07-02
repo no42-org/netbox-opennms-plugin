@@ -350,6 +350,37 @@ class SyncForeignSourceJobTest(TestCase):
 
     @mock.patch("netbox_opennms.jobs.advisory_lock")
     @mock.patch("netbox_opennms.jobs.OpenNMSClient.from_config")
+    def test_remove_with_members_pushes_full_requisition(
+        self, mock_from_config, _lock
+    ):
+        # A Remove of a still-populated FS pushes the FULL requisition (the
+        # membership is intact) and must NOT tear down the shell (review #6).
+        client = mock_from_config.return_value.__enter__.return_value
+        client.import_requisition.return_value = mock.Mock(status_code=202)
+        self._runner().run(foreign_source=FS, allow_empty=True)
+        requisition_xml = client.post_requisition.call_args.args[0]
+        self.assertIn(b"<node", requisition_xml)
+        client.delete_requisition.assert_not_called()
+        client.delete_foreign_source.assert_not_called()
+
+    @mock.patch("netbox_opennms.jobs.advisory_lock")
+    @mock.patch("netbox_opennms.jobs.OpenNMSClient.from_config")
+    def test_remove_allowed_for_rejected_filter(self, mock_from_config, _lock):
+        # Review #3 (round 2): a rejected filter must NOT block a deliberate
+        # Remove — that is the teardown escape hatch for a broken-filter FS.
+        client = mock_from_config.return_value.__enter__.return_value
+        client.import_requisition.return_value = mock.Mock(status_code=202)
+        Requisition.objects.filter(pk=self.requisition.pk).update(
+            filter_params={"bogus_key": ["x"]}
+        )
+        self._runner().run(foreign_source=FS, allow_empty=True)
+        requisition_xml = client.post_requisition.call_args.args[0]
+        self.assertNotIn(b"<node", requisition_xml)  # rejected → no members
+        client.import_requisition.assert_called_once()
+        client.delete_requisition.assert_called_once_with(FS)
+
+    @mock.patch("netbox_opennms.jobs.advisory_lock")
+    @mock.patch("netbox_opennms.jobs.OpenNMSClient.from_config")
     def test_rejected_filter_blocks_sync(self, mock_from_config, _lock):
         # Review #8: an unknown-key filter fails the job loudly (JobFailed),
         # never a quiet skip with a green COMPLETED job.

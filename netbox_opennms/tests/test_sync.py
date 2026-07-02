@@ -80,6 +80,43 @@ class SyncViewTest(TestCase):
         self.assertContains(response, "frozen")
 
     @mock.patch("netbox_opennms.views.SyncForeignSourceJob.enqueue_sync")
+    def test_sync_all_blocks_invalid_location(self, mock_enqueue):
+        # Round-2 review #1: Sync-all uses the canonical validation gate — a
+        # nodes-bearing requisition with a bad location is skipped with a
+        # warning, not enqueued into a guaranteed-failed job.
+        Requisition.objects.filter(pk=self.requisition.pk).update(
+            location="bad location"
+        )
+        self.client.force_login(self.superuser)
+        response = self.client.post(
+            reverse("plugins:netbox_opennms:sync_all"), follow=True
+        )
+        mock_enqueue.assert_not_called()
+        self.assertContains(response, "Skipped 1 requisition")
+
+    def test_duplicate_of_populated_requisition_warns_frozen(self):
+        self.client.force_login(self.superuser)
+        url = reverse(
+            "plugins:netbox_opennms:requisition_duplicate",
+            args=[self.requisition.pk],
+        )
+        response = self.client.post(url, follow=True)
+        self.assertContains(response, "frozen")
+
+    def test_duplicate_of_empty_requisition_does_not_warn_frozen(self):
+        # Round-2 review #4: a zero-member source duplicates harmlessly — no
+        # false freeze alarm.
+        empty = Requisition.objects.create(
+            name="empty", filter_params={"site": ["raleigh"], "role": ["unused"]}
+        )
+        self.client.force_login(self.superuser)
+        url = reverse(
+            "plugins:netbox_opennms:requisition_duplicate", args=[empty.pk]
+        )
+        response = self.client.post(url, follow=True)
+        self.assertNotContains(response, "frozen")
+
+    @mock.patch("netbox_opennms.views.SyncForeignSourceJob.enqueue_sync")
     def test_sync_all_enqueues_governed_foreign_sources(self, mock_enqueue):
         mock_enqueue.return_value = mock.Mock(pk=13)
         self.client.force_login(self.superuser)

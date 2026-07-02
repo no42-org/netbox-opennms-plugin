@@ -281,7 +281,7 @@ print(
     f"requisitions={Requisition.objects.count()} "
     f"overrides={MonitoringOverride.objects.count()}"
 )
-print("\nForeign Sources (requisitions with members):")
+print("\nForeign Sources (resolved requisitions):")
 for fs in monitored_foreign_sources():
     resolution = resolve(fs)
     members = ", ".join(sorted(n.node_label for n in resolution.nodes))

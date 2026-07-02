@@ -250,6 +250,22 @@ class MembershipTest(TestCase):
         self._requisition(name="b", filter_params={"site": ["raleigh"]})
         self.assertEqual(monitored_foreign_sources(), ["a", "b"])
 
+    def test_rejected_filter_populates_rejected_not_warnings(self):
+        # Round-2: rejection lives on Resolution.rejected (blocking), not in
+        # warnings — so the same text isn't reported twice.
+        self._requisition(filter_params={"bogus": ["x"]})
+        resolution = resolve(FS)
+        self.assertTrue(resolution.rejected)
+        self.assertEqual(resolution.warnings, [])
+        self.assertEqual(resolution.nodes, [])
+
+    def test_rejected_filter_keeps_foreign_source_monitored(self):
+        # Round-2: a rejected filter is blocked from syncing, so it must be
+        # equally blocked from reconciler teardown.
+        self._device("rtr-1")
+        self._requisition(filter_params={"bogus": ["x"]})
+        self.assertEqual(monitored_foreign_sources(), [FS])
+
     def test_warning_state_requisition_counts_as_monitored(self):
         # Review #1: a requisition whose filter value went stale (warning, no
         # nodes, no conflicts) must NOT drop out of the monitored set — the

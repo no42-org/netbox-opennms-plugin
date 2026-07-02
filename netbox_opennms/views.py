@@ -20,7 +20,12 @@ from .jobs import (
     SyncForeignSourceJob,
     unknown_locations,
 )
-from .membership import requisition_conflicts, resolve, resolve_all
+from .membership import (
+    filter_errors,
+    requisition_conflicts,
+    resolve,
+    resolve_all,
+)
 from .models import (
     MonitoredService,
     MonitoringDetector,
@@ -61,7 +66,7 @@ def _location_warnings(locations):
 def _enqueue_foreign_source(request, foreign_source, allow_empty=False):
     """Validate a Foreign Source's resolved intent and enqueue a sync (FR-8)."""
     resolution = resolve(foreign_source)
-    result = validate_resolution(resolution)
+    result = validate_resolution(resolution, removing=allow_empty)
     for warning in result.warnings:
         messages.warning(request, warning)
     if result.errors:
@@ -92,10 +97,16 @@ class RequisitionView(generic.ObjectView):
         # a save with an overlapping filter succeeds, and the conflict banner here
         # names the object + parties immediately. requisition_conflicts tests only
         # THIS requisition's members against the other filters — narrow queries,
-        # no fleet-wide node resolution (review #12).
+        # no fleet-wide node resolution (review #12). Stale-value warnings and a
+        # rejected filter are surfaced too — the post-save page must not be
+        # silent about a filter that now matches nothing (review #7).
+        resolution_warnings = []
+        conflicts = requisition_conflicts(instance, resolution_warnings)
         return {
             "no_worker_warning": _no_worker_running(),
-            "conflicts": requisition_conflicts(instance),
+            "conflicts": conflicts,
+            "filter_problems": filter_errors(instance),
+            "resolution_warnings": resolution_warnings,
         }
 
 
@@ -166,14 +177,22 @@ class RequisitionDuplicateView(PermissionRequiredMixin, View):
                 parameters=deepcopy(policy.parameters),
             )
         messages.success(request, f"Duplicated {source.name} → {clone.name}.")
-        # A verbatim filter copy overlaps the source on EVERY member — both are
-        # frozen until the filters diverge (review #4). Say so immediately.
-        messages.warning(
-            request,
-            f"{clone.name} has the same filter as {source.name}: every shared "
-            "member is now a conflict and BOTH requisitions are frozen. Edit "
-            f"{clone.name}'s filter (or delete it) to unfreeze.",
-        )
+        # A verbatim filter copy overlaps the source on every CURRENT member —
+        # warn only when that actually froze something (a zero-member source
+        # duplicates harmlessly, review #4-fix).
+        if requisition_conflicts(clone):
+            messages.warning(
+                request,
+                f"{clone.name} has the same filter as {source.name}: every "
+                "shared member is now a conflict and BOTH requisitions are "
+                f"frozen. Edit {clone.name}'s filter (or delete it) to unfreeze.",
+            )
+        else:
+            messages.info(
+                request,
+                f"{clone.name} shares {source.name}'s filter — edit it before "
+                "the filters match the same objects, or they will conflict.",
+            )
         return redirect(clone.get_absolute_url())
 
 
@@ -370,10 +389,15 @@ class MonitoringSyncAllView(PermissionRequiredMixin, View):
     permission_required = SYNC_PERM
 
     def post(self, request):
-        submitted, frozen = 0, 0
+        # The CANONICAL gate — validate_resolution — decides what is blocked,
+        # exactly as the per-requisition Sync path does: conflicts (frozen),
+        # rejected filters, and invalid locations are all skipped with a warning
+        # here instead of becoming guaranteed-failed jobs or silent skips
+        # (reviews #2/#8 applied symmetrically).
+        submitted, blocked = 0, 0
         for resolution in resolve_all():
-            if resolution.conflicts:
-                frozen += 1
+            if validate_resolution(resolution).errors:
+                blocked += 1
                 continue
             if not resolution.nodes:
                 continue
@@ -381,11 +405,12 @@ class MonitoringSyncAllView(PermissionRequiredMixin, View):
                 resolution.foreign_source, user=request.user
             )
             submitted += 1
-        if frozen:
+        if blocked:
             messages.warning(
                 request,
-                f"Skipped {frozen} frozen requisition(s) — resolve their filter "
-                "conflicts before they can sync.",
+                f"Skipped {blocked} requisition(s) blocked by validation errors "
+                "(frozen by a conflict, a rejected filter, or an invalid "
+                "location) — open their pages to resolve.",
             )
         if submitted:
             messages.success(
@@ -416,7 +441,9 @@ class SyncPreviewView(LoginRequiredMixin, View):
                     "foreign_source": resolution.foreign_source,
                     "requisition": resolution.requisition,
                     "node_count": len(resolution.nodes),
-                    "warnings": resolution.warnings,
+                    # Rejected-filter errors join the warnings badge so a broken
+                    # filter stays visible on the preview.
+                    "warnings": [*resolution.rejected, *resolution.warnings],
                     "conflicts": resolution.conflicts,
                 }
             )

@@ -154,8 +154,10 @@ class SyncForeignSourceJob(JobRunner):
 
         # Validate FIRST (FR-8/AD-12): conflicts (C1 freeze) and rejected filters
         # fail the job loudly even when they resolve to ZERO nodes — the quiet
-        # empty-skip below must never swallow a blocking error (review #8).
-        validation = validate_resolution(resolution)
+        # empty-skip below must never swallow a blocking error (review #8). A
+        # Remove is exempt from the rejected-filter block (the teardown escape
+        # hatch); conflicts still block it.
+        validation = validate_resolution(resolution, removing=allow_empty)
         for warning in validation.warnings:
             self.logger.warning(warning)
         if validation.errors:
@@ -315,6 +317,9 @@ def sync_status_for(target):
     names = [r.name for r in matches]
     job = latest_sync_job(names) if names else None
     is_removal = bool(job) and job.name.endswith(" (remove)")
+    # For the OUTCOME label a conflicted object still counts as governed: its
+    # node is frozen-in-place, not removed — labelling a completed sync
+    # "removed" would contradict the C1 freeze contract (review #2).
     return {
         "foreign_source": foreign_source,
         "requisition": requisition,
@@ -322,7 +327,9 @@ def sync_status_for(target):
         "excluded": excluded,
         "conflicts": sorted(r.name for r in matches) if conflicted else [],
         "job": job,
-        "outcome": sync_outcome(job, is_removal=is_removal, governed=governed),
+        "outcome": sync_outcome(
+            job, is_removal=is_removal, governed=governed or conflicted
+        ),
     }
 
 

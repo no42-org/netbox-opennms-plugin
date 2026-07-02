@@ -107,12 +107,14 @@ class ObservabilityTest(TestCase):
 
     def test_conflicted_device_keeps_job_history(self):
         # Reviews #3/#9: the last-sync Job lives under whichever requisition
-        # actually synced the object — a conflict must not hide it.
+        # actually synced the object — a conflict must not hide it. And the
+        # outcome must NOT read "removed": the node is frozen-in-place (#2).
         self._completed_job()
         Requisition.objects.create(name="overlap", filter_params=OVERLAP_FILTER)
         status = sync_status_for(self.device)
         self.assertEqual(status["conflicts"], [FS, "overlap"])
         self.assertIsNotNone(status["job"])
+        self.assertEqual(status["outcome"][0], "succeeded-accepted")
 
     def test_panel_renders_conflicted_state(self):
         Requisition.objects.create(name="overlap", filter_params=OVERLAP_FILTER)

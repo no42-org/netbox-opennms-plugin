@@ -13,7 +13,6 @@ does no writes/network.
 from dataclasses import dataclass, field
 
 from .derivation import validate_location_name
-from .membership import filter_errors
 
 # Cap the per-object conflict errors surfaced at once — a broad overlap (e.g. a
 # fresh duplicate) can conflict on hundreds of objects, and one message per
@@ -31,12 +30,17 @@ class ValidationResult:
         return not self.errors
 
 
-def validate_resolution(resolution):
+def validate_resolution(resolution, removing=False):
     """Validate a resolved Foreign Source (``membership.resolve``). Returns a result.
 
     ``None`` (no such Requisition) is a clean, empty result — nothing to push.
-    Member skips (and rejected/stale filters) are warnings; an invalid resolved
-    location is an error (it would 400 on import, like the historic ':' bug).
+    Member skips and stale filter values are warnings; conflicts, rejected
+    filters, and an invalid resolved location are errors (blocking). With
+    ``removing=True`` (a deliberate Remove/teardown) a **rejected filter** does
+    not block — the filter has no bearing on an empty push, and Remove is the
+    escape hatch for tearing down a broken-filter Foreign Source. Conflicts
+    still block a Remove (the accepted C1 coarseness): teardown of a frozen FS
+    goes through deleting the Requisition.
     """
     result = ValidationResult()
     if resolution is None:
@@ -46,12 +50,10 @@ def validate_resolution(resolution):
 
     # A REJECTED filter (unknown key / no effective constraint) blocks Sync
     # loudly (review #8) — a quiet skip would let a broken requisition report a
-    # green job that pushed nothing. Recomputed here (cheap) because the
-    # resolution carries it only as a warning; guarded so fakes/tests without a
-    # real Requisition skip it.
-    requisition = resolution.requisition
-    if getattr(requisition, "filter_params", None) is not None:
-        for error in filter_errors(requisition):
+    # green job that pushed nothing. Carried on Resolution.rejected (kept apart
+    # from warnings so the same text isn't reported twice).
+    if not removing:
+        for error in resolution.rejected:
             result.errors.append(
                 f"{resolution.foreign_source}: rejected filter — {error}"
             )

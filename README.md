@@ -146,7 +146,9 @@ synced) until you resolve it. Resolve by narrowing a filter — typically with a
 negated parameter, e.g. `{"role": ["switch"], "tag__n": ["critical"]}` — or by
 excluding the object (an excluded object never conflicts; it is monitored
 nowhere). Conflicts are shown on the Requisition page, the Sync preview, the
-dry-run, and the affected Device/VM page.
+dry-run, and the affected Device/VM page. The REST API follows the same
+save-never-blocks rule but has **no warning channel** — after automated writes,
+check the Sync preview (or the requisition page) for conflicts.
 
 Node identity is the pair *(Foreign Source, type-qualified Foreign ID)* —
 `device-{pk}` / `vm-{pk}` — so a re-sync updates a node in place and renaming a

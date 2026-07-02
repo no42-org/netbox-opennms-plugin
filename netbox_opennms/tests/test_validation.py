@@ -58,6 +58,23 @@ class ValidateResolutionTest(SimpleTestCase):
         self.assertFalse(result.ok)
         self.assertTrue(any("resolve the overlap" in e for e in result.errors))
 
+    def test_rejected_filter_is_blocking_error_except_on_removal(self):
+        # Round-2 review #3: rejected filters block Sync but NOT a deliberate
+        # Remove (the teardown escape hatch); conflicts block both.
+        resolution = Resolution(
+            "fs", _Requisition(), rejected=["Filter contains keys …"]
+        )
+        result = validate_resolution(resolution)
+        self.assertFalse(result.ok)
+        self.assertTrue(any("rejected filter" in e for e in result.errors))
+        self.assertTrue(validate_resolution(resolution, removing=True).ok)
+        frozen = Resolution(
+            "fs",
+            _Requisition(),
+            conflicts=[Conflict("rtr-1", "device-1", ["a", "b"])],
+        )
+        self.assertFalse(validate_resolution(frozen, removing=True).ok)
+
     def test_conflict_errors_are_bounded(self):
         # Review #5: a broad overlap must not flood messages — first N + summary.
         conflicts = [

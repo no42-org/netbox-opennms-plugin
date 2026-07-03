@@ -40,6 +40,15 @@ def _add_parameters(parent, parameters):
         param.set("value", str(parameters[key]))
 
 
+def _add_metadata(parent, entries):
+    """Append ``<meta-data context=… key=… value=…/>`` children (RD-3)."""
+    for context, key, value in entries or ():
+        meta = etree.SubElement(parent, f"{{{MODEL_IMPORT_NS}}}meta-data")
+        meta.set("context", context)
+        meta.set("key", key)
+        meta.set("value", str(value))
+
+
 def render_requisition(foreign_source, nodes, date_stamp=None, default_location=""):
     """Render the complete ``model-import`` requisition for one Foreign Source.
 
@@ -86,6 +95,18 @@ def render_requisition(foreign_source, nodes, date_stamp=None, default_location=
                     iface_el, f"{{{MODEL_IMPORT_NS}}}monitored-service"
                 )
                 service.set("service-name", name)
+                # Service-scope metadata applies to every monitored-service (RD-3).
+                _add_metadata(service, node.service_metadata)
+            # Interface-scope metadata applies to every interface (RD-3).
+            _add_metadata(iface_el, node.interface_metadata)
+
+        # Node-scope enrichment, after interfaces per the requisition XSD order:
+        # <interface>* then <asset>* then <meta-data>* (RD-2/RD-3).
+        for name, value in node.assets:
+            asset_el = etree.SubElement(el, f"{{{MODEL_IMPORT_NS}}}asset")
+            asset_el.set("name", name)
+            asset_el.set("value", str(value))
+        _add_metadata(el, node.node_metadata)
 
     return etree.tostring(root, xml_declaration=True, encoding="UTF-8")
 

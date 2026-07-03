@@ -6,6 +6,8 @@ from django.db.models import Q
 from netbox.filtersets import NetBoxModelFilterSet
 
 from .models import (
+    AssetMapping,
+    MetadataEntry,
     MonitoredInterface,
     MonitoredService,
     MonitoringDetector,
@@ -91,4 +93,26 @@ class MonitoredInterfaceFilterSet(NetBoxModelFilterSet):
         fields = ("id", "override", "ip_address", "role")
 
     def search(self, queryset, name, value):
+        return queryset
+
+
+class AssetMappingFilterSet(NetBoxModelFilterSet):
+    class Meta:
+        model = AssetMapping
+        fields = ("id", "requisition", "netbox_source", "asset_field")
+
+    def search(self, queryset, name, value):
+        if value:
+            return queryset.filter(asset_field__icontains=value)
+        return queryset
+
+
+class MetadataEntryFilterSet(NetBoxModelFilterSet):
+    class Meta:
+        model = MetadataEntry
+        fields = ("id", "requisition", "scope", "context", "key")
+
+    def search(self, queryset, name, value):
+        if value:
+            return queryset.filter(key__icontains=value)
         return queryset

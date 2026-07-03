@@ -12,6 +12,8 @@ from ..derivation import validate_location_name, validate_requisition_name
 from ..membership import filter_errors
 from ..models import (
     ASSIGNMENT_MODELS,
+    AssetMapping,
+    MetadataEntry,
     MonitoredInterface,
     MonitoredService,
     MonitoringDetector,
@@ -234,3 +236,50 @@ class MonitoredInterfaceSerializer(NetBoxModelSerializer):
             "last_updated",
         )
         brief_fields = ("id", "url", "display", "role")
+
+
+class AssetMappingSerializer(NetBoxModelSerializer):
+    url = serializers.HyperlinkedIdentityField(
+        view_name="plugins-api:netbox_opennms-api:assetmapping-detail"
+    )
+
+    class Meta:
+        model = AssetMapping
+        fields = (
+            "id",
+            "url",
+            "display",
+            "requisition",
+            "netbox_source",
+            "asset_field",
+            "tags",
+            "custom_fields",
+            "created",
+            "last_updated",
+        )
+        brief_fields = ("id", "url", "display", "asset_field")
+
+
+class MetadataEntrySerializer(NetBoxModelSerializer):
+    url = serializers.HyperlinkedIdentityField(
+        view_name="plugins-api:netbox_opennms-api:metadataentry-detail"
+    )
+
+    class Meta:
+        model = MetadataEntry
+        fields = (
+            "id",
+            "url",
+            "display",
+            "requisition",
+            "scope",
+            "context",
+            "key",
+            "value_source",
+            "literal_value",
+            "tags",
+            "custom_fields",
+            "created",
+            "last_updated",
+        )
+        brief_fields = ("id", "url", "display", "key")

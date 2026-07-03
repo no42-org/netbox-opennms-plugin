@@ -16,6 +16,8 @@ from ipam.models import IPAddress
 from utilities.testing import APIViewTestCases
 
 from netbox_opennms.models import (
+    AssetMapping,
+    MetadataEntry,
     MonitoredInterface,
     MonitoredService,
     MonitoringDetector,
@@ -179,4 +181,54 @@ class MonitoredInterfaceAPITest(_NoGraphQL, APIViewTestCases.APIViewTestCase):
             {"override": override.pk, "ip_address": ips[4].pk, "role": "N"},
             {"override": override.pk, "ip_address": ips[5].pk, "role": "S"},
             {"override": override.pk, "ip_address": ips[6].pk, "role": "N"},
+        ]
+
+
+class AssetMappingAPITest(_NoGraphQL, APIViewTestCases.APIViewTestCase):
+    model = AssetMapping
+    view_namespace = "plugins-api:netbox_opennms"
+    brief_fields = ["asset_field", "display", "id", "url"]
+
+    @classmethod
+    def setUpTestData(cls):
+        req = Requisition.objects.create(
+            name="am-api", filter_params={"role": ["switch"]}
+        )
+        for source, field in [
+            ("serial", "serialNumber"),
+            ("name", "displayCategory"),
+            ("description", "description"),
+        ]:
+            AssetMapping.objects.create(
+                requisition=req, netbox_source=source, asset_field=field
+            )
+        cls.create_data = [
+            {"requisition": req.pk, "netbox_source": "role", "asset_field": "category"},
+            {"requisition": req.pk, "netbox_source": "site", "asset_field": "building"},
+            {"requisition": req.pk, "netbox_source": "rack", "asset_field": "rack"},
+        ]
+
+
+class MetadataEntryAPITest(_NoGraphQL, APIViewTestCases.APIViewTestCase):
+    model = MetadataEntry
+    view_namespace = "plugins-api:netbox_opennms"
+    brief_fields = ["display", "id", "key", "url"]
+
+    @classmethod
+    def setUpTestData(cls):
+        req = Requisition.objects.create(
+            name="me-api", filter_params={"role": ["switch"]}
+        )
+        for key in ["k1", "k2", "k3"]:
+            MetadataEntry.objects.create(
+                requisition=req, scope="node", context="requisition",
+                key=key, literal_value="v",
+            )
+        cls.create_data = [
+            {"requisition": req.pk, "scope": "node", "context": "requisition",
+             "key": "a", "literal_value": "1"},
+            {"requisition": req.pk, "scope": "node", "context": "requisition",
+             "key": "b", "literal_value": "2"},
+            {"requisition": req.pk, "scope": "service", "context": "X-netbox",
+             "key": "c", "value_source": "name"},
         ]

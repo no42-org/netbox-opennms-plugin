@@ -24,6 +24,8 @@ from .choices import (
     DetectorPresetChoices,
     InterfaceRoleChoices,
     InterfaceScopeChoices,
+    MetadataScopeChoices,
+    NetBoxSourceChoices,
     ObjectTypeChoices,
     PolicyPresetChoices,
     ServiceChoices,
@@ -460,6 +462,104 @@ class MonitoredInterface(NetBoxModel):
                     {"role": "Another interface is already Primary; at most one "
                      "Primary interface per node."}
                 )
+
+
+class AssetMapping(NetBoxModel):
+    """Maps a NetBox attribute to an OpenNMS node **asset** field (RD-2).
+
+    Assets are a *fixed* schema (the ``OnmsAssetRecord`` field set, discovered via
+    ``catalog.get_asset_fields``); ``asset_field`` is validated against it. The value
+    is resolved per member from ``netbox_source`` at render time (unresolved → the
+    ``<asset>`` is omitted). Data with no matching asset field belongs in metadata.
+    """
+
+    requisition = models.ForeignKey(
+        to=Requisition, on_delete=models.CASCADE, related_name="asset_mappings"
+    )
+    netbox_source = models.CharField(max_length=100, choices=NetBoxSourceChoices)
+    asset_field = models.CharField(max_length=64)
+
+    class Meta:
+        ordering = ("requisition", "asset_field")
+        constraints = [
+            models.UniqueConstraint(
+                fields=("requisition", "asset_field"),
+                name="%(app_label)s_%(class)s_unique_field",
+            ),
+        ]
+        verbose_name = "asset mapping"
+        verbose_name_plural = "asset mappings"
+
+    def __str__(self):
+        return f"{self.netbox_source} → {self.asset_field}"
+
+    def get_absolute_url(self):
+        return reverse("plugins:netbox_opennms:assetmapping", args=[self.pk])
+
+    def clean(self):
+        super().clean()
+        # Validate against the discovered/known OnmsAssetRecord field set (RD-2).
+        from .catalog import get_asset_fields
+
+        if self.asset_field and self.asset_field not in get_asset_fields():
+            raise ValidationError(
+                {"asset_field": f"Unknown OpenNMS asset field {self.asset_field!r}."}
+            )
+
+
+class MetadataEntry(NetBoxModel):
+    """A metadata triad at node / interface / service scope on a Requisition (RD-3).
+
+    Rendered as ``<meta-data context=… key=… value=…/>`` under the matching element.
+    ``context`` defaults to ``requisition``; a custom context MUST be ``X-``-prefixed.
+    The value is a literal or resolved per member from ``value_source`` (a curated
+    attribute or ``cf_<name>``); an unresolved value omits the ``<meta-data>``.
+    """
+
+    requisition = models.ForeignKey(
+        to=Requisition, on_delete=models.CASCADE, related_name="metadata_entries"
+    )
+    scope = models.CharField(
+        max_length=16, choices=MetadataScopeChoices, default=MetadataScopeChoices.NODE
+    )
+    context = models.CharField(max_length=64, default="requisition")
+    key = models.CharField(max_length=100)
+    # A curated attribute key or ``cf_<name>``; blank → use ``literal_value``.
+    value_source = models.CharField(max_length=100, blank=True)
+    literal_value = models.CharField(max_length=255, blank=True)
+
+    class Meta:
+        ordering = ("requisition", "scope", "context", "key")
+        constraints = [
+            models.UniqueConstraint(
+                fields=("requisition", "scope", "context", "key"),
+                name="%(app_label)s_%(class)s_unique_meta",
+            ),
+        ]
+        verbose_name = "metadata entry"
+        verbose_name_plural = "metadata entries"
+
+    def __str__(self):
+        return f"{self.scope}:{self.context}:{self.key}"
+
+    def get_absolute_url(self):
+        return reverse("plugins:netbox_opennms:metadataentry", args=[self.pk])
+
+    def clean(self):
+        super().clean()
+        if self.context != "requisition" and not self.context.startswith("X-"):
+            raise ValidationError(
+                {"context": "A custom context must be prefixed 'X-' (or use "
+                 "'requisition')."}
+            )
+        if not self.value_source and not self.literal_value:
+            raise ValidationError(
+                "Set a value source or a literal value."
+            )
+        if self.value_source and self.literal_value:
+            raise ValidationError(
+                "Set either a value source or a literal value, not both."
+            )
 
 
 class DeployedForeignSource(models.Model):

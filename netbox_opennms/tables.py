@@ -6,6 +6,8 @@ import django_tables2 as tables
 from netbox.tables import NetBoxTable, columns
 
 from .models import (
+    AssetMapping,
+    MetadataEntry,
     MonitoredInterface,
     MonitoredService,
     MonitoringDetector,
@@ -146,3 +148,44 @@ class MonitoredInterfaceTable(NetBoxTable):
             "actions",
         )
         default_columns = ("override", "ip_address", "role")
+
+
+class AssetMappingTable(NetBoxTable):
+    requisition = tables.Column(linkify=True)
+    asset_field = tables.Column(linkify=True)
+
+    class Meta(NetBoxTable.Meta):
+        model = AssetMapping
+        fields = (
+            "pk",
+            "id",
+            "requisition",
+            "netbox_source",
+            "asset_field",
+            "created",
+            "last_updated",
+            "actions",
+        )
+        default_columns = ("requisition", "netbox_source", "asset_field")
+
+
+class MetadataEntryTable(NetBoxTable):
+    requisition = tables.Column(linkify=True)
+    key = tables.Column(linkify=True)
+
+    class Meta(NetBoxTable.Meta):
+        model = MetadataEntry
+        fields = (
+            "pk",
+            "id",
+            "requisition",
+            "scope",
+            "context",
+            "key",
+            "value_source",
+            "literal_value",
+            "created",
+            "last_updated",
+            "actions",
+        )
+        default_columns = ("requisition", "scope", "context", "key")

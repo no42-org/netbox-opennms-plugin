@@ -1,4 +1,8 @@
 {
+  "assetmapping:api_list_objects": 13,
+  "assetmapping:list_objects_with_permission": 17,
+  "metadataentry:api_list_objects": 13,
+  "metadataentry:list_objects_with_permission": 17,
   "monitoredinterface:api_list_objects": 13,
   "monitoredinterface:list_objects_with_permission": 20,
   "monitoredservice:api_list_objects": 13,

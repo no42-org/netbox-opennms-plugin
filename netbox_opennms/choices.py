@@ -112,3 +112,42 @@ class InterfaceRoleChoices(ChoiceSet):
         (SECONDARY, "Secondary"),
         (NOT_ELIGIBLE, "Not eligible"),
     ]
+
+
+class MetadataScopeChoices(ChoiceSet):
+    """Which requisition element a metadata entry attaches to (RD-3)."""
+
+    NODE = "node"
+    INTERFACE = "interface"
+    SERVICE = "service"
+
+    CHOICES = [
+        (NODE, "Node"),
+        (INTERFACE, "Interface"),
+        (SERVICE, "Service"),
+    ]
+
+
+class NetBoxSourceChoices(ChoiceSet):
+    """Curated NetBox attributes selectable as an asset/metadata value source (RD-2/3).
+
+    Admin-extensible via ``FIELD_CHOICES`` — but a new key also needs a resolver in
+    ``enrichment.CURATED``. Custom fields are referenced out-of-band as ``cf_<name>``.
+    """
+
+    key = "AssetMapping.netbox_source"
+
+    CHOICES = [
+        ("name", "Name"),
+        ("serial", "Serial number"),
+        ("asset_tag", "Asset tag"),
+        ("model", "Device model"),
+        ("manufacturer", "Manufacturer"),
+        ("platform", "Platform"),
+        ("role", "Role"),
+        ("site", "Site"),
+        ("rack", "Rack"),
+        ("tenant", "Tenant"),
+        ("description", "Description"),
+        ("comments", "Comments"),
+    ]

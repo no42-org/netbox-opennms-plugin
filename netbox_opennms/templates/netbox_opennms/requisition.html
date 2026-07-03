@@ -94,6 +94,28 @@
           </tbody>
         </table>
       </div>
+      <div class="card">
+        <h2 class="card-header">Asset Mappings</h2>
+        <table class="table table-hover">
+          <thead><tr><th>NetBox source</th><th>Asset field</th></tr></thead>
+          <tbody>
+            {% for mapping in object.asset_mappings.all %}
+              <tr><td>{{ mapping|linkify }}</td><td><code>{{ mapping.asset_field }}</code></td></tr>
+            {% empty %}<tr><td colspan="2" class="text-muted">None</td></tr>{% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <div class="card">
+        <h2 class="card-header">Metadata</h2>
+        <table class="table table-hover">
+          <thead><tr><th>Scope</th><th>Context</th><th>Key</th></tr></thead>
+          <tbody>
+            {% for entry in object.metadata_entries.all %}
+              <tr><td>{{ entry.get_scope_display }}</td><td>{{ entry.context }}</td><td>{{ entry|linkify }}</td></tr>
+            {% empty %}<tr><td colspan="3" class="text-muted">None</td></tr>{% endfor %}
+          </tbody>
+        </table>
+      </div>
     </div>
   </div>
 {% endblock %}

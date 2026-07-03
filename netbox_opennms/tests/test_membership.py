@@ -30,6 +30,7 @@ from netbox_opennms.membership import (
     resolve_node,
 )
 from netbox_opennms.models import (
+    MonitoredInterface,
     MonitoredService,
     MonitoringOverride,
     Requisition,
@@ -314,7 +315,7 @@ class MembershipTest(TestCase):
         self.assertIsNone(warning)
         self.assertEqual(node.node_label, "rtr-1")
         self.assertEqual(node.foreign_id, f"device-{device.pk}")
-        self.assertTrue(node.interfaces[0].primary)
+        self.assertEqual(node.interfaces[0].role, "P")
         self.assertEqual(node.interfaces[0].ip, "10.0.0.1")
 
     def test_declared_services_on_interfaces(self):
@@ -338,7 +339,7 @@ class MembershipTest(TestCase):
         extra = IPAddress.objects.create(address="10.0.0.9/24", assigned_object=iface)
         req = self._requisition(services=["ICMP"])
         override = MonitoringOverride.objects.create(assigned_object=device)
-        override.additional_ips.set([extra])
+        MonitoredInterface.objects.create(override=override, ip_address=extra)
         MonitoredService.objects.create(
             override=override, ip_address=extra, name="HTTP"
         )
@@ -371,8 +372,25 @@ class MembershipTest(TestCase):
             assigned_object=device, management_ip=alt
         )
         node, _ = resolve_node(device, self._requisition(), override)
-        primary = [i for i in node.interfaces if i.primary][0]
+        primary = [i for i in node.interfaces if i.role == "P"][0]
         self.assertEqual(primary.ip, "10.0.0.250")
+
+    def test_resolve_node_interface_roles(self):
+        # Promote an additional interface to Primary and demote the management
+        # interface to Secondary (RD-5): the rendered roles follow the config.
+        device, _ = self._device("rtr-1")
+        iface = Interface.objects.create(device=device, name="eth1", type="virtual")
+        extra = IPAddress.objects.create(address="10.0.0.9/24", assigned_object=iface)
+        override = MonitoringOverride.objects.create(
+            assigned_object=device, management_role="S"
+        )
+        MonitoredInterface.objects.create(
+            override=override, ip_address=extra, role="P"
+        )
+        node, _ = resolve_node(device, self._requisition(), override)
+        by_ip = {i.ip: i.role for i in node.interfaces}
+        self.assertEqual(by_ip["10.0.0.1"], "S")
+        self.assertEqual(by_ip["10.0.0.9"], "P")
 
     def test_resolve_node_all_interfaces_scope(self):
         device, _ = self._device("rtr-1")

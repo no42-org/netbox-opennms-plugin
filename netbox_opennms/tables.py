@@ -6,6 +6,7 @@ import django_tables2 as tables
 from netbox.tables import NetBoxTable, columns
 
 from .models import (
+    MonitoredInterface,
     MonitoredService,
     MonitoringDetector,
     MonitoringOverride,
@@ -126,3 +127,22 @@ class MonitoredServiceTable(NetBoxTable):
             "actions",
         )
         default_columns = ("override", "ip_address", "name")
+
+
+class MonitoredInterfaceTable(NetBoxTable):
+    override = tables.Column(linkify=True)
+    ip_address = tables.Column(linkify=True, verbose_name="Interface IP")
+
+    class Meta(NetBoxTable.Meta):
+        model = MonitoredInterface
+        fields = (
+            "pk",
+            "id",
+            "override",
+            "ip_address",
+            "role",
+            "created",
+            "last_updated",
+            "actions",
+        )
+        default_columns = ("override", "ip_address", "role")

@@ -30,7 +30,7 @@ def _resolution(nodes):
 def _node(ip="10.0.0.1", services=("ICMP",)):
     return NodeSpec(
         "rtr-1", "device-1", "",
-        [InterfaceSpec(ip, True, services=list(services))],
+        [InterfaceSpec(ip, "P", services=list(services))],
     )
 
 

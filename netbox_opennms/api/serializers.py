@@ -12,12 +12,12 @@ from ..derivation import validate_location_name, validate_requisition_name
 from ..membership import filter_errors
 from ..models import (
     ASSIGNMENT_MODELS,
+    MonitoredInterface,
     MonitoredService,
     MonitoringDetector,
     MonitoringOverride,
     MonitoringPolicy,
     Requisition,
-    object_ip_pks,
 )
 
 
@@ -146,7 +146,7 @@ class MonitoringOverrideSerializer(NetBoxModelSerializer):
             "assigned_object",
             "exclude",
             "management_ip",
-            "additional_ips",
+            "management_role",
             "suppressed_services",
             "location",
             "tags",
@@ -189,20 +189,6 @@ class MonitoringOverrideSerializer(NetBoxModelSerializer):
                 raise serializers.ValidationError(
                     "This object already has a Monitoring Override."
                 )
-
-            # Additional IPs must be the object's own interfaces (AD-15) — mirror
-            # the form's guard on the API path.
-            additional = data.get("additional_ips")
-            if additional:
-                owned = object_ip_pks(model.objects.get(pk=object_id))
-                foreign = [ip for ip in additional if ip.pk not in owned]
-                if foreign:
-                    raise serializers.ValidationError(
-                        {
-                            "additional_ips": "These IPs are not assigned to the "
-                            "object: " + ", ".join(str(ip) for ip in foreign)
-                        }
-                    )
         return data
 
 
@@ -226,3 +212,25 @@ class MonitoredServiceSerializer(NetBoxModelSerializer):
             "last_updated",
         )
         brief_fields = ("id", "url", "display", "name")
+
+
+class MonitoredInterfaceSerializer(NetBoxModelSerializer):
+    url = serializers.HyperlinkedIdentityField(
+        view_name="plugins-api:netbox_opennms-api:monitoredinterface-detail"
+    )
+
+    class Meta:
+        model = MonitoredInterface
+        fields = (
+            "id",
+            "url",
+            "display",
+            "override",
+            "ip_address",
+            "role",
+            "tags",
+            "custom_fields",
+            "created",
+            "last_updated",
+        )
+        brief_fields = ("id", "url", "display", "role")

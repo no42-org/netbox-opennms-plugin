@@ -16,6 +16,7 @@ from ipam.models import IPAddress
 from utilities.testing import APIViewTestCases
 
 from netbox_opennms.models import (
+    MonitoredInterface,
     MonitoredService,
     MonitoringDetector,
     MonitoringOverride,
@@ -145,11 +146,37 @@ class MonitoredServiceAPITest(_NoGraphQL, APIViewTestCases.APIViewTestCase):
         override = MonitoringOverride.objects.create(
             assigned_object=device, management_ip=ips[0]
         )
-        override.additional_ips.set(ips[1:])
+        for extra_ip in ips[1:]:
+            MonitoredInterface.objects.create(override=override, ip_address=extra_ip)
         for ip, name in [(ips[0], "ICMP"), (ips[0], "SNMP"), (ips[1], "HTTP")]:
             MonitoredService.objects.create(override=override, ip_address=ip, name=name)
         cls.create_data = [
             {"override": override.pk, "ip_address": ips[2].pk, "name": "ICMP"},
             {"override": override.pk, "ip_address": ips[3].pk, "name": "SNMP"},
             {"override": override.pk, "ip_address": ips[4].pk, "name": "HTTP"},
+        ]
+
+
+class MonitoredInterfaceAPITest(_NoGraphQL, APIViewTestCases.APIViewTestCase):
+    model = MonitoredInterface
+    view_namespace = "plugins-api:netbox_opennms"
+    brief_fields = ["display", "id", "role", "url"]
+
+    @classmethod
+    def setUpTestData(cls):
+        device = _devices(1)[0]
+        iface = Interface.objects.create(device=device, name="eth0", type="virtual")
+        ips = [
+            IPAddress.objects.create(address=f"10.9.0.{i}/24", assigned_object=iface)
+            for i in range(1, 8)
+        ]
+        override = MonitoringOverride.objects.create(
+            assigned_object=device, management_ip=ips[0]
+        )
+        for extra_ip in ips[1:4]:
+            MonitoredInterface.objects.create(override=override, ip_address=extra_ip)
+        cls.create_data = [
+            {"override": override.pk, "ip_address": ips[4].pk, "role": "N"},
+            {"override": override.pk, "ip_address": ips[5].pk, "role": "S"},
+            {"override": override.pk, "ip_address": ips[6].pk, "role": "N"},
         ]

@@ -15,6 +15,7 @@ import requests
 from netbox.plugins import get_plugin_config
 from requests.auth import HTTPBasicAuth
 
+from .discovery import parse_plugins
 from .errors import (
     OpenNMSAuthError,
     OpenNMSError,
@@ -153,6 +154,32 @@ class OpenNMSClient:
                 "OpenNMS returned an unparseable monitoringLocations response."
             ) from exc
         return names
+
+    def list_detectors(self):
+        """Available OpenNMS detectors + their parameter schema (RD-1, AD-2).
+
+        ``GET /rest/foreignSourcesConfig/detectors`` (JSON) — the same endpoint the
+        OpenNMS web UI uses to build its detector editor. Returns a list of
+        ``DiscoveredPlugin`` (name + class + ``key``/``required``/``options`` params).
+        Reflects what the target instance registers, incl. plugin/OIA detectors.
+        """
+        return self._list_plugins("/rest/foreignSourcesConfig/detectors")
+
+    def list_policies(self):
+        """Available OpenNMS provisioning policies + their parameter schema (RD-1)."""
+        return self._list_plugins("/rest/foreignSourcesConfig/policies")
+
+    def _list_plugins(self, path):
+        """GET a ``foreignSourcesConfig`` plugin list; typed taxonomy on a bad body."""
+        response = self._request(
+            "GET", path, headers={"Accept": "application/json"}
+        )
+        try:
+            return parse_plugins(response.json())
+        except (ValueError, AttributeError, TypeError) as exc:
+            raise OpenNMSError(
+                f"OpenNMS returned an unparseable {path} response."
+            ) from exc
 
     def post_foreign_source(self, xml_bytes):
         """Apply a foreign-source definition (auto-detection config) — AD-5/AD-11.

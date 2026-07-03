@@ -227,6 +227,87 @@ class OpenNMSClientTest(SimpleTestCase):
         self.assertEqual(method, "DELETE")
         self.assertTrue(url.endswith("/rest/foreignSources/netbox.x.y"))
 
+    @mock.patch.object(requests.Session, "request")
+    def test_list_detectors_parses_wrapped_plugins(self, mock_request):
+        mock_request.return_value = mock.Mock(
+            status_code=200,
+            ok=True,
+            json=mock.Mock(
+                return_value={
+                    "plugins": {
+                        "plugin": [
+                            {
+                                "name": "ICMP",
+                                "class": "org.opennms.IcmpDetector",
+                                "parameters": {
+                                    "parameter": [
+                                        {"key": "timeout", "required": False},
+                                        {"key": "retries", "required": False},
+                                    ]
+                                },
+                            },
+                            {"no-class": "dropped"},  # no class → dropped
+                        ]
+                    }
+                }
+            ),
+        )
+        plugins = _client().list_detectors()
+        method, url = mock_request.call_args.args
+        self.assertEqual(method, "GET")
+        self.assertEqual(
+            url,
+            "https://onms.example/opennms/rest/foreignSourcesConfig/detectors",
+        )
+        self.assertEqual(len(plugins), 1)
+        self.assertEqual(plugins[0].name, "ICMP")
+        self.assertEqual(plugins[0].plugin_class, "org.opennms.IcmpDetector")
+        self.assertEqual([p.key for p in plugins[0].parameters], ["timeout", "retries"])
+
+    @mock.patch.object(requests.Session, "request")
+    def test_list_policies_parses_enum_options_and_required(self, mock_request):
+        mock_request.return_value = mock.Mock(
+            status_code=200,
+            ok=True,
+            json=mock.Mock(
+                return_value={
+                    "plugin": [  # bare "plugin" wrapper, single object collapses too
+                        {
+                            "name": "Match IP",
+                            "class": "org.opennms.MatchingIpInterfacePolicy",
+                            "parameters": {
+                                "parameter": [
+                                    {
+                                        "key": "action",
+                                        "required": True,
+                                        "options": {
+                                            "option": ["DO_NOT_PERSIST", "UNMANAGE"]
+                                        },
+                                    }
+                                ]
+                            },
+                        }
+                    ]
+                }
+            ),
+        )
+        plugins = _client().list_policies()
+        _, url = mock_request.call_args.args
+        self.assertTrue(url.endswith("/rest/foreignSourcesConfig/policies"))
+        self.assertEqual(len(plugins), 1)
+        action = plugins[0].parameters[0]
+        self.assertEqual(action.key, "action")
+        self.assertTrue(action.required)
+        self.assertEqual(action.options, ("DO_NOT_PERSIST", "UNMANAGE"))
+
+    @mock.patch.object(requests.Session, "request")
+    def test_list_detectors_unparseable_raises(self, mock_request):
+        mock_request.return_value = mock.Mock(
+            status_code=200, ok=True, json=mock.Mock(side_effect=ValueError("x"))
+        )
+        with self.assertRaises(OpenNMSError):
+            _client().list_detectors()
+
     def test_from_config_requires_url(self):
         with mock.patch(
             "netbox_opennms.client.client.get_plugin_config", return_value=""

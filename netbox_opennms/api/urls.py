@@ -14,5 +14,6 @@ router.register("monitoring-detectors", views.MonitoringDetectorViewSet)
 router.register("monitoring-policies", views.MonitoringPolicyViewSet)
 router.register("monitoring-overrides", views.MonitoringOverrideViewSet)
 router.register("monitored-services", views.MonitoredServiceViewSet)
+router.register("monitored-interfaces", views.MonitoredInterfaceViewSet)
 
 urlpatterns = router.urls

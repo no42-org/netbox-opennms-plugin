@@ -6,6 +6,7 @@ from django.db.models import Q
 from netbox.filtersets import NetBoxModelFilterSet
 
 from .models import (
+    MonitoredInterface,
     MonitoredService,
     MonitoringDetector,
     MonitoringOverride,
@@ -81,4 +82,13 @@ class MonitoredServiceFilterSet(NetBoxModelFilterSet):
     def search(self, queryset, name, value):
         if value:
             return queryset.filter(name__icontains=value)
+        return queryset
+
+
+class MonitoredInterfaceFilterSet(NetBoxModelFilterSet):
+    class Meta:
+        model = MonitoredInterface
+        fields = ("id", "override", "ip_address", "role")
+
+    def search(self, queryset, name, value):
         return queryset

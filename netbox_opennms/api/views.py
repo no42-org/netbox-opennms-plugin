@@ -5,6 +5,7 @@
 from netbox.api.viewsets import NetBoxModelViewSet
 
 from ..filtersets import (
+    MonitoredInterfaceFilterSet,
     MonitoredServiceFilterSet,
     MonitoringDetectorFilterSet,
     MonitoringOverrideFilterSet,
@@ -12,6 +13,7 @@ from ..filtersets import (
     RequisitionFilterSet,
 )
 from ..models import (
+    MonitoredInterface,
     MonitoredService,
     MonitoringDetector,
     MonitoringOverride,
@@ -19,6 +21,7 @@ from ..models import (
     Requisition,
 )
 from .serializers import (
+    MonitoredInterfaceSerializer,
     MonitoredServiceSerializer,
     MonitoringDetectorSerializer,
     MonitoringOverrideSerializer,
@@ -47,7 +50,7 @@ class MonitoringPolicyViewSet(NetBoxModelViewSet):
 
 class MonitoringOverrideViewSet(NetBoxModelViewSet):
     queryset = MonitoringOverride.objects.prefetch_related(
-        "additional_ips", "services"
+        "interfaces", "services"
     ).select_related("assigned_object_type", "management_ip")
     serializer_class = MonitoringOverrideSerializer
     filterset_class = MonitoringOverrideFilterSet
@@ -57,3 +60,9 @@ class MonitoredServiceViewSet(NetBoxModelViewSet):
     queryset = MonitoredService.objects.select_related("override", "ip_address")
     serializer_class = MonitoredServiceSerializer
     filterset_class = MonitoredServiceFilterSet
+
+
+class MonitoredInterfaceViewSet(NetBoxModelViewSet):
+    queryset = MonitoredInterface.objects.select_related("override", "ip_address")
+    serializer_class = MonitoredInterfaceSerializer
+    filterset_class = MonitoredInterfaceFilterSet

@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 
 from netbox.plugins import get_plugin_config
 
+from .choices import InterfaceRoleChoices
 from .client import OpenNMSClient
 from .membership import resolve
 
@@ -79,7 +80,10 @@ def _desired_nodes(resolution, default_location=""):
     if resolution is None:
         return result
     for node in resolution.nodes:
-        primary = next((i for i in node.interfaces if i.primary), None)
+        primary = next(
+            (i for i in node.interfaces if i.role == InterfaceRoleChoices.PRIMARY),
+            None,
+        )
         result[node.foreign_id] = {
             "label": node.node_label,
             "management_ip": primary.ip if primary else None,

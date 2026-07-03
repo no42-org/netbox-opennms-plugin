@@ -27,6 +27,7 @@ from .membership import (
     resolve_all,
 )
 from .models import (
+    MonitoredInterface,
     MonitoredService,
     MonitoringDetector,
     MonitoringOverride,
@@ -344,6 +345,33 @@ class MonitoredServiceDeleteView(generic.ObjectDeleteView):
 class MonitoredServiceBulkDeleteView(generic.BulkDeleteView):
     queryset = MonitoredService.objects.all()
     table = tables.MonitoredServiceTable
+
+
+# --- Monitored Interface ----------------------------------------------------
+
+
+class MonitoredInterfaceView(generic.ObjectView):
+    queryset = MonitoredInterface.objects.all()
+
+
+class MonitoredInterfaceListView(generic.ObjectListView):
+    queryset = MonitoredInterface.objects.select_related("override", "ip_address")
+    table = tables.MonitoredInterfaceTable
+    filterset = filtersets.MonitoredInterfaceFilterSet
+
+
+class MonitoredInterfaceEditView(generic.ObjectEditView):
+    queryset = MonitoredInterface.objects.all()
+    form = forms.MonitoredInterfaceForm
+
+
+class MonitoredInterfaceDeleteView(generic.ObjectDeleteView):
+    queryset = MonitoredInterface.objects.all()
+
+
+class MonitoredInterfaceBulkDeleteView(generic.BulkDeleteView):
+    queryset = MonitoredInterface.objects.all()
+    table = tables.MonitoredInterfaceTable
 
 
 # --- Sync actions -----------------------------------------------------------

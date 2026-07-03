@@ -30,7 +30,7 @@ class RenderRequisitionTest(SimpleTestCase):
         kw.setdefault("foreign_id", "device-1")
         kw.setdefault("location", "")
         kw.setdefault(
-            "interfaces", [InterfaceSpec("10.0.0.1", True, services=["ICMP"])]
+            "interfaces", [InterfaceSpec("10.0.0.1", "P", services=["ICMP"])]
         )
         return NodeSpec(**kw)
 
@@ -50,9 +50,9 @@ class RenderRequisitionTest(SimpleTestCase):
     def test_primary_first_then_additional_sorted_non_primary(self):
         node = self._node(
             interfaces=[
-                InterfaceSpec("10.0.0.9", False),
-                InterfaceSpec("10.0.0.1", True),
-                InterfaceSpec("10.0.0.5", False),
+                InterfaceSpec("10.0.0.9", "N"),
+                InterfaceSpec("10.0.0.1", "P"),
+                InterfaceSpec("10.0.0.5", "N"),
             ]
         )
         xml = render_requisition("netbox.raleigh.router", [node])
@@ -84,7 +84,7 @@ class RenderRequisitionTest(SimpleTestCase):
 
     def test_services_sorted(self):
         node = self._node(
-            interfaces=[InterfaceSpec("10.0.0.1", True, services=["SSH", "ICMP"])]
+            interfaces=[InterfaceSpec("10.0.0.1", "P", services=["SSH", "ICMP"])]
         )
         xml = render_requisition("fs", [node])
         names = [

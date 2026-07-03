@@ -7,6 +7,7 @@ from netbox.views.generic import ObjectChangeLogView
 
 from . import views
 from .models import (
+    MonitoredInterface,
     MonitoredService,
     MonitoringDetector,
     MonitoringOverride,
@@ -68,6 +69,8 @@ urlpatterns = (
            MonitoringOverride),
     *_crud("monitored-services", "monitoredservice", "MonitoredService",
            MonitoredService),
+    *_crud("monitored-interfaces", "monitoredinterface", "MonitoredInterface",
+           MonitoredInterface),
     path(
         "sync/",
         views.SyncPreviewView.as_view(),

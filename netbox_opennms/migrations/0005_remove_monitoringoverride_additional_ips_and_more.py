@@ -19,6 +19,12 @@ def copy_additional_ips(apps, schema_editor):
     MonitoredInterface = apps.get_model("netbox_opennms", "MonitoredInterface")
     for override in MonitoringOverride.objects.all():
         for ip in override.additional_ips.all():
+            # Old data allowed an additional IP equal to the management IP; the new
+            # model forbids it (it's the primary interface) and it collapses into
+            # the management interface at render anyway — skip it rather than seed
+            # an invalid, un-re-saveable row.
+            if ip.pk == override.management_ip_id:
+                continue
             MonitoredInterface.objects.create(
                 override_id=override.pk, ip_address_id=ip.pk, role="N"
             )

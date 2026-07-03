@@ -84,6 +84,11 @@ def _desired_nodes(resolution, default_location=""):
             (i for i in node.interfaces if i.role == InterfaceRoleChoices.PRIMARY),
             None,
         )
+        # A node may have no Primary (management demoted, none promoted). Fall back
+        # to the lowest interface IP so the dry-run shows a stable management IP
+        # rather than None (OpenNMS elects a primary among the eligible interfaces).
+        if primary is None and node.interfaces:
+            primary = min(node.interfaces, key=lambda i: i.ip)
         result[node.foreign_id] = {
             "label": node.node_label,
             "management_ip": primary.ip if primary else None,

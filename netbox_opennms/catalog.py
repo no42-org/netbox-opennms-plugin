@@ -25,6 +25,10 @@ from .client import OpenNMSClient, OpenNMSError
 from .presets import DETECTOR_PRESETS, POLICY_PRESETS
 
 CACHE_TTL = 300  # seconds — short; refreshed on demand and at Sync
+# A degraded (overlay-only) result is cached briefly so a configured-but-down
+# OpenNMS doesn't re-block every form render on the client timeout; it still
+# recovers within this window (and `refresh_catalogs()` clears it at Sync).
+DEGRADED_CACHE_TTL = 30
 _DETECTOR_CACHE_KEY = "netbox_opennms:catalog:detectors"
 _POLICY_CACHE_KEY = "netbox_opennms:catalog:policies"
 
@@ -101,9 +105,10 @@ def _get_catalog(cache_key, presets, method_name, client, force_refresh):
     catalog = Catalog(
         entries=_merge(discovered, presets), live_unavailable=live_unavailable
     )
-    # Never cache a degraded (overlay-only) result — retry discovery next time.
-    if not live_unavailable:
-        cache.set(cache_key, catalog, CACHE_TTL)
+    # Cache a degraded (overlay-only) result only briefly, so a down OpenNMS doesn't
+    # re-block every render on the client timeout but a recovery is still picked up
+    # quickly; a live result is cached for the full TTL.
+    cache.set(cache_key, catalog, DEGRADED_CACHE_TTL if live_unavailable else CACHE_TTL)
     return catalog
 
 

@@ -99,12 +99,13 @@ class CatalogMergeTest(SimpleTestCase):
         # Overlay presets are still usable while degraded.
         self.assertIsNotNone(cat.by_preset("icmp"))
 
-    def test_degraded_result_is_not_cached(self):
+    def test_degraded_result_is_cached_briefly(self):
         client = FakeClient(raises=True)
         catalog.get_detector_catalog(client=client)
         catalog.get_detector_catalog(client=client)
-        # Both calls re-attempt discovery (a degraded result must never be cached).
-        self.assertEqual(client.calls, 2)
+        # A degraded result is cached briefly, so the second read is served from
+        # cache — a down OpenNMS is not re-hit on every call.
+        self.assertEqual(client.calls, 1)
 
     def test_successful_result_is_cached(self):
         client = FakeClient(detectors=[])
@@ -224,3 +225,34 @@ class PresetRuleFormTest(TestCase):
         form = onms_forms.MonitoringPolicyForm(instance=policy)
         self.assertIn("parameters", form.fields)
         self.assertFalse(any(k.startswith("param_") for k in form.fields))
+
+    @mock.patch.object(onms_forms, "get_policy_catalog")
+    def test_edit_preserves_unsurfaced_stored_param(self, mock_cat):
+        mock_cat.return_value = _policy_catalog()
+        policy = MonitoringPolicy.objects.create(
+            requisition=self.req, name="mip", preset="match-ip-interface"
+        )
+        # A stored key the catalog entry does NOT surface as a field (e.g. set via
+        # the API, or by a richer prior catalog) must survive an edit+save.
+        policy.parameters["extraKey"] = "keepme"
+        policy.save()
+        form = onms_forms.MonitoringPolicyForm(
+            data={
+                "requisition": self.req.pk,
+                "name": "mip",
+                "preset": "match-ip-interface",
+                "param_action": "UNMANAGE",
+                "param_matchBehavior": "ANY_PARAMETER",
+            },
+            instance=policy,
+        )
+        self.assertTrue(form.is_valid(), form.errors)
+        obj = form.save(commit=False)
+        self.assertEqual(obj.parameters.get("extraKey"), "keepme")
+        self.assertEqual(obj.parameters.get("action"), "UNMANAGE")
+
+    @mock.patch.object(onms_forms, "get_detector_catalog")
+    def test_blank_add_form_does_not_fetch_catalog(self, mock_cat):
+        # A blank add form (no preset, no class) must not hit OpenNMS.
+        onms_forms.MonitoringDetectorForm()
+        mock_cat.assert_not_called()

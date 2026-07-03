@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: MIT
 """Forms for plugin models (Requisition redesign)."""
 
+import logging
+
 from dcim.models import Device
 from django import forms
 from django.contrib.contenttypes.models import ContentType
@@ -28,6 +30,8 @@ from .models import (
     MonitoringPolicy,
     Requisition,
 )
+
+logger = logging.getLogger("netbox_opennms")
 
 
 class RequisitionForm(NetBoxModelForm):
@@ -151,10 +155,17 @@ class _PresetRuleForm(NetBoxModelForm):
         """The catalog entry for this rule's class/preset, and the live-avail flag."""
         rule_class = getattr(self.instance, "rule_class", "") or ""
         preset = getattr(self.instance, "preset", "") or ""
+        # Nothing to look up (a blank add form or a freeform rule) — don't fetch the
+        # catalog just to compute an entry that is structurally always None.
+        if not rule_class and not preset:
+            return None, False
         try:
             catalog = self._get_catalog()
         except Exception:  # noqa: BLE001 — the editor must never fail on discovery
-            return None, False
+            # _get_catalog degrades network errors internally; anything here is a
+            # real bug — log it and flag degraded so the UI note fires (never silent).
+            logger.exception("detector/policy catalog lookup failed")
+            return None, True
         if catalog is None:
             return None, False
         entry = catalog.by_class(rule_class) if rule_class else None
@@ -196,14 +207,18 @@ class _PresetRuleForm(NetBoxModelForm):
 
     def clean(self):
         super().clean()
-        # Reassemble the hidden parameters JSON from the per-parameter fields; a
-        # blank field means "unset" (omitted), so the model's required-param guard
-        # still fires for a genuinely missing required value.
+        # Rebuild parameters from the per-parameter fields, but PRESERVE any stored
+        # key the catalog didn't surface as a field (freeform/API-set keys, or keys
+        # dropped when the catalog is degraded to the overlay) — only touch the keys
+        # we actually rendered. A blank field clears its own key; the model's
+        # required-param guard still fires for a genuinely missing required value.
         if self._param_fields:
-            params = {}
+            params = dict(self.instance.parameters or {})
             for name, key in self._param_fields:
                 value = self.cleaned_data.get(name)
-                if value not in (None, ""):
+                if value in (None, ""):
+                    params.pop(str(key), None)
+                else:
                     params[str(key)] = str(value)
             self.instance.parameters = params
         return self.cleaned_data

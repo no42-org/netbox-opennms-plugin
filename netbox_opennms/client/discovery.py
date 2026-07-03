@@ -43,6 +43,13 @@ def _unwrap(node, keys):
     return node if isinstance(node, list) else []
 
 
+def _as_bool(value):
+    """Coerce a JSON bool/int/string flag to bool (``"false"``/``"0"`` → False)."""
+    if isinstance(value, str):
+        return value.strip().lower() in ("true", "1", "yes")
+    return bool(value)
+
+
 def _str_list(node, *keys):
     """Coerce a wrapped/scalar/list value into a list of strings."""
     for key in keys:
@@ -77,7 +84,7 @@ def parse_plugins(payload):
             params.append(
                 DiscoveredParam(
                     key=param["key"],
-                    required=bool(param.get("required")),
+                    required=_as_bool(param.get("required")),
                     options=tuple(_str_list(param.get("options"), "option")),
                 )
             )

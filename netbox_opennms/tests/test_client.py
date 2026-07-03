@@ -301,6 +301,29 @@ class OpenNMSClientTest(SimpleTestCase):
         self.assertEqual(action.options, ("DO_NOT_PERSIST", "UNMANAGE"))
 
     @mock.patch.object(requests.Session, "request")
+    def test_list_detectors_required_string_false(self, mock_request):
+        # A JSON string "false" for `required` must parse as False, not bool("false").
+        mock_request.return_value = mock.Mock(
+            status_code=200,
+            ok=True,
+            json=mock.Mock(
+                return_value={
+                    "plugin": [
+                        {
+                            "name": "X",
+                            "class": "org.X",
+                            "parameters": {
+                                "parameter": [{"key": "k", "required": "false"}]
+                            },
+                        }
+                    ]
+                }
+            ),
+        )
+        plugins = _client().list_detectors()
+        self.assertFalse(plugins[0].parameters[0].required)
+
+    @mock.patch.object(requests.Session, "request")
     def test_list_detectors_unparseable_raises(self, mock_request):
         mock_request.return_value = mock.Mock(
             status_code=200, ok=True, json=mock.Mock(side_effect=ValueError("x"))

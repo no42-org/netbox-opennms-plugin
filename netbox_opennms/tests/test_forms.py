@@ -17,7 +17,11 @@ from extras.models import SavedFilter
 from ipam.models import IPAddress
 
 from netbox_opennms.forms import MonitoringOverrideForm, RequisitionForm
-from netbox_opennms.models import MonitoredInterface, MonitoringOverride
+from netbox_opennms.models import (
+    MonitoredInterface,
+    MonitoredService,
+    MonitoringOverride,
+)
 
 
 class MonitoringOverrideFormTest(TestCase):
@@ -141,3 +145,39 @@ class MonitoredInterfaceValidationTest(TestCase):
         )
         with self.assertRaises(ValidationError):
             interface.clean()
+
+
+class InterfaceServicePruneTest(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        site = Site.objects.create(name="Cary", slug="cary")
+        role = DeviceRole.objects.create(name="Sw", slug="sw")
+        mfr = Manufacturer.objects.create(name="Acme3", slug="acme3")
+        dt = DeviceType.objects.create(manufacturer=mfr, model="M3", slug="m3")
+        cls.device = Device.objects.create(
+            name="sw-p", device_type=dt, role=role, site=site
+        )
+        iface = Interface.objects.create(device=cls.device, name="eth0", type="virtual")
+        cls.ip_a = IPAddress.objects.create(
+            address="10.2.0.2/24", assigned_object=iface
+        )
+        cls.ip_b = IPAddress.objects.create(
+            address="10.2.0.3/24", assigned_object=iface
+        )
+        cls.override = MonitoringOverride.objects.create(assigned_object=cls.device)
+
+    def test_editing_interface_ip_prunes_stale_service(self):
+        interface = MonitoredInterface.objects.create(
+            override=self.override, ip_address=self.ip_a, role="N"
+        )
+        MonitoredService.objects.create(
+            override=self.override, ip_address=self.ip_a, name="HTTP"
+        )
+        # Move the interface to IP-B: the service on IP-A is now orphaned and pruned.
+        interface.ip_address = self.ip_b
+        interface.save()
+        self.assertFalse(
+            MonitoredService.objects.filter(
+                override=self.override, ip_address=self.ip_a
+            ).exists()
+        )

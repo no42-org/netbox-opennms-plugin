@@ -40,9 +40,16 @@ def prune_services_on_override_save(sender, instance, **kwargs):
     _prune_orphaned_services(instance)
 
 
+@receiver(post_save, sender=MonitoredInterface)
+def prune_services_on_interface_save(sender, instance, **kwargs):
+    # Editing an interface's ip_address orphans its services on the OLD IP (AD-15).
+    # An in-place edit is an UPDATE (post_save), not a delete, so prune here too.
+    _prune_orphaned_services(instance.override)
+
+
 @receiver(post_delete, sender=MonitoredInterface)
 def prune_services_on_interface_delete(sender, instance, **kwargs):
-    # An additional interface removed → its services on that IP orphan (AD-15).
-    # Skip when the override itself is being cascade-deleted (its services go too).
+    # An additional interface deleted → its services on that IP orphan (AD-15).
+    # Guard against the override already being gone (its services cascade with it).
     if MonitoringOverride.objects.filter(pk=instance.override_id).exists():
         _prune_orphaned_services(instance.override)

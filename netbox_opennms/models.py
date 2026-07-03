@@ -22,6 +22,7 @@ from netbox.models import NetBoxModel
 
 from .choices import (
     DetectorPresetChoices,
+    InterfaceRoleChoices,
     InterfaceScopeChoices,
     ObjectTypeChoices,
     PolicyPresetChoices,
@@ -278,10 +279,15 @@ class MonitoringOverride(NetBoxModel):
         blank=True,
         related_name="+",
     )
-    # Extra interfaces to monitor beyond the scope default (AD-15).
-    additional_ips = models.ManyToManyField(
-        to="ipam.IPAddress", related_name="+", blank=True
+    # The SNMP role of the management interface (RD-5). Primary by default; set to
+    # Secondary/Not-eligible to promote an additional interface to Primary instead.
+    management_role = models.CharField(
+        max_length=1,
+        choices=InterfaceRoleChoices,
+        default=InterfaceRoleChoices.PRIMARY,
     )
+    # Extra interfaces are their own child rows (MonitoredInterface), each with a
+    # per-interface SNMP role (RD-5), reachable via ``override.interfaces``.
     # Declared-service names to suppress for this object (R5); effective services =
     # (requisition.services ∪ added MonitoredService) − suppressed_services.
     suppressed_services = models.JSONField(default=list, blank=True)
@@ -318,6 +324,20 @@ class MonitoringOverride(NetBoxModel):
                 {"suppressed_services": "Suppressed services must be a list."}
             )
         _validate_service_names(self.suppressed_services, "suppressed_services")
+        # At most one Primary per node (RD-5): making the management interface
+        # Primary while an additional interface is already Primary is rejected —
+        # the other direction is caught in MonitoredInterface.clean().
+        if (
+            self.pk
+            and self.management_role == InterfaceRoleChoices.PRIMARY
+            and self.interfaces.filter(role=InterfaceRoleChoices.PRIMARY).exists()
+        ):
+            raise ValidationError(
+                {
+                    "management_role": "An additional interface is already Primary; "
+                    "at most one Primary interface per node."
+                }
+            )
 
 
 class MonitoredService(NetBoxModel):
@@ -365,6 +385,83 @@ class MonitoredService(NetBoxModel):
             )
 
 
+class MonitoredInterface(NetBoxModel):
+    """An additional interface on a Monitoring Override, with its SNMP role (RD-5).
+
+    Beyond the management (primary) interface, an override may add interfaces from
+    the object's own NetBox IPs, each with a role — Primary / Secondary /
+    Not-eligible (OpenNMS ``snmp-primary`` P/S/N). A node has **at most one**
+    Primary (the management interface by default), enforced in ``clean()`` across
+    the management interface + these rows.
+    """
+
+    override = models.ForeignKey(
+        to=MonitoringOverride, on_delete=models.CASCADE, related_name="interfaces"
+    )
+    ip_address = models.ForeignKey(
+        to="ipam.IPAddress", on_delete=models.CASCADE, related_name="+"
+    )
+    role = models.CharField(
+        max_length=1,
+        choices=InterfaceRoleChoices,
+        default=InterfaceRoleChoices.NOT_ELIGIBLE,
+    )
+
+    class Meta:
+        ordering = ("override", "ip_address")
+        constraints = [
+            models.UniqueConstraint(
+                fields=("override", "ip_address"),
+                name="%(app_label)s_%(class)s_unique_ip",
+            ),
+        ]
+        verbose_name = "monitored interface"
+        verbose_name_plural = "monitored interfaces"
+
+    def __str__(self):
+        return f"{self.ip_address} ({self.get_role_display()})"
+
+    def get_absolute_url(self):
+        return reverse("plugins:netbox_opennms:monitoredinterface", args=[self.pk])
+
+    def clean(self):
+        super().clean()
+        if not self.override_id or not self.ip_address_id:
+            return
+        target = self.override.assigned_object
+        # An additional interface must be one of the object's own IPs (AD-15).
+        if target is not None and self.ip_address_id not in object_ip_pks(target):
+            raise ValidationError(
+                {"ip_address": "Must be an IP assigned to the override's object."}
+            )
+        # The management IP is the primary interface, modelled separately.
+        management = self.override.management_ip or (
+            target.primary_ip if target is not None else None
+        )
+        if management is not None and self.ip_address_id == management.pk:
+            raise ValidationError(
+                {"ip_address": "This is the management IP (the primary interface)."}
+            )
+        # At most one Primary per node (RD-5).
+        if self.role == InterfaceRoleChoices.PRIMARY:
+            if self.override.management_role == InterfaceRoleChoices.PRIMARY:
+                raise ValidationError(
+                    {
+                        "role": "The management interface is Primary; set the "
+                        "override's management role to Secondary/Not-eligible "
+                        "before making another interface Primary."
+                    }
+                )
+            others = self.override.interfaces.exclude(pk=self.pk).filter(
+                role=InterfaceRoleChoices.PRIMARY
+            )
+            if others.exists():
+                raise ValidationError(
+                    {"role": "Another interface is already Primary; at most one "
+                     "Primary interface per node."}
+                )
+
+
 class DeployedForeignSource(models.Model):
     """A Foreign Source name NetBox has pushed to OpenNMS — the reconciler's
     ownership record (review #4).
@@ -399,9 +496,9 @@ def object_ip_pks(target):
 
 
 def override_ip_pks(override):
-    """PKs of an override's interfaces: its management IP + its additional IPs."""
+    """PKs of an override's interfaces: management IP + additional interfaces."""
     pks = set()
     if override.management_ip_id:
         pks.add(override.management_ip_id)
-    pks.update(override.additional_ips.values_list("pk", flat=True))
+    pks.update(override.interfaces.values_list("ip_address_id", flat=True))
     return pks

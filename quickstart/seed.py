@@ -39,6 +39,7 @@ from virtualization.models import (
 
 from netbox_opennms.membership import monitored_foreign_sources, resolve
 from netbox_opennms.models import (
+    MonitoredInterface,
     MonitoredService,
     MonitoringDetector,
     MonitoringOverride,
@@ -155,8 +156,8 @@ def override(
             "suppressed_services": list(suppressed),
         },
     )[0]
-    if additional:
-        ov.additional_ips.set(additional)
+    for ip in additional:
+        MonitoredInterface.objects.get_or_create(override=ov, ip_address=ip)
     for ip, name in services:
         MonitoredService.objects.get_or_create(override=ov, ip_address=ip, name=name)
     return ov

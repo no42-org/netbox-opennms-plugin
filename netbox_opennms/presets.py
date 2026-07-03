@@ -1,22 +1,32 @@
 # Copyright 2026 Ronny Trommer <ronny@no42.org>
 # SPDX-License-Identifier: MIT
-"""Detector/policy preset registry.
+"""Detector/policy **curation overlay** (RD-1).
 
-Maps a preset key (see ``choices.DetectorPresetChoices`` / ``PolicyPresetChoices``)
-to its OpenNMS class and default parameters. A **known** preset OWNS the rule
-class: a Requisition's detector/policy re-derives its class from the preset on
-save (``models._apply_preset``), so it tracks the registry. Default parameters
-are seeded once (when the rule has none); a preset the registry doesn't know
-(e.g. admin-extended) leaves an existing freeform class untouched.
+Since ``detector-policy-discovery``, the authoritative list of which detector/policy
+classes exist and what parameters they take comes from the **live OpenNMS instance**
+via ``catalog.py`` (``GET /rest/foreignSourcesConfig/{detectors,policies}``). This
+registry is no longer that source of truth — it is a **curation overlay** layered on
+top of discovery, supplying:
 
-WARNING: these class names and parameters are an OpenNMS-version contract. They
-are a first cut and MUST be confirmed by the live ``make integration`` round-trip
-against the target Horizon version before they ship (Epic 5, Story 5.2) — the
-`:`-delimiter bug proved a unit test cannot catch a wire-contract mismatch.
+* friendly **labels** and sensible **defaults** the REST catalog does not return
+  (``foreignSourcesConfig`` gives ``key`` / ``required`` / ``options`` only — no
+  type, default, or label);
+* a curated **shortlist** of common presets for the UI;
+* the **offline fallback** catalog when OpenNMS is unreachable (``catalog.py``
+  degrades to this overlay).
+
+A **known** preset still OWNS the rule class: a Requisition's detector/policy
+re-derives its class from the preset on save (``models._apply_preset``). Default
+parameters are seeded once (when the rule has none); a preset the overlay doesn't
+know leaves an existing freeform class untouched. Hard "must-fill" validation is the
+overlay's ``required`` list (``detector_required_params`` / ``policy_required_params``),
+NOT the discovered ``required`` flag (which is annotation-driven, not "user must
+supply"). The class/parameter values are still confirmed against the target Horizon by
+the live ``make integration`` round-trip — but they are now runtime-verifiable against
+discovery, not an unverifiable-at-author-time contract.
 
 ``parameters`` values are strings (OpenNMS ``<parameter value="…">`` is text).
-``schema`` lists the parameter keys a preset exposes in the UI (key, label,
-default) — informational here; the form layer (Story 5.4) consumes it.
+``schema`` lists the parameter keys a preset labels in the UI (key, label, default).
 """
 
 _DETECTOR = "org.opennms.netmgt.provision.detector"

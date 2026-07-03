@@ -14,6 +14,7 @@ from ipam.models import IPAddress
 from utilities.testing import ViewTestCases
 
 from netbox_opennms.models import (
+    MonitoredInterface,
     MonitoredService,
     MonitoringDetector,
     MonitoringOverride,
@@ -149,6 +150,7 @@ class MonitoringOverrideViewTest(
         cls.form_data = {
             "device": devices[3].pk,
             "exclude": True,
+            "management_role": "P",
             "location": "",
         }
 
@@ -178,11 +180,46 @@ class MonitoredServiceViewTest(
         override = MonitoringOverride.objects.create(
             assigned_object=device, management_ip=ips[0]
         )
-        override.additional_ips.set(ips[1:])
+        for extra_ip in ips[1:]:
+            MonitoredInterface.objects.create(override=override, ip_address=extra_ip)
         for ip, name in [(ips[0], "ICMP"), (ips[0], "SNMP"), (ips[1], "HTTP")]:
             MonitoredService.objects.create(override=override, ip_address=ip, name=name)
         cls.form_data = {
             "override": override.pk,
             "ip_address": ips[2].pk,
             "name": "DNS",
+        }
+
+
+class MonitoredInterfaceViewTest(
+    ViewTestCases.GetObjectViewTestCase,
+    ViewTestCases.GetObjectChangelogViewTestCase,
+    ViewTestCases.CreateObjectViewTestCase,
+    ViewTestCases.EditObjectViewTestCase,
+    ViewTestCases.DeleteObjectViewTestCase,
+    ViewTestCases.ListObjectsViewTestCase,
+    ViewTestCases.BulkDeleteObjectsViewTestCase,
+):
+    model = MonitoredInterface
+
+    def _get_base_url(self):
+        return "plugins:netbox_opennms:monitoredinterface_{}"
+
+    @classmethod
+    def setUpTestData(cls):
+        device = _devices(1)[0]
+        iface = Interface.objects.create(device=device, name="eth0", type="virtual")
+        ips = [
+            IPAddress.objects.create(address=f"10.9.0.{i}/24", assigned_object=iface)
+            for i in range(1, 7)
+        ]
+        override = MonitoringOverride.objects.create(
+            assigned_object=device, management_ip=ips[0]
+        )
+        for extra_ip in ips[1:4]:
+            MonitoredInterface.objects.create(override=override, ip_address=extra_ip)
+        cls.form_data = {
+            "override": override.pk,
+            "ip_address": ips[4].pk,
+            "role": "N",
         }

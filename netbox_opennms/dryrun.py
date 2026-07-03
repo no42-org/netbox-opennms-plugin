@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 
 from netbox.plugins import get_plugin_config
 
+from .choices import InterfaceRoleChoices
 from .client import OpenNMSClient
 from .membership import resolve
 
@@ -79,7 +80,15 @@ def _desired_nodes(resolution, default_location=""):
     if resolution is None:
         return result
     for node in resolution.nodes:
-        primary = next((i for i in node.interfaces if i.primary), None)
+        primary = next(
+            (i for i in node.interfaces if i.role == InterfaceRoleChoices.PRIMARY),
+            None,
+        )
+        # A node may have no Primary (management demoted, none promoted). Fall back
+        # to the lowest interface IP so the dry-run shows a stable management IP
+        # rather than None (OpenNMS elects a primary among the eligible interfaces).
+        if primary is None and node.interfaces:
+            primary = min(node.interfaces, key=lambda i: i.ip)
         result[node.foreign_id] = {
             "label": node.node_label,
             "management_ip": primary.ip if primary else None,

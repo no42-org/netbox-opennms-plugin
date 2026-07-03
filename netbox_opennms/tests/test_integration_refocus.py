@@ -261,23 +261,25 @@ class RefocusSpikeH36(unittest.TestCase):
             found = self._poll_node("spike-meta")
             self.assertIsNotNone(found, "metadata node not provisioned")
             nid = found["id"]
-            node_md = self._get(f"/rest/nodes/{nid}/metadata")
-            iface_md = self._get(
-                f"/rest/nodes/{nid}/ipinterfaces/{REACHABLE_IP}/metadata"
+            # H36 has no /rest/nodes/{id}/metadata endpoint (returns 404), so verify
+            # acceptance + persistence via the DEPLOYED requisition round-trip: the
+            # import was already accepted (no rejection in _post_and_import); the
+            # <meta-data> we posted must survive into the deployed requisition.
+            deployed = self._get(f"/rest/requisitions/deployed/{quote(FS, safe='')}")
+            _dump("deployed requisition readback", deployed.text)
+            node_md = self._get(f"/rest/nodes/{nid}/metadata")  # best-effort capture
+            _dump("node /metadata endpoint status", {"status": node_md.status_code})
+            self.assertEqual(
+                deployed.status_code, 200, "deployed requisition not readable"
             )
-            svc_md = self._get(
-                f"/rest/nodes/{nid}/ipinterfaces/{REACHABLE_IP}/services/ICMP/metadata"
-            )
-            _dump("node metadata readback", node_md.text)
-            _dump("interface metadata readback", iface_md.text)
-            _dump("service metadata readback", svc_md.text)
-            # Lenient assertion — the deliverable is the captured shape. Confirm the
-            # requisition-context node key survived somewhere in the readback.
-            self.assertEqual(node_md.status_code, 200, "node metadata not readable")
             self.assertIn(
-                "netbox-node-key",
-                node_md.text,
-                "requisition-context node metadata did not round-trip",
+                "netbox-node-key", deployed.text, "node meta-data did not round-trip"
+            )
+            self.assertIn(
+                "X-netbox", deployed.text, "X- context meta-data did not round-trip"
+            )
+            self.assertIn(
+                "netbox-svc-key", deployed.text, "service meta-data did not round-trip"
             )
         finally:
             self._cleanup()
@@ -297,11 +299,14 @@ class RefocusSpikeH36(unittest.TestCase):
             self.assertIsNotNone(found, "interface-less node not provisioned")
             ifaces = self._get(f"/rest/nodes/{found['id']}/ipinterfaces")
             _dump("interface-less node ipinterfaces readback", ifaces.text)
-            count = (ifaces.json() or {}).get("count", None)
+            # H36 returns {"count": null, "totalCount": 0, "ipInterface": []} for a
+            # node with no interfaces — assert on totalCount (count is null here).
+            body = ifaces.json() or {}
+            total = body.get("totalCount")
             _dump(
                 "interface-less node result",
-                {"node_id": found["id"], "ipinterface_count": count},
+                {"node_id": found["id"], "totalCount": total},
             )
-            self.assertEqual(count, 0, "expected zero interfaces on the bare node")
+            self.assertEqual(total, 0, "expected zero interfaces on the bare node")
         finally:
             self._cleanup()

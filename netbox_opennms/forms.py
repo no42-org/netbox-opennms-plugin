@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: MIT
 """Forms for plugin models (Requisition redesign)."""
 
+import logging
+
 from dcim.models import Device
 from django import forms
 from django.contrib.contenttypes.models import ContentType
@@ -13,21 +15,23 @@ from ipam.models import IPAddress
 from netbox.forms import NetBoxModelForm
 from utilities.forms.fields import (
     DynamicModelChoiceField,
-    DynamicModelMultipleChoiceField,
     JSONField,
 )
 from virtualization.models import VirtualMachine
 
+from .catalog import get_detector_catalog, get_policy_catalog
 from .choices import ObjectTypeChoices, ServiceChoices
 from .membership import filter_errors
 from .models import (
+    MonitoredInterface,
     MonitoredService,
     MonitoringDetector,
     MonitoringOverride,
     MonitoringPolicy,
     Requisition,
-    object_ip_pks,
 )
+
+logger = logging.getLogger("netbox_opennms")
 
 
 class RequisitionForm(NetBoxModelForm):
@@ -116,11 +120,22 @@ class _PresetRuleForm(NetBoxModelForm):
     The class is filled from the preset by the model; the form makes ``rule_class``
     optional (a preset provides it) and locks the field once a preset is set —
     freeform entry is only for a rule with no preset.
+
+    When the rule's class is known, the parameter editor is driven by the **live
+    OpenNMS catalog** (``catalog.py``, RD-1): one field per catalog parameter —
+    enum parameters (with discovered ``options``) render as a dropdown, others as
+    text, seeded with the overlay's label/default. The raw ``parameters`` JSON is
+    hidden and reassembled from those fields on save. If OpenNMS is unreachable the
+    editor degrades to the curated overlay and notes it — the save is never blocked.
     """
 
     requisition = DynamicModelChoiceField(
         queryset=Requisition.objects.all(), label=_("Requisition")
     )
+
+    def _get_catalog(self):
+        """The detector/policy catalog, or ``None``. Overridden by subclasses."""
+        return None
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -133,10 +148,87 @@ class _PresetRuleForm(NetBoxModelForm):
         # An existing preset-backed rule: the class is fixed to the preset's.
         if self.instance and self.instance.pk and self.instance.preset:
             field.disabled = True
+        self._param_fields = []
+        self._add_catalog_param_fields()
+
+    def _catalog_entry(self):
+        """The catalog entry for this rule's class/preset, and the live-avail flag."""
+        rule_class = getattr(self.instance, "rule_class", "") or ""
+        preset = getattr(self.instance, "preset", "") or ""
+        # Nothing to look up (a blank add form or a freeform rule) — don't fetch the
+        # catalog just to compute an entry that is structurally always None.
+        if not rule_class and not preset:
+            return None, False
+        try:
+            catalog = self._get_catalog()
+        except Exception:  # noqa: BLE001 — the editor must never fail on discovery
+            # _get_catalog degrades network errors internally; anything here is a
+            # real bug — log it and flag degraded so the UI note fires (never silent).
+            logger.exception("detector/policy catalog lookup failed")
+            return None, True
+        if catalog is None:
+            return None, False
+        entry = catalog.by_class(rule_class) if rule_class else None
+        if entry is None and preset:
+            entry = catalog.by_preset(preset)
+        return entry, catalog.live_unavailable
+
+    def _add_catalog_param_fields(self):
+        entry, live_unavailable = self._catalog_entry()
+        if live_unavailable:
+            self.fields["rule_class"].help_text += _(
+                " Live OpenNMS catalog unavailable — showing curated presets."
+            )
+        if entry is None or not entry.parameters:
+            return
+        # Drive parameters from the schema; hide the raw JSON and rebuild it in clean().
+        self.fields.pop("parameters", None)
+        current = (getattr(self.instance, "parameters", None)) or {}
+        for param in entry.parameters:
+            name = f"param_{param.key}"
+            initial = current.get(param.key, param.default)
+            hint = _("required by OpenNMS") if param.required else ""
+            if param.options:
+                self.fields[name] = forms.ChoiceField(
+                    label=param.label or param.key,
+                    required=False,
+                    choices=[("", "---------")] + [(o, o) for o in param.options],
+                    initial=initial if initial in param.options else "",
+                    help_text=hint,
+                )
+            else:
+                self.fields[name] = forms.CharField(
+                    label=param.label or param.key,
+                    required=False,
+                    initial=initial,
+                    help_text=hint,
+                )
+            self._param_fields.append((name, param.key))
+
+    def clean(self):
+        super().clean()
+        # Rebuild parameters from the per-parameter fields, but PRESERVE any stored
+        # key the catalog didn't surface as a field (freeform/API-set keys, or keys
+        # dropped when the catalog is degraded to the overlay) — only touch the keys
+        # we actually rendered. A blank field clears its own key; the model's
+        # required-param guard still fires for a genuinely missing required value.
+        if self._param_fields:
+            params = dict(self.instance.parameters or {})
+            for name, key in self._param_fields:
+                value = self.cleaned_data.get(name)
+                if value in (None, ""):
+                    params.pop(str(key), None)
+                else:
+                    params[str(key)] = str(value)
+            self.instance.parameters = params
+        return self.cleaned_data
 
 
 class MonitoringDetectorForm(_PresetRuleForm):
     """Add/edit a detector on a Requisition (a preset, or a freeform class)."""
+
+    def _get_catalog(self):
+        return get_detector_catalog()
 
     class Meta:
         model = MonitoringDetector
@@ -145,6 +237,9 @@ class MonitoringDetectorForm(_PresetRuleForm):
 
 class MonitoringPolicyForm(_PresetRuleForm):
     """Add/edit a policy on a Requisition (a preset, or a freeform class)."""
+
+    def _get_catalog(self):
+        return get_policy_catalog()
 
     class Meta:
         model = MonitoringPolicy
@@ -172,15 +267,6 @@ class MonitoringOverrideForm(NetBoxModelForm):
         },
         help_text=_("Overrides the object's primary IP if set."),
     )
-    additional_ips = DynamicModelMultipleChoiceField(
-        queryset=IPAddress.objects.all(),
-        required=False,
-        label=_("Additional IPs"),
-        query_params={
-            "device_id": "$device",
-            "virtual_machine_id": "$virtual_machine",
-        },
-    )
     suppressed_services = forms.MultipleChoiceField(
         choices=ServiceChoices,
         required=False,
@@ -195,7 +281,7 @@ class MonitoringOverrideForm(NetBoxModelForm):
             "virtual_machine",
             "exclude",
             "management_ip",
-            "additional_ips",
+            "management_role",
             "suppressed_services",
             "location",
             "tags",
@@ -235,23 +321,6 @@ class MonitoringOverrideForm(NetBoxModelForm):
         )
         if duplicate:
             raise ValidationError(_("This object already has a Monitoring Override."))
-
-        # Additional IPs are extra interfaces of THIS object (AD-15); the
-        # management IP may legitimately be off-interface, so it is not checked.
-        additional = self.cleaned_data.get("additional_ips")
-        if additional:
-            owned = object_ip_pks(target)
-            foreign = [ip for ip in additional if ip.pk not in owned]
-            if foreign:
-                raise ValidationError(
-                    {
-                        "additional_ips": _(
-                            "These IPs are not assigned to the selected object: "
-                            "%(ips)s"
-                        )
-                        % {"ips": ", ".join(str(ip) for ip in foreign)}
-                    }
-                )
         return self.cleaned_data
 
 
@@ -270,3 +339,20 @@ class MonitoredServiceForm(NetBoxModelForm):
     class Meta:
         model = MonitoredService
         fields = ("override", "ip_address", "name", "tags")
+
+
+class MonitoredInterfaceForm(NetBoxModelForm):
+    """Add/edit an additional interface (with its SNMP role) on an override (RD-5)."""
+
+    override = DynamicModelChoiceField(
+        queryset=MonitoringOverride.objects.all(), label=_("Monitoring Override")
+    )
+    ip_address = DynamicModelChoiceField(
+        queryset=IPAddress.objects.all(),
+        label=_("Interface IP"),
+        help_text=_("An IP of the override's object (not its management IP)."),
+    )
+
+    class Meta:
+        model = MonitoredInterface
+        fields = ("override", "ip_address", "role", "tags")

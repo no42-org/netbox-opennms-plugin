@@ -94,3 +94,21 @@ class InterfaceScopeChoices(ChoiceSet):
         (PRIMARY, "Primary IP only"),
         (ALL, "All of the object's IPs"),
     ]
+
+
+class InterfaceRoleChoices(ChoiceSet):
+    """A node interface's SNMP role — OpenNMS ``snmp-primary`` P/S/N (RD-5).
+
+    Primary (`P`) is the SNMP-primary interface (at most one per node); Secondary
+    (`S`) is an eligible-secondary; Not-eligible (`N`) is never probed for SNMP.
+    """
+
+    PRIMARY = "P"
+    SECONDARY = "S"
+    NOT_ELIGIBLE = "N"
+
+    CHOICES = [
+        (PRIMARY, "Primary"),
+        (SECONDARY, "Secondary"),
+        (NOT_ELIGIBLE, "Not eligible"),
+    ]

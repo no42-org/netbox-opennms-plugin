@@ -6,14 +6,17 @@ OpenNMS REST provisioning API. NetBox is the source of truth; OpenNMS monitoring
 is a derived artifact kept in sync from NetBox intent.
 
 You author a **Requisition** — one user-named OpenNMS Foreign Source — that owns
-its OpenNMS **detectors** and **policies** (from a built-in preset registry, or
-freeform classes), a set of declared **services** (e.g. ICMP, SNMP), and a live
+its OpenNMS **detectors** and **policies** (discovered live from your OpenNMS
+instance, with a curated preset overlay for labels/defaults, or a freeform class),
+a set of declared **services** (e.g. ICMP, SNMP), and a live
 NetBox **filter** that selects its member Devices/VMs (by role, tag, site, status,
 custom field, …). Every member is monitored: its management IP is its **primary
 IP** unless overridden, OpenNMS auto-discovers services via the detectors, and the
 declared services are the guaranteed-present floor. A per-object **Monitoring
 Override** is the escape hatch (exclude an object, pin a different management IP,
-add extra interfaces, add/suppress a service, or change its location).
+add extra interfaces — each with an SNMP role of **Primary / Secondary /
+Not-eligible** (`snmp-primary` P/S/N; at most one Primary per node) — add/suppress
+a service, or change its location).
 
 Requisition filters must be **disjoint**: an object matched by more than one
 Requisition's filter is a **conflict** — Sync of every involved Requisition is
@@ -122,6 +125,14 @@ monitoring to actually happen:
   matching **poller package** exists for it. The plugin cannot create poller
   packages — ensure your `poller-configuration.xml` covers the services your
   detectors discover (and the requisition's declared services).
+- **Detector/policy discovery** — the detector and policy editors are populated
+  live from your instance (`GET /rest/foreignSourcesConfig/{detectors,policies}`,
+  the same API the OpenNMS UI uses), so the available classes and their parameters
+  reflect what that OpenNMS actually has (including plugin-provided detectors). The
+  built-in preset registry is only a curation overlay (friendly labels, sensible
+  defaults, a shortlist). If OpenNMS is unreachable while editing, the editor
+  degrades to the curated presets and notes it — you can still save (freeform class
+  entry always works). Discovered results are cached briefly and refreshed at Sync.
 - **Minions / monitoring locations** — a node assigned to a non-`Default`
   monitoring location is only polled if a **Minion** is registered at that
   location. The plugin best-effort warns when a chosen location is unknown to

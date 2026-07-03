@@ -12,11 +12,11 @@ matches what is rendered (AD-15).
 
 from dcim.models import Device
 from django.contrib.contenttypes.models import ContentType
-from django.db.models.signals import m2m_changed, post_delete, post_save
+from django.db.models.signals import post_delete, post_save
 from django.dispatch import receiver
 from virtualization.models import VirtualMachine
 
-from .models import MonitoringOverride, override_ip_pks
+from .models import MonitoredInterface, MonitoringOverride, override_ip_pks
 
 
 @receiver(post_delete, sender=Device)
@@ -40,8 +40,16 @@ def prune_services_on_override_save(sender, instance, **kwargs):
     _prune_orphaned_services(instance)
 
 
-@receiver(m2m_changed, sender=MonitoringOverride.additional_ips.through)
-def prune_services_on_additional_ips_change(sender, instance, action, **kwargs):
-    # Catches additional IPs being removed/cleared.
-    if action in ("post_remove", "post_clear"):
-        _prune_orphaned_services(instance)
+@receiver(post_save, sender=MonitoredInterface)
+def prune_services_on_interface_save(sender, instance, **kwargs):
+    # Editing an interface's ip_address orphans its services on the OLD IP (AD-15).
+    # An in-place edit is an UPDATE (post_save), not a delete, so prune here too.
+    _prune_orphaned_services(instance.override)
+
+
+@receiver(post_delete, sender=MonitoredInterface)
+def prune_services_on_interface_delete(sender, instance, **kwargs):
+    # An additional interface deleted → its services on that IP orphan (AD-15).
+    # Guard against the override already being gone (its services cascade with it).
+    if MonitoringOverride.objects.filter(pk=instance.override_id).exists():
+        _prune_orphaned_services(instance.override)

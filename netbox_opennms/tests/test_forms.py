@@ -11,11 +11,17 @@ from dcim.models import (
     Manufacturer,
     Site,
 )
+from django.core.exceptions import ValidationError
 from django.test import TestCase
 from extras.models import SavedFilter
 from ipam.models import IPAddress
 
 from netbox_opennms.forms import MonitoringOverrideForm, RequisitionForm
+from netbox_opennms.models import (
+    MonitoredInterface,
+    MonitoredService,
+    MonitoringOverride,
+)
 
 
 class MonitoringOverrideFormTest(TestCase):
@@ -39,29 +45,6 @@ class MonitoringOverrideFormTest(TestCase):
         cls.foreign_ip = IPAddress.objects.create(
             address="10.0.0.2/24", assigned_object=oface
         )
-
-    def test_additional_ip_must_belong_to_object(self):
-        form = MonitoringOverrideForm(
-            data={
-                "device": self.device.pk,
-                "exclude": False,
-                "additional_ips": [self.foreign_ip.pk],
-                "location": "",
-            }
-        )
-        self.assertFalse(form.is_valid())
-        self.assertIn("additional_ips", form.errors)
-
-    def test_own_additional_ip_is_accepted(self):
-        form = MonitoringOverrideForm(
-            data={
-                "device": self.device.pk,
-                "exclude": False,
-                "additional_ips": [self.own_ip.pk],
-                "location": "",
-            }
-        )
-        self.assertTrue(form.is_valid(), form.errors)
 
     def test_exactly_one_target_required(self):
         form = MonitoringOverrideForm(data={"exclude": False, "location": ""})
@@ -112,3 +95,89 @@ class RequisitionSavedFilterImportTest(TestCase):
         form = self._form(import_from_saved_filter=saved.pk)
         self.assertFalse(form.is_valid())
         self.assertIn("filter_params", form.errors)
+
+
+class MonitoredInterfaceValidationTest(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        site = Site.objects.create(name="Durham", slug="durham")
+        role = DeviceRole.objects.create(name="Switch", slug="switch")
+        mfr = Manufacturer.objects.create(name="Acme2", slug="acme2")
+        dt = DeviceType.objects.create(manufacturer=mfr, model="M2", slug="m2")
+        cls.device = Device.objects.create(
+            name="sw-1", device_type=dt, role=role, site=site
+        )
+        iface = Interface.objects.create(device=cls.device, name="eth0", type="virtual")
+        cls.mgmt = IPAddress.objects.create(
+            address="10.1.0.1/24", assigned_object=iface
+        )
+        cls.extra = IPAddress.objects.create(
+            address="10.1.0.2/24", assigned_object=iface
+        )
+        cls.device.primary_ip4 = cls.mgmt
+        cls.device.save()
+        other = Device.objects.create(
+            name="sw-2", device_type=dt, role=role, site=site
+        )
+        oface = Interface.objects.create(device=other, name="eth0", type="virtual")
+        cls.foreign = IPAddress.objects.create(
+            address="10.1.0.9/24", assigned_object=oface
+        )
+        cls.override = MonitoringOverride.objects.create(assigned_object=cls.device)
+
+    def test_foreign_ip_rejected(self):
+        interface = MonitoredInterface(
+            override=self.override, ip_address=self.foreign, role="N"
+        )
+        with self.assertRaises(ValidationError):
+            interface.clean()
+
+    def test_own_ip_accepted(self):
+        interface = MonitoredInterface(
+            override=self.override, ip_address=self.extra, role="N"
+        )
+        interface.clean()  # no raise
+
+    def test_second_primary_rejected(self):
+        # management_role defaults to Primary, so a second Primary is rejected.
+        interface = MonitoredInterface(
+            override=self.override, ip_address=self.extra, role="P"
+        )
+        with self.assertRaises(ValidationError):
+            interface.clean()
+
+
+class InterfaceServicePruneTest(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        site = Site.objects.create(name="Cary", slug="cary")
+        role = DeviceRole.objects.create(name="Sw", slug="sw")
+        mfr = Manufacturer.objects.create(name="Acme3", slug="acme3")
+        dt = DeviceType.objects.create(manufacturer=mfr, model="M3", slug="m3")
+        cls.device = Device.objects.create(
+            name="sw-p", device_type=dt, role=role, site=site
+        )
+        iface = Interface.objects.create(device=cls.device, name="eth0", type="virtual")
+        cls.ip_a = IPAddress.objects.create(
+            address="10.2.0.2/24", assigned_object=iface
+        )
+        cls.ip_b = IPAddress.objects.create(
+            address="10.2.0.3/24", assigned_object=iface
+        )
+        cls.override = MonitoringOverride.objects.create(assigned_object=cls.device)
+
+    def test_editing_interface_ip_prunes_stale_service(self):
+        interface = MonitoredInterface.objects.create(
+            override=self.override, ip_address=self.ip_a, role="N"
+        )
+        MonitoredService.objects.create(
+            override=self.override, ip_address=self.ip_a, name="HTTP"
+        )
+        # Move the interface to IP-B: the service on IP-A is now orphaned and pruned.
+        interface.ip_address = self.ip_b
+        interface.save()
+        self.assertFalse(
+            MonitoredService.objects.filter(
+                override=self.override, ip_address=self.ip_a
+            ).exists()
+        )

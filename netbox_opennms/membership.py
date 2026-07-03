@@ -34,7 +34,7 @@ from django.db.models import Q
 from virtualization.filtersets import VirtualMachineFilterSet
 from virtualization.models import VirtualMachine
 
-from .choices import InterfaceScopeChoices, ObjectTypeChoices
+from .choices import InterfaceRoleChoices, InterfaceScopeChoices, ObjectTypeChoices
 from .derivation import foreign_id_for
 from .models import MonitoringOverride, Requisition
 
@@ -45,10 +45,10 @@ _VM_RELATED = ("role", "site", "cluster", "primary_ip4", "primary_ip6")
 
 @dataclass
 class InterfaceSpec:
-    """One resolved OpenNMS interface: a bare IP, primary flag, its services."""
+    """One resolved OpenNMS interface: a bare IP, its SNMP role (P/S/N), services."""
 
     ip: str
-    primary: bool
+    role: str
     ip_pks: list = field(default_factory=list)
     services: list = field(default_factory=list)
 
@@ -255,7 +255,7 @@ def _overrides_by_object(objects):
     for ct_id, pks in by_ct.items():
         overrides = MonitoringOverride.objects.filter(
             assigned_object_type_id=ct_id, assigned_object_id__in=pks
-        ).prefetch_related("additional_ips", "services", "management_ip")
+        ).prefetch_related("interfaces__ip_address", "services", "management_ip")
         for override in overrides:
             result[(ct_id, override.assigned_object_id)] = override
     return result
@@ -285,22 +285,32 @@ def resolve_node(obj, requisition, override):
             f"{label}: no management IP (set a primary IP or an override); skipped."
         )
 
+    mgmt_role = InterfaceRoleChoices.PRIMARY
+    if override is not None and override.management_role:
+        mgmt_role = override.management_role
     primary_bare = _bare_ip(management)
     interfaces = {
-        primary_bare: InterfaceSpec(primary_bare, True, [management.pk]),
+        primary_bare: InterfaceSpec(primary_bare, mgmt_role, [management.pk]),
     }
 
-    extra = []
-    if requisition.default_interfaces == InterfaceScopeChoices.ALL:
-        extra.extend(_object_ips(obj))
+    # Extra interfaces as (ip, role). Override-defined interfaces take precedence
+    # over all-scope IPs for the same address: they are listed first and the sort
+    # is stable, so their role wins when both surface the same IP (AD-15/RD-5).
+    extra_pairs = []
     if override is not None:
-        extra.extend(override.additional_ips.all())
-    for ip in sorted(extra, key=_bare_ip):
+        for interface in override.interfaces.all():
+            extra_pairs.append((interface.ip_address, interface.role))
+    if requisition.default_interfaces == InterfaceScopeChoices.ALL:
+        for ip in _object_ips(obj):
+            extra_pairs.append((ip, InterfaceRoleChoices.NOT_ELIGIBLE))
+    for ip, role in sorted(extra_pairs, key=lambda pair: _bare_ip(pair[0])):
         bare = _bare_ip(ip)
-        if bare in interfaces:
-            interfaces[bare].ip_pks.append(ip.pk)
+        spec = interfaces.get(bare)
+        if spec is not None:
+            if ip.pk not in spec.ip_pks:
+                spec.ip_pks.append(ip.pk)
         else:
-            interfaces[bare] = InterfaceSpec(bare, False, [ip.pk])
+            interfaces[bare] = InterfaceSpec(bare, role, [ip.pk])
 
     declared = list(requisition.services or [])
     added_by_ip = defaultdict(list)

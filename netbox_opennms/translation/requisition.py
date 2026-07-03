@@ -15,6 +15,8 @@ services the membership layer places on each interface.
 
 from lxml import etree
 
+from ..choices import InterfaceRoleChoices
+
 MODEL_IMPORT_NS = "http://xmlns.opennms.org/xsd/config/model-import"
 FOREIGN_SOURCE_NS = "http://xmlns.opennms.org/xsd/config/foreign-source"
 
@@ -71,11 +73,14 @@ def render_requisition(foreign_source, nodes, date_stamp=None, default_location=
             el.set("location", location)
 
         # Primary interface first, then the rest by bare IP for determinism.
-        ordered = sorted(node.interfaces, key=lambda i: (not i.primary, i.ip))
+        ordered = sorted(
+            node.interfaces,
+            key=lambda i: (i.role != InterfaceRoleChoices.PRIMARY, i.ip),
+        )
         for interface in ordered:
             iface_el = etree.SubElement(el, f"{{{MODEL_IMPORT_NS}}}interface")
             iface_el.set("ip-addr", interface.ip)
-            iface_el.set("snmp-primary", "P" if interface.primary else "N")
+            iface_el.set("snmp-primary", interface.role)
             for name in sorted(interface.services):
                 service = etree.SubElement(
                     iface_el, f"{{{MODEL_IMPORT_NS}}}monitored-service"

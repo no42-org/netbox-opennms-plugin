@@ -1,6 +1,6 @@
 # netbox-opennms developer / CI entrypoints. CI invokes these targets, never the
 # underlying tooling directly, so local and CI runs stay in sync.
-.PHONY: help test makemigrations regen-counts lint verify build integration clean
+.PHONY: help test makemigrations regen-counts lint verify build integration integration-spike clean
 
 COMPOSE := docker compose -f compose.yml
 # Integration overlay adds a disposable OpenNMS Horizon 36 (slow boot).
@@ -45,6 +45,11 @@ build: ## Build the wheel + sdist into dist/ (pinned Python image)
 integration: ## Live OpenNMS Horizon 36 round-trip (slow; boots OpenNMS)
 	$(INTEGRATION) run --rm netbox \
 		'$(PY) manage.py test netbox_opennms.tests.test_integration -v2'; \
+		rc=$$?; $(INTEGRATION) down -v; exit $$rc
+
+integration-spike: ## Refocus spike (ADR-001): capture live H36 discovery/asset/metadata payloads
+	$(INTEGRATION) run --rm netbox \
+		'$(PY) manage.py test netbox_opennms.tests.test_integration_refocus -v2'; \
 		rc=$$?; $(INTEGRATION) down -v; exit $$rc
 
 clean: ## Tear down the stack and volumes

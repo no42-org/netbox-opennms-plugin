@@ -72,6 +72,9 @@ class NodeSpec:
     node_metadata: list = field(default_factory=list)  # (context, key, value)
     interface_metadata: list = field(default_factory=list)  # applied to each interface
     service_metadata: list = field(default_factory=list)  # applied to each service
+    # A non-blocking advisory (RD-6/h): set for an interface-less node (no management
+    # IP) — the node provisions but is not actively monitored. Empty = healthy.
+    warning: str = ""
 
 
 @dataclass
@@ -272,13 +275,40 @@ def _overrides_by_object(objects):
     return result
 
 
-def resolve_node(obj, requisition, override):
-    """Resolve one claimed object to a ``NodeSpec``, or ``(None, warning)``.
+def _resolve_enrichment(obj, requisition):
+    """(assets, node_md, iface_md, svc_md) for a member — see resolve_node (RD-2/3)."""
+    assets = []
+    for mapping in requisition.asset_mappings.all():
+        value = resolve_source(obj, mapping.netbox_source)
+        if value is not None:
+            assets.append((mapping.asset_field, value))
+    node_md, iface_md, svc_md = [], [], []
+    for entry in requisition.metadata_entries.all():
+        value = (
+            resolve_source(obj, entry.value_source)
+            if entry.value_source
+            else (entry.literal_value or None)
+        )
+        if value is None:
+            continue
+        triad = (entry.context, entry.key, value)
+        if entry.scope == MetadataScopeChoices.NODE:
+            node_md.append(triad)
+        elif entry.scope == MetadataScopeChoices.INTERFACE:
+            iface_md.append(triad)
+        else:
+            svc_md.append(triad)
+    return assets, node_md, iface_md, svc_md
 
-    Excluded objects are dropped (monitored nowhere — no fall-through, M2). Objects
-    without a resolvable management IP/name are skipped with a warning. Effective
-    services per interface = ``(requisition.services ∪ per-IP added) − suppressed``
-    (R5).
+
+def resolve_node(obj, requisition, override):
+    """Resolve one claimed object to a ``NodeSpec``, or ``(None, None)`` if excluded.
+
+    Excluded objects are dropped (monitored nowhere — no fall-through, M2). A member
+    with no resolvable management IP is provisioned as an **interface-less node with
+    a Warning** (RD-6/h) — it lands as inventory-only (not actively monitored),
+    surfaced but not blocking. Effective services per interface =
+    ``(requisition.services ∪ per-IP added) − suppressed`` (R5).
     """
     label = obj.name
     if not label:
@@ -286,15 +316,32 @@ def resolve_node(obj, requisition, override):
     if override is not None and override.exclude:
         return None, None
 
+    override_location = override.location if override is not None else ""
+    location = override_location or requisition.location
+    assets, node_md, iface_md, svc_md = _resolve_enrichment(obj, requisition)
+
     management = None
     if override is not None and override.management_ip_id:
         management = override.management_ip
     if management is None:
         management = obj.primary_ip
     if management is None:
-        return None, (
-            f"{label}: no management IP (set a primary IP or an override); skipped."
+        # RD-6/h: render an inventory-only node (no <interface>) with a Warning
+        # rather than silently skipping — the operator sees it won't be monitored.
+        warning = (
+            f"{label}: no management IP — will be provisioned with no IP interface "
+            "(not actively monitored)."
         )
+        node = NodeSpec(
+            label,
+            foreign_id_for(obj),
+            location,
+            [],
+            assets=assets,
+            node_metadata=node_md,
+            warning=warning,
+        )
+        return node, warning
 
     mgmt_role = InterfaceRoleChoices.PRIMARY
     if override is not None and override.management_role:
@@ -335,33 +382,6 @@ def resolve_node(obj, requisition, override):
         for ip_pk in spec.ip_pks:
             names.update(added_by_ip.get(ip_pk, []))
         spec.services = sorted(names - suppressed)
-
-    override_location = override.location if override is not None else ""
-    location = override_location or requisition.location
-
-    # Enrichment (RD-2/RD-3): resolve the Requisition's asset mappings + metadata for
-    # this member; unresolved sources are omitted (enrichment.resolve_source → None).
-    assets = []
-    for mapping in requisition.asset_mappings.all():
-        value = resolve_source(obj, mapping.netbox_source)
-        if value is not None:
-            assets.append((mapping.asset_field, value))
-    node_md, iface_md, svc_md = [], [], []
-    for entry in requisition.metadata_entries.all():
-        value = (
-            resolve_source(obj, entry.value_source)
-            if entry.value_source
-            else (entry.literal_value or None)
-        )
-        if value is None:
-            continue
-        triad = (entry.context, entry.key, value)
-        if entry.scope == MetadataScopeChoices.NODE:
-            node_md.append(triad)
-        elif entry.scope == MetadataScopeChoices.INTERFACE:
-            iface_md.append(triad)
-        else:
-            svc_md.append(triad)
 
     node = NodeSpec(
         label,

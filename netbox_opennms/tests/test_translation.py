@@ -126,9 +126,13 @@ class RenderRequisitionTest(SimpleTestCase):
         with self.assertRaises(RenderError):
             render_requisition("fs", [self._node(node_label="")])
 
-    def test_render_error_no_interface(self):
-        with self.assertRaises(RenderError):
+    def test_interfaceless_node_renders(self):
+        # RD-6/h: a node with no interface renders (inventory-only), not an error.
+        n = etree.fromstring(
             render_requisition("fs", [self._node(interfaces=[])])
+        ).find(f"{MI}node")
+        self.assertIsNotNone(n)
+        self.assertIsNone(n.find(f"{MI}interface"))
 
 
 class RenderForeignSourceDefinitionTest(TestCase):

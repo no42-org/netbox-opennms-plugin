@@ -25,6 +25,13 @@ node always lives in exactly one Foreign Source and nothing ever moves or
 disappears implicitly. A **dry-run** shows, per node, exactly what a Sync would
 add / remove / change against the live OpenNMS state before you commit.
 
+Per-node status is **graded**: a **Critical** (red) — a filter conflict — **blocks
+Sync**; a **Warning** (yellow) is advisory and does **not**. A member with **no
+management IP** is a Warning: rather than silently skipping it, the plugin
+provisions an **inventory-only node with no IP interface** (it will not be actively
+monitored) and surfaces the warning in the Sync preview, the dry-run, and the
+Device/VM page — exclude the object if you don't want it in OpenNMS at all.
+
 **Sync** renders the complete OpenNMS *foreign-source definition* + *requisition*
 and imports it. Membership is a live NetBox query, so adding/removing a Device or
 changing an attribute the filter matches simply re-resolves the Requisition;

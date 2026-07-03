@@ -68,11 +68,8 @@ def render_requisition(foreign_source, nodes, date_stamp=None, default_location=
     for node in nodes:
         if not node.node_label:
             raise RenderError(f"node {node.foreign_id!r} has no node-label.")
-        if not node.interfaces:
-            raise RenderError(
-                f"node {node.node_label!r} has no interface (a management IP is "
-                "required)."
-            )
+        # A node with no interface is a valid inventory-only import (RD-6/h) — the
+        # membership layer marks it with a Warning; it is not a render error.
         el = etree.SubElement(root, f"{{{MODEL_IMPORT_NS}}}node")
         el.set("node-label", node.node_label)
         el.set("foreign-id", node.foreign_id)

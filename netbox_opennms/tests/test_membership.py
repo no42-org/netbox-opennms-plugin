@@ -348,10 +348,12 @@ class MembershipTest(TestCase):
         self.assertEqual(by_ip["10.0.0.1"], ["ICMP"])
         self.assertEqual(by_ip["10.0.0.9"], ["HTTP", "ICMP"])
 
-    def test_resolve_node_no_primary_ip_is_skipped_warning(self):
+    def test_resolve_node_no_primary_ip_is_interface_less_warning(self):
+        # RD-6/h: no management IP → an interface-less node with a Warning, not a skip.
         device, _ = self._device("rtr-x", primary=False)
         node, warning = resolve_node(device, self._requisition(), None)
-        self.assertIsNone(node)
+        self.assertIsNotNone(node)
+        self.assertEqual(node.interfaces, [])
         self.assertIn("no management IP", warning)
 
     def test_resolve_node_exclude_is_monitored_nowhere(self):
@@ -421,11 +423,12 @@ class MembershipTest(TestCase):
         self._requisition()
         d1, _ = self._device("rtr-1")
         d2, _ = self._device("rtr-2", ip="10.0.0.2/24")
-        self._device("rtr-no-ip", ip="10.0.0.9/24", primary=False)  # warns, skipped
+        # RD-6/h: a no-management-IP member is now an interface-less node (still warns).
+        d3, _ = self._device("rtr-no-ip", ip="10.0.0.9/24", primary=False)
         resolution = resolve(FS)
         self.assertEqual(
             [n.foreign_id for n in resolution.nodes],
-            sorted([f"device-{d1.pk}", f"device-{d2.pk}"]),
+            sorted([f"device-{d1.pk}", f"device-{d2.pk}", f"device-{d3.pk}"]),
         )
         self.assertEqual(len(resolution.warnings), 1)
 

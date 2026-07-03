@@ -47,6 +47,19 @@ class ValidateResolutionTest(SimpleTestCase):
         resolution = Resolution("fs", _Requisition(location="core"), nodes=[node])
         self.assertTrue(validate_resolution(resolution).ok)
 
+    def test_warning_and_conflict_blocks_on_conflict_only(self):
+        # RD-6/h: a Warning (interface-less) never blocks; only the Critical does.
+        resolution = Resolution(
+            "fs",
+            _Requisition(),
+            nodes=[],
+            warnings=["bare: no management IP"],
+            conflicts=[Conflict("rtr-1", "device-1", ["a", "b"])],
+        )
+        result = validate_resolution(resolution)
+        self.assertFalse(result.ok)  # blocked by the conflict
+        self.assertIn("bare: no management IP", result.warnings)  # warning forwarded
+
     def test_conflict_is_a_blocking_error(self):
         # C1: conflicts are errors (freeze), never warnings.
         resolution = Resolution(

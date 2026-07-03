@@ -34,6 +34,18 @@
         {% endif %}
       </td>
     </tr>
+    {% if sync_status.warning_no_management_ip %}
+      <tr>
+        <th scope="row">Warning</th>
+        <td>
+          <span class="text-warning">
+            <i class="mdi mdi-alert"></i>
+            No management IP — will be provisioned as a node with no IP interface
+            (not actively monitored).
+          </span>
+        </td>
+      </tr>
+    {% endif %}
     {% if sync_status.job %}
       <tr>
         <th scope="row">Last sync</th>

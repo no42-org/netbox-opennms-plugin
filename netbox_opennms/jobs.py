@@ -310,6 +310,14 @@ def sync_status_for(target):
     if matches and (len(matches) == 1 or excluded):
         requisition = matches[0]
     governed = requisition is not None and not excluded and not conflicted
+    # RD-6/h: a governed object with no management IP provisions as an interface-less
+    # (inventory-only) node — surface it as a Warning on the panel (not blocking).
+    management = None
+    if override is not None and override.management_ip_id:
+        management = override.management_ip
+    if management is None:
+        management = getattr(target, "primary_ip", None)
+    warning_no_management_ip = governed and management is None
     foreign_source = requisition.name if requisition is not None else None
     # Look up the last sync across EVERY matching Foreign Source (reviews #3/#9):
     # a conflicted/excluded multi-match object's node and Job history live under
@@ -325,6 +333,7 @@ def sync_status_for(target):
         "requisition": requisition,
         "governed": governed,
         "excluded": excluded,
+        "warning_no_management_ip": warning_no_management_ip,
         "conflicts": sorted(r.name for r in matches) if conflicted else [],
         "job": job,
         "outcome": sync_outcome(

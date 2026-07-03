@@ -27,6 +27,7 @@ from netbox_opennms.membership import monitored_foreign_sources, resolve
 from netbox_opennms.models import (
     DeployedForeignSource,
     MonitoringDetector,
+    MonitoringOverride,
     Requisition,
 )
 from netbox_opennms.translation import (
@@ -186,10 +187,10 @@ class SyncForeignSourceJobTest(TestCase):
     @mock.patch("netbox_opennms.jobs.advisory_lock")
     @mock.patch("netbox_opennms.jobs.OpenNMSClient.from_config")
     def test_no_monitorable_members_skips_import(self, mock_from_config, _lock):
-        # Governed, but the only member has no management IP → nothing resolves,
-        # and a Sync must not push an empty (mass-delete) requisition.
-        Device.objects.filter(pk=self.device.pk).delete()
-        self._make_device("rtr-x", "10.0.0.9/24", primary=False)
+        # Genuinely empty (the sole member is EXCLUDED → monitored nowhere): a Sync
+        # must not push an empty (mass-delete) requisition. A no-management-IP member
+        # is NOT empty — it provisions as an interface-less node (RD-6/h).
+        MonitoringOverride.objects.create(assigned_object=self.device, exclude=True)
         self._runner().run(foreign_source=FS)
         mock_from_config.assert_not_called()
 

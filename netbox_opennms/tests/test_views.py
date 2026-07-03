@@ -14,6 +14,8 @@ from ipam.models import IPAddress
 from utilities.testing import ViewTestCases
 
 from netbox_opennms.models import (
+    AssetMapping,
+    MetadataEntry,
     MonitoredInterface,
     MonitoredService,
     MonitoringDetector,
@@ -222,4 +224,72 @@ class MonitoredInterfaceViewTest(
             "override": override.pk,
             "ip_address": ips[4].pk,
             "role": "N",
+        }
+
+
+class AssetMappingViewTest(
+    ViewTestCases.GetObjectViewTestCase,
+    ViewTestCases.GetObjectChangelogViewTestCase,
+    ViewTestCases.CreateObjectViewTestCase,
+    ViewTestCases.EditObjectViewTestCase,
+    ViewTestCases.DeleteObjectViewTestCase,
+    ViewTestCases.ListObjectsViewTestCase,
+    ViewTestCases.BulkDeleteObjectsViewTestCase,
+):
+    model = AssetMapping
+
+    def _get_base_url(self):
+        return "plugins:netbox_opennms:assetmapping_{}"
+
+    @classmethod
+    def setUpTestData(cls):
+        req = Requisition.objects.create(
+            name="am-req", filter_params={"role": ["switch"]}
+        )
+        for source, field in [
+            ("serial", "serialNumber"),
+            ("name", "displayCategory"),
+            ("description", "description"),
+        ]:
+            AssetMapping.objects.create(
+                requisition=req, netbox_source=source, asset_field=field
+            )
+        cls.form_data = {
+            "requisition": req.pk,
+            "netbox_source": "asset_tag",
+            "asset_field": "assetNumber",
+        }
+
+
+class MetadataEntryViewTest(
+    ViewTestCases.GetObjectViewTestCase,
+    ViewTestCases.GetObjectChangelogViewTestCase,
+    ViewTestCases.CreateObjectViewTestCase,
+    ViewTestCases.EditObjectViewTestCase,
+    ViewTestCases.DeleteObjectViewTestCase,
+    ViewTestCases.ListObjectsViewTestCase,
+    ViewTestCases.BulkDeleteObjectsViewTestCase,
+):
+    model = MetadataEntry
+
+    def _get_base_url(self):
+        return "plugins:netbox_opennms:metadataentry_{}"
+
+    @classmethod
+    def setUpTestData(cls):
+        req = Requisition.objects.create(
+            name="me-req", filter_params={"role": ["switch"]}
+        )
+        for scope, key in [("node", "k1"), ("node", "k2"), ("interface", "k3")]:
+            MetadataEntry.objects.create(
+                requisition=req, scope=scope, context="requisition",
+                key=key, literal_value="v",
+            )
+        cls.form_data = {
+            "requisition": req.pk,
+            "scope": "node",
+            "context": "requisition",
+            "key": "k4",
+            "value_source": "",
+            "literal_value": "v4",
         }

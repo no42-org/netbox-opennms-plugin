@@ -31,6 +31,26 @@ CACHE_TTL = 300  # seconds — short; refreshed on demand and at Sync
 DEGRADED_CACHE_TTL = 30
 _DETECTOR_CACHE_KEY = "netbox_opennms:catalog:detectors"
 _POLICY_CACHE_KEY = "netbox_opennms:catalog:policies"
+_ASSET_CACHE_KEY = "netbox_opennms:catalog:assets"
+
+# The OpenNMS node asset-field set (RD-2) — the offline fallback for
+# get_asset_fields() and the validation floor. This is the live Horizon 36
+# `GET /foreignSourcesConfig/assets` list captured by `make integration-spike`
+# (65 fields; H36 adds latitude/longitude/lastModifiedDate over older lines).
+ASSET_FIELDS = frozenset({
+    "additionalhardware", "address1", "address2", "admin", "assetNumber",
+    "autoenable", "building", "category", "circuitId", "city", "comment",
+    "connection", "country", "cpu", "dateInstalled", "department", "description",
+    "displayCategory", "division", "enable", "floor", "hdd1", "hdd2", "hdd3",
+    "hdd4", "hdd5", "hdd6", "inputpower", "lastModifiedBy", "lastModifiedDate",
+    "latitude", "lease", "leaseExpires", "longitude", "maintContractExpiration",
+    "maintContractNumber", "maintcontract", "managedObjectInstance",
+    "managedObjectType", "manufacturer", "modelNumber", "notifyCategory",
+    "numpowersupplies", "operatingSystem", "password", "pollerCategory", "port",
+    "rack", "rackunitheight", "ram", "region", "room", "serialNumber", "slot",
+    "snmpcommunity", "state", "storagectrl", "supportPhone", "thresholdCategory",
+    "username", "vendor", "vendorAssetNumber", "vendorFax", "vendorPhone", "zip",
+})
 
 
 @dataclass
@@ -91,9 +111,35 @@ def get_policy_catalog(client=None, force_refresh=False):
     )
 
 
+def get_asset_fields(client=None, force_refresh=False):
+    """Valid OpenNMS asset field names — discovered, with ``ASSET_FIELDS`` fallback."""
+    if not force_refresh:
+        cached = cache.get(_ASSET_CACHE_KEY)
+        if cached is not None:
+            return cached
+    created = None
+    try:
+        if client is None:
+            client = created = OpenNMSClient.from_config()
+    except OpenNMSError:
+        return ASSET_FIELDS
+    try:
+        fields = client.list_assets() or ASSET_FIELDS
+        cache.set(_ASSET_CACHE_KEY, fields, CACHE_TTL)
+        return fields
+    except OpenNMSError:
+        return ASSET_FIELDS
+    finally:
+        if created is not None:
+            try:
+                created.close()
+            except Exception:  # noqa: BLE001 — close is best-effort
+                pass
+
+
 def refresh_catalogs():
     """Drop the cached catalogs so the next read re-discovers (on demand / at Sync)."""
-    cache.delete_many([_DETECTOR_CACHE_KEY, _POLICY_CACHE_KEY])
+    cache.delete_many([_DETECTOR_CACHE_KEY, _POLICY_CACHE_KEY, _ASSET_CACHE_KEY])
 
 
 def _get_catalog(cache_key, presets, method_name, client, force_refresh):

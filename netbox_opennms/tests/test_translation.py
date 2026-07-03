@@ -93,6 +93,35 @@ class RenderRequisitionTest(SimpleTestCase):
         ]
         self.assertEqual(names, ["ICMP", "SSH"])
 
+    def test_assets_and_scoped_metadata_render(self):
+        node = self._node(
+            interfaces=[InterfaceSpec("10.0.0.1", "P", services=["ICMP"])],
+            assets=[("serialNumber", "SN-1")],
+            node_metadata=[("requisition", "owner", "neteng")],
+            interface_metadata=[("X-netbox", "vlan", "10")],
+            service_metadata=[("requisition", "sla", "gold")],
+        )
+        n = etree.fromstring(render_requisition("fs", [node])).find(f"{MI}node")
+        asset = n.find(f"{MI}asset")
+        self.assertEqual(asset.get("name"), "serialNumber")
+        self.assertEqual(asset.get("value"), "SN-1")
+        node_md = n.findall(f"{MI}meta-data")[0]
+        self.assertEqual(
+            (node_md.get("context"), node_md.get("key"), node_md.get("value")),
+            ("requisition", "owner", "neteng"),
+        )
+        iface = n.find(f"{MI}interface")
+        imd = iface.find(f"{MI}meta-data")
+        self.assertEqual((imd.get("context"), imd.get("key")), ("X-netbox", "vlan"))
+        svc = iface.find(f"{MI}monitored-service")
+        smd = svc.find(f"{MI}meta-data")
+        self.assertEqual((smd.get("context"), smd.get("key")), ("requisition", "sla"))
+
+    def test_no_enrichment_renders_no_asset_or_metadata(self):
+        n = etree.fromstring(render_requisition("fs", [self._node()])).find(f"{MI}node")
+        self.assertIsNone(n.find(f"{MI}asset"))
+        self.assertIsNone(n.find(f"{MI}meta-data"))
+
     def test_render_error_no_label(self):
         with self.assertRaises(RenderError):
             render_requisition("fs", [self._node(node_label="")])

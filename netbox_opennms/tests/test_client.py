@@ -331,6 +331,21 @@ class OpenNMSClientTest(SimpleTestCase):
         with self.assertRaises(OpenNMSError):
             _client().list_detectors()
 
+    @mock.patch.object(requests.Session, "request")
+    def test_list_assets_parses_elementlist(self, mock_request):
+        mock_request.return_value = mock.Mock(
+            status_code=200,
+            ok=True,
+            json=mock.Mock(
+                return_value={"count": 2, "element": ["serialNumber", "assetNumber"]}
+            ),
+        )
+        self.assertEqual(
+            _client().list_assets(), {"serialNumber", "assetNumber"}
+        )
+        _, url = mock_request.call_args.args
+        self.assertTrue(url.endswith("/rest/foreignSourcesConfig/assets"))
+
     def test_from_config_requires_url(self):
         with mock.patch(
             "netbox_opennms.client.client.get_plugin_config", return_value=""

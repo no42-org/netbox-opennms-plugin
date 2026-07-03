@@ -23,6 +23,8 @@ from .catalog import get_detector_catalog, get_policy_catalog
 from .choices import ObjectTypeChoices, ServiceChoices
 from .membership import filter_errors
 from .models import (
+    AssetMapping,
+    MetadataEntry,
     MonitoredInterface,
     MonitoredService,
     MonitoringDetector,
@@ -356,3 +358,49 @@ class MonitoredInterfaceForm(NetBoxModelForm):
     class Meta:
         model = MonitoredInterface
         fields = ("override", "ip_address", "role", "tags")
+
+
+class AssetMappingForm(NetBoxModelForm):
+    """Map a NetBox attribute to an OpenNMS asset field on a Requisition (RD-2)."""
+
+    requisition = DynamicModelChoiceField(
+        queryset=Requisition.objects.all(), label=_("Requisition")
+    )
+
+    class Meta:
+        model = AssetMapping
+        fields = ("requisition", "netbox_source", "asset_field", "tags")
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        from .catalog import get_asset_fields
+
+        fields = sorted(get_asset_fields())
+        current = getattr(self.instance, "asset_field", "") or ""
+        if current and current not in fields:
+            fields.append(current)
+        self.fields["asset_field"] = forms.ChoiceField(
+            choices=[(f, f) for f in fields],
+            label=_("OpenNMS asset field"),
+            help_text=_("Discovered from OpenNMS (falls back to the known field set)."),
+        )
+
+
+class MetadataEntryForm(NetBoxModelForm):
+    """Define a metadata triad at a scope on a Requisition (RD-3)."""
+
+    requisition = DynamicModelChoiceField(
+        queryset=Requisition.objects.all(), label=_("Requisition")
+    )
+
+    class Meta:
+        model = MetadataEntry
+        fields = (
+            "requisition",
+            "scope",
+            "context",
+            "key",
+            "value_source",
+            "literal_value",
+            "tags",
+        )

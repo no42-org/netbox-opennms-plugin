@@ -27,6 +27,8 @@ from .membership import (
     resolve_all,
 )
 from .models import (
+    AssetMapping,
+    MetadataEntry,
     MonitoredInterface,
     MonitoredService,
     MonitoringDetector,
@@ -372,6 +374,60 @@ class MonitoredInterfaceDeleteView(generic.ObjectDeleteView):
 class MonitoredInterfaceBulkDeleteView(generic.BulkDeleteView):
     queryset = MonitoredInterface.objects.all()
     table = tables.MonitoredInterfaceTable
+
+
+# --- Asset Mapping ----------------------------------------------------------
+
+
+class AssetMappingView(generic.ObjectView):
+    queryset = AssetMapping.objects.all()
+
+
+class AssetMappingListView(generic.ObjectListView):
+    queryset = AssetMapping.objects.select_related("requisition")
+    table = tables.AssetMappingTable
+    filterset = filtersets.AssetMappingFilterSet
+
+
+class AssetMappingEditView(generic.ObjectEditView):
+    queryset = AssetMapping.objects.all()
+    form = forms.AssetMappingForm
+
+
+class AssetMappingDeleteView(generic.ObjectDeleteView):
+    queryset = AssetMapping.objects.all()
+
+
+class AssetMappingBulkDeleteView(generic.BulkDeleteView):
+    queryset = AssetMapping.objects.all()
+    table = tables.AssetMappingTable
+
+
+# --- Metadata Entry ---------------------------------------------------------
+
+
+class MetadataEntryView(generic.ObjectView):
+    queryset = MetadataEntry.objects.all()
+
+
+class MetadataEntryListView(generic.ObjectListView):
+    queryset = MetadataEntry.objects.select_related("requisition")
+    table = tables.MetadataEntryTable
+    filterset = filtersets.MetadataEntryFilterSet
+
+
+class MetadataEntryEditView(generic.ObjectEditView):
+    queryset = MetadataEntry.objects.all()
+    form = forms.MetadataEntryForm
+
+
+class MetadataEntryDeleteView(generic.ObjectDeleteView):
+    queryset = MetadataEntry.objects.all()
+
+
+class MetadataEntryBulkDeleteView(generic.BulkDeleteView):
+    queryset = MetadataEntry.objects.all()
+    table = tables.MetadataEntryTable
 
 
 # --- Sync actions -----------------------------------------------------------

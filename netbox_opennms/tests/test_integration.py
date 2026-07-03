@@ -44,6 +44,8 @@ from netbox_opennms.client import OpenNMSClient, OpenNMSHTTPError
 from netbox_opennms.derivation import foreign_id_for
 from netbox_opennms.membership import resolve
 from netbox_opennms.models import (
+    AssetMapping,
+    MetadataEntry,
     MonitoringDetector,
     MonitoringPolicy,
     Requisition,
@@ -243,6 +245,41 @@ class OpenNMSRoundTripTest(TestCase):
             # robust to the foreign-source JSON shape).
             for cls in sorted(expected):
                 self.assertIn(cls, got.text, f"{cls} missing from readback")
+        finally:
+            self._delete_foreign_source()
+
+    def test_asset_and_metadata_round_trip(self):
+        # Durable promotion of the refocus spike (RD-2/RD-3): a mapped <asset> lands
+        # on the node's assetRecord and a node-scope <meta-data> survives into the
+        # deployed requisition. Confirmed against live Horizon 36 by the spike.
+        requisition = self._requisition_with_icmp()
+        AssetMapping.objects.create(
+            requisition=requisition, netbox_source="serial", asset_field="serialNumber"
+        )
+        MetadataEntry.objects.create(
+            requisition=requisition, scope="node", context="requisition",
+            key="netbox-owner", literal_value="neteng",
+        )
+        device = self._device_node()
+        device.serial = "SN-CI-INT"
+        device.save()
+        nodes = resolve(FS).nodes
+        try:
+            with self._client() as client:
+                client.post_foreign_source(
+                    render_foreign_source_definition(FS, requisition)
+                )
+                client.post_requisition(render_requisition(FS, nodes))
+                client.import_requisition(FS, rescan_existing="true")
+            node = self._poll_for_node(foreign_id_for(device))
+            self.assertIsNotNone(node, "node was not provisioned")
+            asset = self._get(f"/rest/nodes/{node['id']}/assetRecord")
+            self.assertEqual(asset.status_code, 200)
+            self.assertEqual(asset.json().get("serialNumber"), "SN-CI-INT")
+            deployed = self._get(
+                f"/rest/requisitions/deployed/{quote(FS, safe='')}"
+            )
+            self.assertIn("netbox-owner", deployed.text)
         finally:
             self._delete_foreign_source()
 

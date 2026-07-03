@@ -10,7 +10,12 @@ from django.test import SimpleTestCase, TestCase
 
 from netbox_opennms import catalog
 from netbox_opennms import forms as onms_forms
-from netbox_opennms.catalog import Catalog, CatalogEntry, CatalogParam
+from netbox_opennms.catalog import (
+    ASSET_FIELDS,
+    Catalog,
+    CatalogEntry,
+    CatalogParam,
+)
 from netbox_opennms.client import DiscoveredParam, DiscoveredPlugin, OpenNMSError
 from netbox_opennms.models import MonitoringDetector, MonitoringPolicy, Requisition
 from netbox_opennms.presets import DETECTOR_PRESETS, POLICY_PRESETS
@@ -119,6 +124,24 @@ class CatalogMergeTest(SimpleTestCase):
         catalog.refresh_catalogs()
         catalog.get_detector_catalog(client=client)
         self.assertEqual(client.calls, 2)
+
+
+class AssetFieldsTest(SimpleTestCase):
+    def setUp(self):
+        cache.clear()
+        self.addCleanup(cache.clear)
+
+    def test_discovered_asset_fields(self):
+        client = mock.Mock()
+        client.list_assets.return_value = {"serialNumber", "customField"}
+        self.assertEqual(
+            catalog.get_asset_fields(client=client), {"serialNumber", "customField"}
+        )
+
+    def test_degrades_to_constant_when_offline(self):
+        client = mock.Mock()
+        client.list_assets.side_effect = OpenNMSError("offline")
+        self.assertEqual(catalog.get_asset_fields(client=client), ASSET_FIELDS)
 
 
 class PresetSeedTest(TestCase):

@@ -34,8 +34,14 @@ from django.db.models import Q
 from virtualization.filtersets import VirtualMachineFilterSet
 from virtualization.models import VirtualMachine
 
-from .choices import InterfaceRoleChoices, InterfaceScopeChoices, ObjectTypeChoices
+from .choices import (
+    InterfaceRoleChoices,
+    InterfaceScopeChoices,
+    MetadataScopeChoices,
+    ObjectTypeChoices,
+)
 from .derivation import foreign_id_for
+from .enrichment import resolve_source
 from .models import MonitoringOverride, Requisition
 
 # select_related sets keeping resolve() query-lean for the primary-IP/site lookups.
@@ -61,6 +67,11 @@ class NodeSpec:
     foreign_id: str
     location: str
     interfaces: list = field(default_factory=list)
+    # Enrichment (RD-2/RD-3), resolved per member; the renderer emits them additively.
+    assets: list = field(default_factory=list)  # (name, value)
+    node_metadata: list = field(default_factory=list)  # (context, key, value)
+    interface_metadata: list = field(default_factory=list)  # applied to each interface
+    service_metadata: list = field(default_factory=list)  # applied to each service
 
 
 @dataclass
@@ -327,7 +338,41 @@ def resolve_node(obj, requisition, override):
 
     override_location = override.location if override is not None else ""
     location = override_location or requisition.location
-    node = NodeSpec(label, foreign_id_for(obj), location, list(interfaces.values()))
+
+    # Enrichment (RD-2/RD-3): resolve the Requisition's asset mappings + metadata for
+    # this member; unresolved sources are omitted (enrichment.resolve_source → None).
+    assets = []
+    for mapping in requisition.asset_mappings.all():
+        value = resolve_source(obj, mapping.netbox_source)
+        if value is not None:
+            assets.append((mapping.asset_field, value))
+    node_md, iface_md, svc_md = [], [], []
+    for entry in requisition.metadata_entries.all():
+        value = (
+            resolve_source(obj, entry.value_source)
+            if entry.value_source
+            else (entry.literal_value or None)
+        )
+        if value is None:
+            continue
+        triad = (entry.context, entry.key, value)
+        if entry.scope == MetadataScopeChoices.NODE:
+            node_md.append(triad)
+        elif entry.scope == MetadataScopeChoices.INTERFACE:
+            iface_md.append(triad)
+        else:
+            svc_md.append(triad)
+
+    node = NodeSpec(
+        label,
+        foreign_id_for(obj),
+        location,
+        list(interfaces.values()),
+        assets=assets,
+        node_metadata=node_md,
+        interface_metadata=iface_md,
+        service_metadata=svc_md,
+    )
     return node, None
 
 
@@ -357,7 +402,9 @@ def resolve_all():
     Requisitions are frozen (Sync blocked) until the user resolves the overlap.
     Returns one ``Resolution`` per Requisition (zero-node/frozen ones included).
     """
-    requisitions = list(Requisition.objects.all())
+    requisitions = list(
+        Requisition.objects.prefetch_related("asset_mappings", "metadata_entries")
+    )
 
     # Pass 1: independent membership per Requisition. A rejected filter (unknown
     # key / no effective constraint) contributes no members; the rejection lands

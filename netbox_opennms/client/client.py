@@ -169,6 +169,29 @@ class OpenNMSClient:
         """Available OpenNMS provisioning policies + their parameter schema (RD-1)."""
         return self._list_plugins("/rest/foreignSourcesConfig/policies")
 
+    def list_assets(self):
+        """Available OpenNMS node **asset** field names (RD-2, AD-2).
+
+        ``GET /rest/foreignSourcesConfig/assets`` → an ``ElementList``
+        (``{"count": N, "element": [...]}`` on Horizon 36; a bare list on some
+        versions). Returns the field-name set; typed error on an unparseable body.
+        """
+        response = self._request(
+            "GET",
+            "/rest/foreignSourcesConfig/assets",
+            headers={"Accept": "application/json"},
+        )
+        try:
+            payload = response.json()
+            elements = (
+                payload if isinstance(payload, list) else payload.get("element", [])
+            )
+            return {e for e in elements if isinstance(e, str)}
+        except (ValueError, AttributeError, TypeError) as exc:
+            raise OpenNMSError(
+                "OpenNMS returned an unparseable foreignSourcesConfig/assets response."
+            ) from exc
+
     def _list_plugins(self, path):
         """GET a ``foreignSourcesConfig`` plugin list; typed taxonomy on a bad body."""
         response = self._request(

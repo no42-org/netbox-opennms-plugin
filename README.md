@@ -133,6 +133,15 @@ monitoring to actually happen:
   defaults, a shortlist). If OpenNMS is unreachable while editing, the editor
   degrades to the curated presets and notes it — you can still save (freeform class
   entry always works). Discovered results are cached briefly and refreshed at Sync.
+- **Asset & metadata enrichment** — a Requisition can carry NetBox inventory into
+  OpenNMS through two channels. **Asset mappings** map a NetBox attribute (serial,
+  model, site, …) to a **fixed** OpenNMS node **asset field** (the `OnmsAssetRecord`
+  set, discovered from `/foreignSourcesConfig/assets`; validated at save). **Metadata
+  entries** attach an arbitrary `context`/`key`/`value` triad at **node / interface /
+  service** scope (`context` defaults to `requisition`; a custom context must be
+  `X-`-prefixed) — the open channel for anything without a fixed asset field, and the
+  home for custom fields (`cf_<name>`). Values resolve per member; an unresolved value
+  is simply omitted.
 - **Minions / monitoring locations** — a node assigned to a non-`Default`
   monitoring location is only polled if a **Minion** is registered at that
   location. The plugin best-effort warns when a chosen location is unknown to

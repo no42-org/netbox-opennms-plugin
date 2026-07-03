@@ -15,5 +15,7 @@ router.register("monitoring-policies", views.MonitoringPolicyViewSet)
 router.register("monitoring-overrides", views.MonitoringOverrideViewSet)
 router.register("monitored-services", views.MonitoredServiceViewSet)
 router.register("monitored-interfaces", views.MonitoredInterfaceViewSet)
+router.register("asset-mappings", views.AssetMappingViewSet)
+router.register("metadata-entries", views.MetadataEntryViewSet)
 
 urlpatterns = router.urls

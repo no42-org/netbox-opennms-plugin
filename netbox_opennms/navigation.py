@@ -33,6 +33,6 @@ menu_items = (
     ),
     PluginMenuItem(
         link="plugins:netbox_opennms:connection_test",
-        link_text="Connection Test",
+        link_text="Connect OpenNMS",
     ),
 )

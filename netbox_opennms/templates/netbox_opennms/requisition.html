@@ -73,7 +73,13 @@
     </div>
     <div class="col col-md-6">
       <div class="card">
-        <h2 class="card-header">Detectors</h2>
+        <h2 class="card-header d-flex justify-content-between align-items-center">
+          Detectors
+          {% if perms.netbox_opennms.add_monitoringdetector %}
+            <a href="{% url 'plugins:netbox_opennms:monitoringdetector_add' %}?requisition={{ object.pk }}"
+               class="btn btn-sm btn-primary"><i class="mdi mdi-plus-thick"></i> Add</a>
+          {% endif %}
+        </h2>
         <table class="table table-hover">
           <thead><tr><th>Name</th><th>Class</th></tr></thead>
           <tbody>
@@ -84,7 +90,13 @@
         </table>
       </div>
       <div class="card">
-        <h2 class="card-header">Policies</h2>
+        <h2 class="card-header d-flex justify-content-between align-items-center">
+          Policies
+          {% if perms.netbox_opennms.add_monitoringpolicy %}
+            <a href="{% url 'plugins:netbox_opennms:monitoringpolicy_add' %}?requisition={{ object.pk }}"
+               class="btn btn-sm btn-primary"><i class="mdi mdi-plus-thick"></i> Add</a>
+          {% endif %}
+        </h2>
         <table class="table table-hover">
           <thead><tr><th>Name</th><th>Class</th></tr></thead>
           <tbody>
@@ -95,7 +107,13 @@
         </table>
       </div>
       <div class="card">
-        <h2 class="card-header">Asset Mappings</h2>
+        <h2 class="card-header d-flex justify-content-between align-items-center">
+          Asset Mappings
+          {% if perms.netbox_opennms.add_assetmapping %}
+            <a href="{% url 'plugins:netbox_opennms:assetmapping_add' %}?requisition={{ object.pk }}"
+               class="btn btn-sm btn-primary"><i class="mdi mdi-plus-thick"></i> Add</a>
+          {% endif %}
+        </h2>
         <table class="table table-hover">
           <thead><tr><th>NetBox source</th><th>Asset field</th></tr></thead>
           <tbody>
@@ -106,7 +124,13 @@
         </table>
       </div>
       <div class="card">
-        <h2 class="card-header">Metadata</h2>
+        <h2 class="card-header d-flex justify-content-between align-items-center">
+          Metadata
+          {% if perms.netbox_opennms.add_metadataentry %}
+            <a href="{% url 'plugins:netbox_opennms:metadataentry_add' %}?requisition={{ object.pk }}"
+               class="btn btn-sm btn-primary"><i class="mdi mdi-plus-thick"></i> Add</a>
+          {% endif %}
+        </h2>
         <table class="table table-hover">
           <thead><tr><th>Scope</th><th>Context</th><th>Key</th></tr></thead>
           <tbody>

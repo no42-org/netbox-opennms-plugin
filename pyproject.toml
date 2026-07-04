@@ -1,0 +1,56 @@
+[build-system]
+requires = ["setuptools>=77.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "netbox-opennms-plugin"
+# Single-sourced from netbox_opennms.__version__ (see [tool.setuptools.dynamic]).
+dynamic = ["version"]
+description = "Provision NetBox devices and virtual machines into OpenNMS via the REST provisioning API."
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Ronny Trommer", email = "ronny@no42.org" }]
+keywords = ["netbox", "netbox-plugin", "opennms", "provisioning", "monitoring"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Framework :: Django",
+    "Intended Audience :: System Administrators",
+    "Intended Audience :: Information Technology",
+    "Topic :: System :: Networking :: Monitoring",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+]
+# NetBox itself is the host application and is NOT declared here.
+dependencies = [
+    "requests>=2.34",
+    "lxml>=6.1",
+]
+
+[project.urls]
+Homepage = "https://github.com/no42-org/netbox-onms"
+Documentation = "https://github.com/no42-org/netbox-onms#readme"
+Source = "https://github.com/no42-org/netbox-onms"
+Tracker = "https://github.com/no42-org/netbox-onms/issues"
+
+[tool.setuptools.dynamic]
+version = { attr = "netbox_opennms.__version__" }
+
+[tool.setuptools.packages.find]
+include = ["netbox_opennms*"]
+exclude = ["netbox_opennms.tests*"]
+
+# Ship the plugin's Jinja/Django templates (non-Python package data) — the
+# nested `inc/` partial (Story 4.2) needs the recursive `**` glob.
+[tool.setuptools.package-data]
+netbox_opennms = ["templates/**/*.html"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 88
+extend-exclude = ["*/migrations/*"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]

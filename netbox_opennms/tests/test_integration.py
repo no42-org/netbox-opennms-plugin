@@ -95,7 +95,16 @@ class OpenNMSRoundTripTest(TestCase):
 
     def _delete_foreign_source(self):
         encoded = quote(FS, safe="")
-        paths = (f"/rest/requisitions/{encoded}", f"/rest/foreignSources/{encoded}")
+        # Delete the DEPLOYED requisition before the pending one (mirrors the
+        # production client.delete_requisition order). GET /rest/requisitions
+        # unmarshals every deployed file on disk, so a deployed copy left behind
+        # by a prior test would 500 the whole list — these tests share one FS on
+        # a shared instance, so each must clean up its deployed copy too.
+        paths = (
+            f"/rest/requisitions/deployed/{encoded}",
+            f"/rest/requisitions/{encoded}",
+            f"/rest/foreignSources/{encoded}",
+        )
         for path in paths:
             try:
                 requests.delete(
@@ -158,6 +167,42 @@ class OpenNMSRoundTripTest(TestCase):
             time.sleep(4)
         return False
 
+    def _poll_for_asset(self, node_id, field, value):
+        """Poll a node's assetRecord until *field* == *value*.
+
+        The <asset> values ride in on the requisition, but provisiond writes the
+        node first and applies the asset record a moment later — so a single read
+        right after the node appears can still see the pre-import null. Poll, like
+        _poll_for_service does for detection.
+        """
+        for _ in range(30):
+            got = self._get(f"/rest/nodes/{node_id}/assetRecord")
+            if got.status_code == 200 and got.json().get(field) == value:
+                return True
+            time.sleep(2)
+        return False
+
+    def _poll_listed(self, client, *, present):
+        """Poll GET /rest/requisitions until FS is present (or absent) as asked.
+
+        ``import_requisition`` is async (202 = *accepted*), so the deployed
+        requisition appears a moment later. While provisiond is still writing the
+        deployed file — likely under load from the preceding tests —
+        ``GET /rest/requisitions`` transiently 500s (it unmarshals the file
+        mid-write). Tolerate that 500 and retry, exactly as the production drift
+        reconciler degrades on a transient ``OpenNMSError`` and tries again next
+        cycle, rather than asserting on a single racy read.
+        """
+        for _ in range(30):
+            try:
+                listed = FS in client.list_requisition_names()
+            except OpenNMSHTTPError:
+                listed = not present  # mid-write read; treat as unsettled, retry
+            if listed == present:
+                return True
+            time.sleep(2)
+        return False
+
     def test_detector_preset_detects_icmp(self):
         requisition = self._requisition_with_icmp()
         device = self._device_node()
@@ -196,17 +241,17 @@ class OpenNMSRoundTripTest(TestCase):
                 client.post_foreign_source(fs_xml)
                 client.post_requisition(render_requisition(FS, nodes))
                 client.import_requisition(FS, rescan_existing="true")
-                self.assertIn(FS, client.list_requisition_names())
+                self.assertTrue(
+                    self._poll_listed(client, present=True),
+                    "requisition not listed after import",
+                )
                 client.delete_requisition(FS)
                 client.delete_foreign_source(FS)
                 # The orphan shell is gone, so the reconciler won't re-find it.
-                gone = False
-                for _ in range(10):
-                    if FS not in client.list_requisition_names():
-                        gone = True
-                        break
-                    time.sleep(2)
-                self.assertTrue(gone, "requisition still listed after delete")
+                self.assertTrue(
+                    self._poll_listed(client, present=False),
+                    "requisition still listed after delete",
+                )
         finally:
             self._delete_foreign_source()
 
@@ -273,12 +318,13 @@ class OpenNMSRoundTripTest(TestCase):
                 client.import_requisition(FS, rescan_existing="true")
             node = self._poll_for_node(foreign_id_for(device))
             self.assertIsNotNone(node, "node was not provisioned")
-            asset = self._get(f"/rest/nodes/{node['id']}/assetRecord")
-            self.assertEqual(asset.status_code, 200)
-            self.assertEqual(asset.json().get("serialNumber"), "SN-CI-INT")
-            deployed = self._get(
-                f"/rest/requisitions/deployed/{quote(FS, safe='')}"
+            self.assertTrue(
+                self._poll_for_asset(node["id"], "serialNumber", "SN-CI-INT"),
+                "serialNumber asset did not land on the node's assetRecord",
             )
+            # Read the deployed requisition back via GET /rest/requisitions/{fs}
+            # (the .../deployed/{fs} path is DELETE-only — a GET there is 405).
+            deployed = self._get(f"/rest/requisitions/{quote(FS, safe='')}")
             self.assertIn("netbox-owner", deployed.text)
         finally:
             self._delete_foreign_source()

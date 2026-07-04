@@ -89,7 +89,11 @@ class RefocusSpikeH36(unittest.TestCase):
 
     def _cleanup(self):
         encoded = quote(FS, safe="")
+        # Delete the DEPLOYED requisition first (the .../deployed/{fs} path);
+        # deleting only the pending copy leaves a deployed file on disk that
+        # GET /rest/requisitions would later fail to unmarshal (test isolation).
         for path in (
+            f"/rest/requisitions/deployed/{encoded}",
             f"/rest/requisitions/{encoded}",
             f"/rest/foreignSources/{encoded}",
         ):
@@ -231,7 +235,16 @@ class RefocusSpikeH36(unittest.TestCase):
             self._post_and_import(self._xml(root))
             found = self._poll_node("spike-asset")
             self.assertIsNotNone(found, "asset node not provisioned")
-            got = self._get(f"/rest/nodes/{found['id']}/assetRecord")
+            # Assets are applied a moment after the node is created (provisiond),
+            # so poll the assetRecord until serialNumber lands — a single read
+            # right after the node appears races under provisiond load.
+            got = None
+            for _ in range(30):
+                got = self._get(f"/rest/nodes/{found['id']}/assetRecord")
+                serial = got.json().get("serialNumber") if got.ok else None
+                if serial == "SN-CI-1":
+                    break
+                time.sleep(2)
             _dump("node assetRecord readback", got.text)
             self.assertEqual(got.status_code, 200)
             record = got.json()
@@ -262,10 +275,12 @@ class RefocusSpikeH36(unittest.TestCase):
             self.assertIsNotNone(found, "metadata node not provisioned")
             nid = found["id"]
             # H36 has no /rest/nodes/{id}/metadata endpoint (returns 404), so verify
-            # acceptance + persistence via the DEPLOYED requisition round-trip: the
+            # acceptance + persistence via the deployed requisition round-trip: the
             # import was already accepted (no rejection in _post_and_import); the
             # <meta-data> we posted must survive into the deployed requisition.
-            deployed = self._get(f"/rest/requisitions/deployed/{quote(FS, safe='')}")
+            # Read it via GET /rest/requisitions/{fs} — the .../deployed/{fs} path
+            # is DELETE-only, so a GET there is 405.
+            deployed = self._get(f"/rest/requisitions/{quote(FS, safe='')}")
             _dump("deployed requisition readback", deployed.text)
             node_md = self._get(f"/rest/nodes/{nid}/metadata")  # best-effort capture
             _dump("node /metadata endpoint status", {"status": node_md.status_code})

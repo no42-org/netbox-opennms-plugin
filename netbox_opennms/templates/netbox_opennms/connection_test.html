@@ -2,15 +2,41 @@
 {# SPDX-License-Identifier: MIT #}
 {% extends 'base/layout.html' %}
 
-{% block title %}OpenNMS Connection Test{% endblock %}
+{% block title %}Connect OpenNMS{% endblock %}
 
 {% block content %}
   <div class="row">
     <div class="col col-md-6">
       <div class="card">
-        <h2 class="card-header">OpenNMS Connection Test</h2>
+        <h2 class="card-header">Connect OpenNMS</h2>
         <div class="card-body">
-          <p>Probe the configured OpenNMS instance for reachability and valid credentials.</p>
+          <p>
+            Verify that NetBox can reach the OpenNMS instance configured in
+            <code>PLUGINS_CONFIG</code> and that its credentials are accepted.
+            The connection is set in NetBox's plugin config
+            (<code>configuration.py</code> / Helm <code>pluginsConfig</code>),
+            <strong>not here</strong> &mdash; this page only tests it.
+          </p>
+          <table class="table table-hover attr-table mb-3">
+            <tr>
+              <th scope="row" style="width: 30%">URL</th>
+              <td>{{ opennms_url|default:"—" }}</td>
+            </tr>
+            <tr>
+              <th scope="row">Username</th>
+              <td>{{ opennms_username|default:"—" }}</td>
+            </tr>
+            <tr>
+              <th scope="row">Password</th>
+              <td>
+                {% if password_set %}
+                  Configured
+                {% else %}
+                  <span class="text-danger">Not configured</span>
+                {% endif %}
+              </td>
+            </tr>
+          </table>
           <form method="post" action="">
             {% csrf_token %}
             <button type="submit" class="btn btn-primary">

@@ -10,6 +10,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.generic import View
+from netbox.plugins import get_plugin_config
 from netbox.views import generic
 from utilities.rqworker import any_workers_for_queue
 
@@ -538,13 +539,37 @@ class SyncPreviewView(LoginRequiredMixin, View):
         )
 
 
-class OpenNMSConnectionTestView(LoginRequiredMixin, View):
-    """Authenticated action: probe the configured OpenNMS for reachability + auth."""
+class OpenNMSConnectionTestView(PermissionRequiredMixin, View):
+    """"Connect OpenNMS" page: verify the CONFIGURED connection (Option D).
 
+    Probes the OpenNMS instance defined in ``PLUGINS_CONFIG`` for reachability and
+    valid credentials, and shows the effective URL/username (never the password)
+    read-only. The connection is configured in NetBox's plugin config
+    (``configuration.py`` / Helm ``pluginsConfig``), never here — so the view
+    accepts no user-supplied URL or credentials (which could send the stored
+    secret to an arbitrary host) and stores nothing (AD-13). Permission-gated,
+    like the dry-run, because it issues an outbound call with stored credentials.
+    """
+
+    permission_required = "netbox_opennms.view_requisition"
     template_name = "netbox_opennms/connection_test.html"
 
+    def _context(self):
+        # Show the effective connection so the user knows what will be tested;
+        # the password is reported only as set / not set, never rendered.
+        return {
+            "opennms_url": get_plugin_config("netbox_opennms", "opennms_url") or "",
+            "opennms_username": get_plugin_config(
+                "netbox_opennms", "opennms_username"
+            )
+            or "",
+            "password_set": bool(
+                get_plugin_config("netbox_opennms", "opennms_password")
+            ),
+        }
+
     def get(self, request):
-        return render(request, self.template_name)
+        return render(request, self.template_name, self._context())
 
     def post(self, request):
         try:

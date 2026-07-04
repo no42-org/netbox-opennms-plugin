@@ -1,0 +1,21 @@
+{# Copyright 2026 Ronny Trommer <ronny@no42.org> #}
+{# SPDX-License-Identifier: MIT #}
+{% extends 'generic/object.html' %}
+{% load helpers %}
+
+{% block content %}
+  <div class="row">
+    <div class="col col-md-6">
+      <div class="card">
+        <h2 class="card-header">Detector</h2>
+        <table class="table table-hover attr-table">
+          <tr><th scope="row">Requisition</th><td>{{ object.requisition|linkify }}</td></tr>
+          <tr><th scope="row">Name</th><td>{{ object.name }}</td></tr>
+          <tr><th scope="row">Preset</th><td>{{ object.get_preset_display|placeholder }}</td></tr>
+          <tr><th scope="row">Class</th><td><code>{{ object.rule_class }}</code></td></tr>
+          <tr><th scope="row">Parameters</th><td><pre class="mb-0">{{ object.parameters }}</pre></td></tr>
+        </table>
+      </div>
+    </div>
+  </div>
+{% endblock %}

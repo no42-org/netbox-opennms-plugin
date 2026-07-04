@@ -1,0 +1,80 @@
+{# Copyright 2026 Ronny Trommer <ronny@no42.org> #}
+{# SPDX-License-Identifier: MIT #}
+{# Last-sync panel (Story 4.2). Expects `sync_status` in context: a dict
+   with `foreign_source`, `requisition`, `governed`, `excluded`, `conflicts`
+   (list of requisition names when the object is matched by ≥2 filters), `job`,
+   `outcome` (label, color) — or None. Shown on the Device/VM detail page. #}
+{% load helpers %}
+<div class="card">
+  <h2 class="card-header">OpenNMS Sync Status</h2>
+  <table class="table table-hover attr-table">
+    <tr>
+      <th scope="row">Foreign Source</th>
+      <td>
+        {% if sync_status.foreign_source %}
+          <code>{{ sync_status.foreign_source }}</code>
+        {% else %}{{ ''|placeholder }}{% endif %}
+      </td>
+    </tr>
+    <tr>
+      <th scope="row">Monitored</th>
+      <td>
+        {% if sync_status.conflicts %}
+          <span class="text-danger">
+            <i class="mdi mdi-alert-octagon"></i>
+            Conflicted between {{ sync_status.conflicts|join:", " }} — resolve the
+            filter overlap before this object can be synced.
+          </span>
+        {% elif sync_status.excluded %}
+          <span class="text-muted">Excluded by override</span>
+        {% elif sync_status.governed %}
+          {% checkmark True %} via {{ sync_status.requisition|linkify }}
+        {% else %}
+          <span class="text-muted">No requisition</span>
+        {% endif %}
+      </td>
+    </tr>
+    {% if sync_status.warning_no_management_ip %}
+      <tr>
+        <th scope="row">Warning</th>
+        <td>
+          <span class="text-warning">
+            <i class="mdi mdi-alert"></i>
+            No management IP — will be provisioned as a node with no IP interface
+            (not actively monitored).
+          </span>
+        </td>
+      </tr>
+    {% endif %}
+    {% if sync_status.job %}
+      <tr>
+        <th scope="row">Last sync</th>
+        <td>
+          <span class="badge text-bg-{{ sync_status.outcome.1 }}">{{ sync_status.outcome.0 }}</span>
+          <small class="text-muted d-block">Reflects the whole Foreign Source, not just this object.</small>
+        </td>
+      </tr>
+      <tr>
+        <th scope="row">When</th>
+        <td>{{ sync_status.job.completed|default:sync_status.job.created }}</td>
+      </tr>
+      {% if perms.core.view_job %}
+        {% if sync_status.job.error %}
+          <tr>
+            <th scope="row">Error</th>
+            <td class="text-danger"><pre class="mb-0">{{ sync_status.job.error }}</pre></td>
+          </tr>
+        {% endif %}
+        <tr>
+          <th scope="row">Job</th>
+          <td><a href="{{ sync_status.job.get_absolute_url }}">#{{ sync_status.job.pk }}</a></td>
+        </tr>
+      {% endif %}
+    {% else %}
+      <tr>
+        <th scope="row">Last sync</th>
+        <td><span class="text-muted">Never synced</span></td>
+      </tr>
+    {% endif %}
+  </table>
+</div>

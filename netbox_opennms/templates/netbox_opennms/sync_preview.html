@@ -1,0 +1,62 @@
+{# Copyright 2026 Ronny Trommer <ronny@no42.org> #}
+{# SPDX-License-Identifier: MIT #}
+{% extends 'base/layout.html' %}
+{% load helpers %}
+
+{% block title %}OpenNMS Sync Preview{% endblock %}
+
+{% block content %}
+  {% if no_worker_warning %}
+    <div class="alert alert-warning" role="alert">
+      <i class="mdi mdi-alert"></i> No background worker is running — Sync jobs will
+      stay pending until an RQ worker is started.
+    </div>
+  {% endif %}
+  <div class="card">
+    <div class="card-header d-flex justify-content-between align-items-center">
+      <h2 class="m-0">Requisitions</h2>
+      {% if perms.netbox_opennms.change_requisition %}
+        <form method="post" action="{% url 'plugins:netbox_opennms:sync_all' %}">
+          {% csrf_token %}
+          <button type="submit" class="btn btn-sm btn-primary">
+            <i class="mdi mdi-sync"></i> Sync all
+          </button>
+        </form>
+      {% endif %}
+    </div>
+    <table class="table table-hover">
+      <thead>
+        <tr><th>Requisition</th><th>Conflicts</th><th>Nodes</th><th>Warnings</th><th></th></tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+          <tr>
+            <td>{{ row.requisition|linkify }} <code class="text-muted">{{ row.foreign_source }}</code></td>
+            <td>
+              {% if row.conflicts %}
+                <span class="badge text-bg-danger" title="Sync blocked — resolve the filter overlap">{{ row.conflicts|length }} — frozen</span>
+              {% else %}{{ ''|placeholder }}{% endif %}
+            </td>
+            <td>{{ row.node_count }}</td>
+            <td>
+              {% if row.warnings %}
+                <span class="badge text-bg-warning">{{ row.warnings|length }}</span>
+              {% else %}{{ ''|placeholder }}{% endif %}
+            </td>
+            <td class="text-end">
+              <a href="{% url 'plugins:netbox_opennms:requisition_dry_run' pk=row.requisition.pk %}" class="btn btn-sm btn-outline-primary">Dry run</a>
+              {% if perms.netbox_opennms.change_requisition %}
+                <form method="post" action="{% url 'plugins:netbox_opennms:requisition_sync' pk=row.requisition.pk %}" class="d-inline">
+                  {% csrf_token %}
+                  <button type="submit" class="btn btn-sm btn-primary" {% if row.conflicts %}disabled title="Frozen — resolve the filter conflicts first"{% endif %}>Sync</button>
+                </form>
+              {% endif %}
+            </td>
+          </tr>
+        {% empty %}
+          <tr><td colspan="5" class="text-muted">No requisitions — create one to start monitoring.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+{% endblock %}

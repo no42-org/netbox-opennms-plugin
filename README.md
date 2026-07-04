@@ -96,6 +96,62 @@ python manage.py migrate
 | `true` | Import and rescan existing nodes (re-run detectors/policies). |
 | `dbonly` | Update the OpenNMS database only; do not schedule a scan. |
 
+### Kubernetes (Helm chart)
+
+The [`netbox-community/netbox`](https://github.com/netbox-community/netbox-chart)
+chart's base image does not include the plugin, so bake it into a custom image,
+then reference that image and enable the plugin.
+
+1. Build an image with the plugin (match the NetBox version to the chart's
+   `appVersion`):
+
+   ```dockerfile
+   # Dockerfile
+   FROM netboxcommunity/netbox:v4.6
+   RUN /opt/netbox/venv/bin/pip install netbox-opennms-plugin==0.1.0
+   ```
+
+   ```bash
+   docker build -t registry.example.org/netbox-opennms:v4.6 .
+   docker push registry.example.org/netbox-opennms:v4.6
+   ```
+
+2. In `values.yaml`, point the chart at that image, enable the plugin, and turn
+   on the worker (the sync / drift-reconciler jobs need it):
+
+   ```yaml
+   image:
+     repository: registry.example.org/netbox-opennms
+     tag: v4.6
+
+   plugins:
+     - netbox_opennms          # the package must already be in the image (step 1)
+
+   pluginsConfig:
+     netbox_opennms:
+       opennms_url: "https://opennms.example.org/opennms"
+       opennms_username: "provision-svc"
+       opennms_password: "********"     # prefer a Secret via extraConfig
+       default_location: ""
+       import_mode: "false"
+       reconcile_orphans: "true"
+
+   worker:
+     enabled: true
+   ```
+
+3. Install or upgrade, then confirm the migrations ran:
+
+   ```bash
+   helm repo add netbox https://netbox-community.github.io/netbox-chart/
+   helm upgrade --install netbox netbox/netbox -f values.yaml
+   kubectl logs deploy/netbox | grep netbox_opennms   # → Applying netbox_opennms... OK
+   ```
+
+Keep `opennms_password` out of plaintext values — load the plugin config from a
+`Secret` via the chart's `extraConfig`. On upgrades, rebuild the image with the
+new plugin version, bump `image.tag`, and `helm upgrade`.
+
 ## Try it (Web UI)
 
 For a throwaway NetBox deployment with the plugin installed — to click **Sync to

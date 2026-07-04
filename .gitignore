@@ -18,3 +18,7 @@ venv/
 _bmad-output/
 _bmad/
 openspec/
+
+# IDEs / editors
+.idea/
+*.iml

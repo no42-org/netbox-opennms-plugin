@@ -1,0 +1,99 @@
+# Copyright 2026 Ronny Trommer <ronny@no42.org>
+# SPDX-License-Identifier: MIT
+"""Tests for pre-push resolution validation (Requisition redesign)."""
+
+from django.test import SimpleTestCase
+
+from netbox_opennms.membership import Conflict, NodeSpec, Resolution
+from netbox_opennms.validation import validate_resolution
+
+
+class _Requisition:
+    def __init__(self, location=""):
+        self.location = location
+
+
+class ValidateResolutionTest(SimpleTestCase):
+    def test_none_resolution_is_clean(self):
+        result = validate_resolution(None)
+        self.assertTrue(result.ok)
+        self.assertEqual(result.errors, [])
+
+    def test_warnings_forwarded(self):
+        resolution = Resolution(
+            "fs", _Requisition(), nodes=[], warnings=["rtr-x: no management IP"]
+        )
+        result = validate_resolution(resolution)
+        self.assertTrue(result.ok)
+        self.assertEqual(result.warnings, ["rtr-x: no management IP"])
+
+    def test_invalid_requisition_location_is_error(self):
+        resolution = Resolution("fs", _Requisition(location="bad name"), nodes=[])
+        result = validate_resolution(resolution)
+        self.assertFalse(result.ok)
+        self.assertTrue(
+            any("invalid requisition location" in e for e in result.errors)
+        )
+
+    def test_invalid_node_location_is_error(self):
+        node = NodeSpec("rtr-1", "device-1", location="bad name", interfaces=[])
+        resolution = Resolution("fs", _Requisition(), nodes=[node])
+        result = validate_resolution(resolution)
+        self.assertFalse(result.ok)
+        self.assertTrue(any("rtr-1: invalid location" in e for e in result.errors))
+
+    def test_valid_location_ok(self):
+        node = NodeSpec("rtr-1", "device-1", location="edge-1", interfaces=[])
+        resolution = Resolution("fs", _Requisition(location="core"), nodes=[node])
+        self.assertTrue(validate_resolution(resolution).ok)
+
+    def test_warning_and_conflict_blocks_on_conflict_only(self):
+        # RD-6/h: a Warning (interface-less) never blocks; only the Critical does.
+        resolution = Resolution(
+            "fs",
+            _Requisition(),
+            nodes=[],
+            warnings=["bare: no management IP"],
+            conflicts=[Conflict("rtr-1", "device-1", ["a", "b"])],
+        )
+        result = validate_resolution(resolution)
+        self.assertFalse(result.ok)  # blocked by the conflict
+        self.assertIn("bare: no management IP", result.warnings)  # warning forwarded
+
+    def test_conflict_is_a_blocking_error(self):
+        # C1: conflicts are errors (freeze), never warnings.
+        resolution = Resolution(
+            "fs",
+            _Requisition(),
+            conflicts=[Conflict("rtr-1", "device-1", ["a", "b"])],
+        )
+        result = validate_resolution(resolution)
+        self.assertFalse(result.ok)
+        self.assertTrue(any("resolve the overlap" in e for e in result.errors))
+
+    def test_rejected_filter_is_blocking_error_except_on_removal(self):
+        # Round-2 review #3: rejected filters block Sync but NOT a deliberate
+        # Remove (the teardown escape hatch); conflicts block both.
+        resolution = Resolution(
+            "fs", _Requisition(), rejected=["Filter contains keys …"]
+        )
+        result = validate_resolution(resolution)
+        self.assertFalse(result.ok)
+        self.assertTrue(any("rejected filter" in e for e in result.errors))
+        self.assertTrue(validate_resolution(resolution, removing=True).ok)
+        frozen = Resolution(
+            "fs",
+            _Requisition(),
+            conflicts=[Conflict("rtr-1", "device-1", ["a", "b"])],
+        )
+        self.assertFalse(validate_resolution(frozen, removing=True).ok)
+
+    def test_conflict_errors_are_bounded(self):
+        # Review #5: a broad overlap must not flood messages — first N + summary.
+        conflicts = [
+            Conflict(f"d{i}", f"device-{i}", ["a", "b"]) for i in range(8)
+        ]
+        resolution = Resolution("fs", _Requisition(), conflicts=conflicts)
+        result = validate_resolution(resolution)
+        self.assertEqual(len(result.errors), 6)  # 5 detailed + 1 summary
+        self.assertIn("3 more conflicted", result.errors[-1])

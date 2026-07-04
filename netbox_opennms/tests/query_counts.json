@@ -1,0 +1,18 @@
+{
+  "assetmapping:api_list_objects": 13,
+  "assetmapping:list_objects_with_permission": 17,
+  "metadataentry:api_list_objects": 13,
+  "metadataentry:list_objects_with_permission": 17,
+  "monitoredinterface:api_list_objects": 13,
+  "monitoredinterface:list_objects_with_permission": 20,
+  "monitoredservice:api_list_objects": 13,
+  "monitoredservice:list_objects_with_permission": 20,
+  "monitoringdetector:api_list_objects": 13,
+  "monitoringdetector:list_objects_with_permission": 17,
+  "monitoringoverride:api_list_objects": 17,
+  "monitoringoverride:list_objects_with_permission": 18,
+  "monitoringpolicy:api_list_objects": 13,
+  "monitoringpolicy:list_objects_with_permission": 17,
+  "requisition:api_list_objects": 15,
+  "requisition:list_objects_with_permission": 17
+}

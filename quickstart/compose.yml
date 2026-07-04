@@ -1,0 +1,143 @@
+# Example NetBox deployment with the netbox-opennms plugin, for manual Web-UI
+# testing. NOT for production — fixed throwaway secrets, no TLS, ephemeral data.
+#
+#   docker compose up -d                     # NetBox UI + worker (bring your own OpenNMS)
+#   docker compose --profile opennms up -d   # + a disposable OpenNMS Horizon 36
+#
+# NetBox UI:  http://localhost:8000   (admin / admin)
+# OpenNMS UI: http://localhost:8980/opennms   (admin / admin, with --profile opennms)
+#
+# The plugin is mounted from the repo (../) and put on PYTHONPATH, so the
+# image's bundled deps (requests, lxml) are reused — no rebuild. For a real
+# deployment you would `pip install netbox-opennms-plugin` into a custom image.
+name: netbox-opennms-example
+
+x-netbox-env: &netbox-env
+  SECRET_KEY: "example-secret-key-change-me-0123456789abcdefghijklmnop"
+  API_TOKEN_PEPPER_1: "example-token-pepper-change-me-0123456789abcdefghij"
+  DB_HOST: postgres
+  DB_NAME: netbox
+  DB_USER: netbox
+  DB_PASSWORD: netbox
+  REDIS_HOST: redis
+  REDIS_PORT: "6379"
+  REDIS_DATABASE: "0"
+  REDIS_CACHE_HOST: redis
+  REDIS_CACHE_PORT: "6379"
+  REDIS_CACHE_DATABASE: "1"
+  ALLOWED_HOSTS: "*"
+  CSRF_TRUSTED_ORIGINS: "http://localhost:8000"
+  # Make the mounted plugin importable.
+  PYTHONPATH: /source
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: netbox
+      POSTGRES_USER: netbox
+      POSTGRES_PASSWORD: netbox
+    volumes:
+      - netbox-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "netbox", "-d", "netbox"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  redis:
+    image: redis:7-alpine
+
+  netbox:
+    image: netboxcommunity/netbox:v4.6
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    environment:
+      <<: *netbox-env
+      # First-boot superuser (created by the image's entrypoint). For REST-API
+      # access create a token in the UI (your user → API Tokens).
+      SUPERUSER_NAME: admin
+      SUPERUSER_EMAIL: admin@example.com
+      SUPERUSER_PASSWORD: admin
+    ports:
+      - "8000:8080"
+    volumes:
+      - ../:/source:ro
+      - ./configuration/plugins.py:/etc/netbox/config/plugins.py:ro
+      - netbox-media:/opt/netbox/netbox/media
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/login/"]
+      interval: 15s
+      timeout: 5s
+      retries: 40
+      start_period: 180s
+
+  netbox-worker:
+    image: netboxcommunity/netbox:v4.6
+    depends_on:
+      netbox:
+        condition: service_healthy
+    environment:
+      <<: *netbox-env
+    volumes:
+      - ../:/source:ro
+      - ./configuration/plugins.py:/etc/netbox/config/plugins.py:ro
+    # Skip the web init (the netbox service already migrated) — just run the queue
+    # worker that executes Sync/Remove/Move jobs.
+    command:
+      - /opt/netbox/venv/bin/python
+      - /opt/netbox/netbox/manage.py
+      - rqworker
+    restart: unless-stopped
+
+  # --- optional: a disposable OpenNMS Horizon 36 (docker compose --profile opennms) ---
+  opennms-db:
+    image: postgres:16
+    profiles: ["opennms"]
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  opennms:
+    image: opennms/horizon:36.0.1
+    profiles: ["opennms"]
+    depends_on:
+      opennms-db:
+        condition: service_healthy
+    command: ["-s"]
+    environment:
+      OPENNMS_DBNAME: opennms
+      OPENNMS_DBUSER: opennms
+      OPENNMS_DBPASS: opennms
+      POSTGRES_HOST: opennms-db
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "8980:8980"
+    healthcheck:
+      test:
+        - CMD
+        - curl
+        - -f
+        - -u
+        - admin:admin
+        - http://localhost:8980/opennms/rest/info
+      interval: 10s
+      timeout: 5s
+      retries: 60
+      start_period: 180s
+
+volumes:
+  netbox-postgres:
+  netbox-media:

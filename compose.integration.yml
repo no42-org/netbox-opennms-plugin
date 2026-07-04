@@ -1,0 +1,61 @@
+# Integration overlay (Story 4.4): adds a disposable OpenNMS Horizon 36 to the
+# base test stack and points the netbox test container at it. Used by
+# `make integration` (and the nightly CI job) for the live round-trip — it is NOT
+# part of `make verify`. Boot is slow (OpenNMS is a Java app + schema init), so
+# the healthcheck allows a long start period.
+#
+#   docker compose -f compose.yml -f compose.integration.yml run --rm netbox '<cmd>'
+services:
+  opennms-db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  opennms:
+    image: opennms/horizon:36.0.1
+    depends_on:
+      opennms-db:
+        condition: service_healthy
+    command: ["-s"]  # initialize/update schema, then start
+    environment:
+      OPENNMS_DBNAME: opennms
+      OPENNMS_DBUSER: opennms
+      OPENNMS_DBPASS: opennms
+      POSTGRES_HOST: opennms-db
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    healthcheck:
+      test:
+        - CMD
+        - curl
+        - -f
+        - -u
+        - admin:admin
+        - http://localhost:8980/opennms/rest/info
+      interval: 10s
+      timeout: 5s
+      retries: 60
+      start_period: 180s
+
+  netbox:
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      opennms:
+        condition: service_healthy
+    environment:
+      # The live test reads these; unset → the test class skips.
+      OPENNMS_LIVE_URL: http://opennms:8980/opennms
+      OPENNMS_LIVE_USERNAME: admin
+      OPENNMS_LIVE_PASSWORD: admin

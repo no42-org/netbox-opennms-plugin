@@ -1,0 +1,57 @@
+# Throwaway test stack for the netbox-opennms plugin (Makefile-driven).
+# Not a deployment compose — Postgres data is tmpfs (ephemeral) and the secrets
+# are fixed throwaway values for the test DB only. See the Makefile for targets.
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: netbox
+      POSTGRES_USER: netbox
+      POSTGRES_PASSWORD: netbox
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "netbox", "-d", "netbox"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  redis:
+    image: redis:7-alpine
+
+  netbox:
+    # NETBOX_VERSION lets CI matrix over supported tags; default keeps local runs
+    # on the pinned line.
+    image: netboxcommunity/netbox:${NETBOX_VERSION:-v4.6}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    environment:
+      SECRET_KEY: throwaway-test-secret-key-0123456789-abcdefghijklmnop
+      API_TOKEN_PEPPER_1: throwaway-token-pepper-0123456789-abcdefghijklmnopqr
+      DB_HOST: postgres
+      DB_NAME: netbox
+      DB_USER: netbox
+      DB_PASSWORD: netbox
+      DB_PORT: "5432"
+      DB_SSLMODE: disable
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_DATABASE: "0"
+      REDIS_CACHE_HOST: redis
+      REDIS_CACHE_DATABASE: "1"
+      ALLOWED_HOSTS: "*"
+      # The plugin source is mounted here and added to the path so NetBox imports
+      # it; DEVELOPER lets `makemigrations` run against the image.
+      PYTHONPATH: /source
+      DEVELOPER: "true"
+    volumes:
+      - ./:/source
+      - ./tests/config/plugins.py:/etc/netbox/config/plugins.py:ro
+    working_dir: /opt/netbox/netbox
+    entrypoint: ["/bin/bash", "-c"]
+    # Default command = run the suite. Targets that need a different command
+    # (makemigrations, query-count regen) override it via `compose run`.
+    command: ["/opt/netbox/venv/bin/python manage.py test netbox_opennms -v2"]

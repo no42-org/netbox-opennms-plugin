@@ -1,41 +1,51 @@
 # netbox-opennms-plugin
 
-A [NetBox](https://netboxlabs.com/) plugin that provisions NetBox devices and
-virtual machines into [OpenNMS](https://www.opennms.com/) (Horizon 36) via the
-OpenNMS REST provisioning API. NetBox is the source of truth; OpenNMS monitoring
-is a derived artifact kept in sync from NetBox intent.
+> Provision NetBox devices and virtual machines into **OpenNMS Horizon 36** as
+> requisition nodes — NetBox is the source of truth, OpenNMS monitoring is a
+> derived artifact kept in sync from NetBox intent.
 
-You author a **Requisition** — one user-named OpenNMS Foreign Source — that owns
-its OpenNMS **detectors** and **policies** (discovered live from your OpenNMS
-instance, with a curated preset overlay for labels/defaults, or a freeform class),
-a set of declared **services** (e.g. ICMP, SNMP), and a live
-NetBox **filter** that selects its member Devices/VMs (by role, tag, site, status,
-custom field, …). Every member is monitored: its management IP is its **primary
-IP** unless overridden, OpenNMS auto-discovers services via the detectors, and the
-declared services are the guaranteed-present floor. A per-object **Monitoring
-Override** is the escape hatch (exclude an object, pin a different management IP,
-add extra interfaces — each with an SNMP role of **Primary / Secondary /
-Not-eligible** (`snmp-primary` P/S/N; at most one Primary per node) — add/suppress
-a service, or change its location).
+[![CI](https://github.com/no42-org/netbox-opennms-plugin/actions/workflows/ci.yml/badge.svg)](https://github.com/no42-org/netbox-opennms-plugin/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/no42-org/netbox-opennms-plugin)](https://github.com/no42-org/netbox-opennms-plugin/releases)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
+![NetBox 4.6.1+](https://img.shields.io/badge/NetBox-4.6.1%2B-blue)
+![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-blue)
 
-Requisition filters must be **disjoint**: an object matched by more than one
-Requisition's filter is a **conflict** — Sync of every involved Requisition is
-blocked (their OpenNMS state stays untouched) until you resolve the overlap, so a
-node always lives in exactly one Foreign Source and nothing ever moves or
-disappears implicitly. A **dry-run** shows, per node, exactly what a Sync would
-add / remove / change against the live OpenNMS state before you commit.
+![NetBox OpenNMS — Requisition detail](docs/img/requisition.png)
 
-Per-node status is **graded**: a **Critical** (red) — a filter conflict — **blocks
-Sync**; a **Warning** (yellow) is advisory and does **not**. A member with **no
-management IP** is a Warning: rather than silently skipping it, the plugin
-provisions an **inventory-only node with no IP interface** (it will not be actively
-monitored) and surfaces the warning in the Sync preview, the dry-run, and the
-Device/VM page — exclude the object if you don't want it in OpenNMS at all.
+## Why
 
-**Sync** renders the complete OpenNMS *foreign-source definition* + *requisition*
-and imports it. Membership is a live NetBox query, so adding/removing a Device or
-changing an attribute the filter matches simply re-resolves the Requisition;
-render-and-replace makes every re-sync idempotent and never duplicates a node.
+[NetBox](https://netboxlabs.com/) is your source of truth for what exists;
+[OpenNMS](https://www.opennms.com/) (Horizon 36) monitors it. This plugin closes
+the gap: you describe monitoring **intent** in NetBox — which Devices/VMs, which
+detectors and policies, which services — and the plugin renders and imports the
+matching OpenNMS **requisition** over the REST provisioning API. Membership is a
+live NetBox query, so the monitored set follows your inventory automatically, and
+every re-sync is idempotent (render-and-replace — a node is never duplicated or
+implicitly moved).
+
+## Features
+
+- **Filter-based Requisitions** — a Requisition is one user-named OpenNMS Foreign
+  Source whose members are a live NetBox **filter** (role, tag, site, status,
+  custom field, …) over Devices and/or Virtual Machines.
+- **Discovery-driven detectors & policies** — configured from your live OpenNMS
+  catalog (classes + parameters read via REST, the same API the OpenNMS UI uses),
+  with a curated preset overlay for labels/defaults and a freeform-class escape
+  hatch.
+- **Per-interface SNMP roles** — the management IP is the **Primary** SNMP
+  interface by default; add more IPs as Primary / Secondary / Not-eligible.
+- **Asset & metadata enrichment** — map NetBox inventory to OpenNMS node **asset
+  fields**, and attach `meta-data` at **node / interface / service** scope.
+- **Conflict safety** — an object matched by two Requisitions is a blocking
+  **conflict**; Sync of every involved Requisition freezes until you resolve it,
+  so a node always lives in exactly one Foreign Source.
+- **Graded node status** — a member with no management IP becomes an
+  inventory-only node with a **warning**, not a silent skip.
+- **Dry-run before sync** — a per-node diff of exactly what a Sync would
+  add / remove / change against the live OpenNMS state.
+- **Honest background sync** — Sync/Remove run as NetBox **Jobs**; an OpenNMS
+  `202` is reported as *submitted for import*, never "provisioned"; a drift
+  reconciler cleans up only the requisitions the plugin owns.
 
 ## Compatibility
 
@@ -46,55 +56,42 @@ render-and-replace makes every re-sync idempotent and never duplicates a node.
 | OpenNMS | Horizon 36 |
 | License | MIT |
 
-## Installation
+## Quick start (try it in the browser)
 
-Install into the same Python environment as NetBox:
+Spin up a throwaway NetBox (UI + worker) **and** a disposable OpenNMS Horizon 36,
+then click **Sync to OpenNMS** and watch a node appear:
 
 ```bash
-pip install netbox-opennms-plugin
+cd quickstart
+docker compose --profile opennms up -d
 ```
 
-Enable the plugin and configure it in NetBox's `configuration.py`:
+The [`quickstart/`](quickstart/) stack is seeded with example Devices, VMs, and
+Requisitions so every path is clickable from the first boot.
+
+## Installation
+
+Install into the same Python environment as NetBox. A **PyPI** release is a
+fast-follow; until then, install from the tagged Git ref (or download the wheel
+from the [latest release](https://github.com/no42-org/netbox-opennms-plugin/releases)):
+
+```bash
+pip install "git+https://github.com/no42-org/netbox-opennms-plugin@v0.0.1"
+```
+
+Enable the plugin in NetBox's `configuration.py`:
 
 ```python
 PLUGINS = ["netbox_opennms"]
-
-PLUGINS_CONFIG = {
-    "netbox_opennms": {
-        # Base URL of the OpenNMS instance, including the context path.
-        "opennms_url": "https://opennms.example.org/opennms",
-        # A provisioning/REST role account (NOT stored on any NetBox model).
-        "opennms_username": "provision-svc",
-        "opennms_password": "********",          # use your secrets mechanism
-        # Default OpenNMS monitoring location for requisitions that don't set one.
-        # Empty means OpenNMS's built-in "Default" location.
-        "default_location": "",
-        # rescanExisting value passed to the import step: one of
-        # "true" | "false" | "dbonly".
-        "import_mode": "false",
-        # Periodic drift reconciler (hourly): clears OpenNMS Foreign Sources the
-        # plugin has pushed but NetBox no longer monitors — when a Requisition is
-        # renamed or deleted, or its last member leaves. Ownership is tracked per
-        # pushed Foreign Source, so it only ever touches requisitions the plugin
-        # created, never a foreign one. "true" / "false"; needs an RQ worker.
-        "reconcile_orphans": "true",
-    },
-}
 ```
 
-Then apply migrations and restart NetBox (and its worker):
+Apply migrations and restart NetBox **and its RQ worker**:
 
 ```bash
 python manage.py migrate
 ```
 
-### `import_mode` values
-
-| Value | Effect on import |
-| --- | --- |
-| `false` (default) | Import without rescanning nodes already known to OpenNMS. |
-| `true` | Import and rescan existing nodes (re-run detectors/policies). |
-| `dbonly` | Update the OpenNMS database only; do not schedule a scan. |
+Then set the OpenNMS connection — see [Configuration](#configuration).
 
 ### Kubernetes (Helm chart)
 
@@ -108,7 +105,8 @@ then reference that image and enable the plugin.
    ```dockerfile
    # Dockerfile
    FROM netboxcommunity/netbox:v4.6
-   RUN /opt/netbox/venv/bin/pip install netbox-opennms-plugin==0.1.0
+   RUN /opt/netbox/venv/bin/pip install \
+       "git+https://github.com/no42-org/netbox-opennms-plugin@v0.0.1"
    ```
 
    ```bash
@@ -152,14 +150,48 @@ Keep `opennms_password` out of plaintext values — load the plugin config from 
 `Secret` via the chart's `extraConfig`. On upgrades, rebuild the image with the
 new plugin version, bump `image.tag`, and `helm upgrade`.
 
-## Try it (Web UI)
+## Configuration
 
-For a throwaway NetBox deployment with the plugin installed — to click **Sync to
-OpenNMS** in the browser and watch a node appear — see
-[`quickstart/`](quickstart/): `docker compose --profile opennms up -d`
-brings up NetBox (UI + worker) **and** a disposable OpenNMS Horizon 36.
+Configure the OpenNMS connection and behaviour in `PLUGINS_CONFIG`. Credentials
+are read at runtime and are **never stored on a NetBox model**.
 
-## Running the sync worker
+```python
+PLUGINS_CONFIG = {
+    "netbox_opennms": {
+        # Base URL of the OpenNMS instance, including the context path.
+        "opennms_url": "https://opennms.example.org/opennms",
+        # A provisioning/REST role account (NOT stored on any NetBox model).
+        "opennms_username": "provision-svc",
+        "opennms_password": "********",          # use your secrets mechanism
+        # Default OpenNMS monitoring location for requisitions that don't set one.
+        # Empty means OpenNMS's built-in "Default" location.
+        "default_location": "",
+        # rescanExisting value passed to the import step: one of
+        # "true" | "false" | "dbonly".
+        "import_mode": "false",
+        # Periodic drift reconciler (hourly): clears OpenNMS Foreign Sources the
+        # plugin has pushed but NetBox no longer monitors — when a Requisition is
+        # renamed or deleted, or its last member leaves. Ownership is tracked per
+        # pushed Foreign Source, so it only ever touches requisitions the plugin
+        # created, never a foreign one. "true" / "false"; needs an RQ worker.
+        "reconcile_orphans": "true",
+    },
+}
+```
+
+You can verify the configured connection from the UI at **Plugins → NetBox
+OpenNMS → Connect OpenNMS** (permission-gated; it tests the configured
+connection and never persists credentials).
+
+### `import_mode` values
+
+| Value | Effect on import |
+| --- | --- |
+| `false` (default) | Import without rescanning nodes already known to OpenNMS. |
+| `true` | Import and rescan existing nodes (re-run detectors/policies). |
+| `dbonly` | Update the OpenNMS database only; do not schedule a scan. |
+
+### Running the sync worker
 
 Sync, Remove, and Move run as NetBox **background Jobs** — they never block the
 request, and a bare OpenNMS `202 ACCEPTED` is reported honestly as *submitted for
@@ -176,7 +208,41 @@ succeeded-accepted / removed / failed, with the triggering user, time, and any
 error) is shown on the **Device/VM detail page**, backed by the NetBox Job log as
 the audit trail.
 
-## OpenNMS-side setup
+## How it works
+
+You author a **Requisition** — one user-named OpenNMS Foreign Source — that owns
+its OpenNMS **detectors** and **policies** (discovered live from your OpenNMS
+instance, with a curated preset overlay for labels/defaults, or a freeform class),
+a set of declared **services** (e.g. ICMP, SNMP), and a live
+NetBox **filter** that selects its member Devices/VMs (by role, tag, site, status,
+custom field, …). Every member is monitored: its management IP is its **primary
+IP** unless overridden, OpenNMS auto-discovers services via the detectors, and the
+declared services are the guaranteed-present floor. A per-object **Monitoring
+Override** is the escape hatch (exclude an object, pin a different management IP,
+add extra interfaces — each with an SNMP role of **Primary / Secondary /
+Not-eligible** (`snmp-primary` P/S/N; at most one Primary per node) — add/suppress
+a service, or change its location).
+
+Requisition filters must be **disjoint**: an object matched by more than one
+Requisition's filter is a **conflict** — Sync of every involved Requisition is
+blocked (their OpenNMS state stays untouched) until you resolve the overlap, so a
+node always lives in exactly one Foreign Source and nothing ever moves or
+disappears implicitly. A **dry-run** shows, per node, exactly what a Sync would
+add / remove / change against the live OpenNMS state before you commit.
+
+Per-node status is **graded**: a **Critical** (red) — a filter conflict — **blocks
+Sync**; a **Warning** (yellow) is advisory and does **not**. A member with **no
+management IP** is a Warning: rather than silently skipping it, the plugin
+provisions an **inventory-only node with no IP interface** (it will not be actively
+monitored) and surfaces the warning in the Sync preview, the dry-run, and the
+Device/VM page — exclude the object if you don't want it in OpenNMS at all.
+
+**Sync** renders the complete OpenNMS *foreign-source definition* + *requisition*
+and imports it. Membership is a live NetBox query, so adding/removing a Device or
+changing an attribute the filter matches simply re-resolves the Requisition;
+render-and-replace makes every re-sync idempotent and never duplicates a node.
+
+### OpenNMS-side setup
 
 The plugin writes requisitions; it does **not** configure OpenNMS polling. For
 monitoring to actually happen:
@@ -211,7 +277,7 @@ monitoring to actually happen:
   OpenNMS, but cannot create it. The built-in `Default` location is polled by the
   OpenNMS core (no Minion required).
 
-## Requisitions, membership, and node identity
+### Requisitions, membership, and node identity
 
 A **Requisition**'s name *is* its OpenNMS Foreign Source name — user-chosen (it
 must be Foreign-Source- and URL-path-safe: no whitespace or `# % & + ? / \ : * ' "`),
@@ -263,6 +329,12 @@ on demand — it boots a throwaway OpenNMS and is skipped by `make verify` unles
 `make` targets run NetBox in a throwaway Postgres/Redis container, so no local
 NetBox install is needed. Set `DEVELOPER = True` in NetBox's `configuration.py`
 if you run `makemigrations` outside the harness.
+
+## Contributing
+
+Issues and pull requests are welcome. Before opening a PR, run `make verify`
+(ruff + the full test suite) — CI runs the same Makefile targets, so local and CI
+stay identical. New or edited source files must carry an SPDX header.
 
 ## License
 

@@ -9,6 +9,9 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 ![NetBox 4.6.1+](https://img.shields.io/badge/NetBox-4.6.1%2B-blue)
 ![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-blue)
+[![Docs](https://img.shields.io/badge/docs-contributor%20guide-0d9488)](https://no42-org.github.io/netbox-opennms-plugin/)
+
+📖 **[Documentation & contributor guide →](https://no42-org.github.io/netbox-opennms-plugin/)**
 
 ![NetBox OpenNMS — Requisition detail](docs/img/requisition.png)
 
@@ -67,7 +70,9 @@ docker compose --profile opennms up -d
 ```
 
 The [`quickstart/`](quickstart/) stack is seeded with example Devices, VMs, and
-Requisitions so every path is clickable from the first boot.
+Requisitions, so every path is clickable from the first boot. Full walkthrough —
+seeding, dry-run, and Sync — in the
+**[Quickstart guide](https://no42-org.github.io/netbox-opennms-plugin/quickstart.html)**.
 
 ## Installation
 
@@ -306,35 +311,21 @@ Device only relabels it (never a duplicate). Moving an object between Requisitio
 the per-node **dry-run** surfaces such moves — and every add / remove / change
 against the live OpenNMS state — before you Sync.
 
-## Development
+## Development & contributing
+
+Full project-structure, build, dev-environment, testing, and release docs live in
+the **[contributor guide](https://no42-org.github.io/netbox-opennms-plugin/)**. The
+short version:
 
 ```bash
-# Editable install against a local NetBox checkout
-pip install -e .
-
-# Reproducible test stack (Docker) — see compose.yml / Makefile
-make verify          # ruff lint + full test suite
-make test            # tests only
-make makemigrations  # generate + verify migrations
-make build           # build the wheel + sdist into dist/
+pip install -e .     # editable install
+make verify          # ruff lint + full unit suite (what CI gates on)
 make integration     # live round-trip against a disposable OpenNMS Horizon 36
 ```
 
-CI (GitHub Actions, `.github/workflows/ci.yml`) runs `make verify` (matrixed over
-the supported NetBox version) and `make build` (asserting the wheel ships its
-templates) on every PR. The live `make integration` round-trip runs nightly /
-on demand — it boots a throwaway OpenNMS and is skipped by `make verify` unless
-`OPENNMS_LIVE_URL` is set, so the unit suite never depends on OpenNMS.
-
-`make` targets run NetBox in a throwaway Postgres/Redis container, so no local
-NetBox install is needed. Set `DEVELOPER = True` in NetBox's `configuration.py`
-if you run `makemigrations` outside the harness.
-
-## Contributing
-
-Issues and pull requests are welcome. Before opening a PR, run `make verify`
-(ruff + the full test suite) — CI runs the same Makefile targets, so local and CI
-stay identical. New or edited source files must carry an SPDX header.
+Before a PR: `make verify` green, [Conventional Commits](https://www.conventionalcommits.org/),
+**signed** commits (`git commit -s` + `commit.gpgsign`), and an SPDX header on every
+source file. CI runs the same Makefile targets, so local and CI stay identical.
 
 ## License
 

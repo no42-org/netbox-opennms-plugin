@@ -71,7 +71,8 @@ docker compose --profile opennms up -d
 
 The [`quickstart/`](quickstart/) stack is seeded with example Devices, VMs, and
 Requisitions, so every path is clickable from the first boot. Full walkthrough —
-seeding, dry-run, and Sync — in the **[Quickstart guide](docs/quickstart.md)**.
+seeding, dry-run, and Sync — in the
+**[Quickstart guide](https://no42-org.github.io/netbox-opennms-plugin/quickstart.html)**.
 
 ## Installation
 

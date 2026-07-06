@@ -182,32 +182,102 @@ make integration-spike</code></pre>
     <p class="sec-intro">
       To click through a real feature — author a Requisition, add detectors/policies,
       dry-run, and Sync a node into OpenNMS — bring up the seeded quickstart stack:
-      NetBox (UI + worker) <em>and</em> a disposable OpenNMS.
+      NetBox (UI + worker) <em>and</em> a disposable OpenNMS Horizon 36. It lives in
+      <a href="https://github.com/no42-org/netbox-opennms-plugin/tree/main/quickstart">quickstart/</a>.
     </p>
-<pre><code>cd quickstart
-docker compose --profile opennms up -d          # NetBox + worker + OpenNMS Horizon 36
-docker compose exec -T netbox \
-  /opt/netbox/venv/bin/python manage.py shell &lt; seed.py   # seed demo devices/VMs/requisitions</code></pre>
+    <div class="note">
+      <b>⚠ For testing only</b> — fixed throwaway secrets, no TLS, ephemeral data.
+      Not for production.
+    </div>
+
+    <h3>Run it</h3>
+    <p>From the repo's <code>quickstart/</code> directory:</p>
+<pre><code># NetBox UI + background worker only (point the plugin at your own OpenNMS)
+docker compose up -d
+
+# …or the full self-contained loop incl. a disposable OpenNMS Horizon 36
+docker compose --profile opennms up -d</code></pre>
     <p>
-      Then open <code>http://localhost:8000/</code> (admin / admin) → <b>Plugins →
-      NetBox OpenNMS</b>:
+      First boot runs migrations, creates the superuser, and initializes OpenNMS's
+      schema, so allow a few minutes (<code>docker compose ps</code> until healthy;
+      <code>docker compose logs -f netbox</code> to watch).
     </p>
-    <ul>
-      <li><b>Connect OpenNMS</b> — verify NetBox can reach the configured OpenNMS.</li>
-      <li>Open a <b>Requisition</b>, use the panel <b>Add</b> buttons to attach
-        detectors, policies, asset mappings, and metadata.</li>
-      <li><b>Dry run</b> to preview the per-node diff, then <b>Sync to OpenNMS</b> and
-        watch the node appear in OpenNMS.</li>
-    </ul>
+    <table>
+      <tr><th>Service</th><th>URL</th><th>Login</th></tr>
+      <tr><td>NetBox</td><td><code>http://localhost:8000</code></td><td><code>admin</code> / <code>admin</code></td></tr>
+      <tr><td>OpenNMS <span style="color:var(--g500)">(with <code>--profile opennms</code>)</span></td><td><code>http://localhost:8980/opennms</code></td><td><code>admin</code> / <code>admin</code></td></tr>
+    </table>
+
+    <h3>Seed test data</h3>
+    <p>Load sample Devices, VMs, and Requisitions so there's something to sync
+      immediately (idempotent — everything is <code>get_or_create</code>'d):</p>
+<pre><code>./seed.sh
+# …or:  docker compose exec -T netbox \
+#         /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py shell &lt; seed.py</code></pre>
+    <p>
+      It builds 3 sites × a few roles, devices with multiple interfaces + additional
+      IPs, VMs on a site-scoped cluster, and 5 Requisitions (each a site+role filter
+      with inline detectors and declared services) — including a multi-node Foreign
+      Source mixing devices <b>and</b> VMs, a requisition with an OpenNMS-unknown
+      location (trips the no-Minion warning), per-object overrides, and one
+      unmonitored object. Edit
+      <a href="https://github.com/no42-org/netbox-opennms-plugin/blob/main/quickstart/seed.py"><code>seed.py</code></a>
+      to taste.
+    </p>
     <figure>
       <img src="img/requisition.png" alt="A Requisition detail page with detectors, policies, asset mappings and metadata">
       <figcaption>A Requisition with its detectors, policies, asset mappings and metadata.</figcaption>
     </figure>
+
+    <h3>Do a sync (Web UI)</h3>
+    <p>Open <code>http://localhost:8000/</code> (admin / admin) → <b>Plugins → NetBox
+      OpenNMS</b>:</p>
+    <ol>
+      <li><em>(or run <code>./seed.sh</code> and skip to step 4)</em> Create the
+        prerequisites (a Site, Device Role, Manufacturer + Device Type, then a
+        <b>Device</b> with a <b>primary IP</b>).</li>
+      <li><b>Requisitions → Add</b>: name it (e.g. <code>core-switches</code>), set a
+        <b>filter</b> that selects your device — e.g.
+        <code>{"role": ["&lt;role-slug&gt;"]}</code> or <b>Import from Saved
+        Filter</b> — and use the panel <b>Add</b> buttons to attach detectors,
+        policies, asset mappings, and metadata.</li>
+      <li><b>Dry run</b> to preview, per node, exactly what a Sync would push.</li>
+      <li><b>Sync to OpenNMS</b> — the <b>OpenNMS Sync Status</b> panel shows
+        <code>submitted</code> → <code>succeeded-accepted</code> (the worker runs the
+        job); the node appears in OpenNMS under the Requisition's Foreign Source
+        name.</li>
+    </ol>
     <div class="note">
-      Full step-by-step walkthrough — seeding data, the Sync flow, pointing at your
-      own OpenNMS, and teardown — in the
-      <a href="quickstart.html"><b>Quickstart guide</b></a>.
+      Test connectivity first at <b>Connect OpenNMS</b>
+      (<code>/plugins/opennms/connection-test/</code>) — it probes reachability +
+      credentials before you sync.
     </div>
+
+    <h3>Point at your own OpenNMS</h3>
+    <p>
+      Edit
+      <a href="https://github.com/no42-org/netbox-opennms-plugin/blob/main/quickstart/configuration/plugins.py"><code>configuration/plugins.py</code></a>
+      — set <code>opennms_url</code>, <code>opennms_username</code>,
+      <code>opennms_password</code> — then <code>docker compose up -d</code> (no
+      <code>--profile opennms</code>). The plugin needs an account that can read/write
+      requisitions and trigger imports.
+    </p>
+
+    <h3>How it's wired</h3>
+    <ul>
+      <li>The plugin is <b>mounted</b> from the repo root
+        (<code>../ → /source</code>) on <code>PYTHONPATH</code> — no rebuild on code
+        changes; restart the <code>netbox</code> + <code>netbox-worker</code>
+        containers to pick them up.</li>
+      <li><code>netbox-worker</code> runs <code>manage.py rqworker</code> —
+        <b>required</b>, because Sync/Remove/Move run as background jobs.</li>
+      <li><code>configuration/plugins.py</code> is mounted at
+        <code>/etc/netbox/config/plugins.py</code> to set <code>PLUGINS</code> +
+        <code>PLUGINS_CONFIG</code>.</li>
+    </ul>
+
+    <h3>Tear down</h3>
+<pre><code>docker compose --profile opennms down -v      # -v also drops the data volumes</code></pre>
   </section>
 
   </main>

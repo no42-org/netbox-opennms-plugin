@@ -7,7 +7,7 @@ from netbox.plugins import PluginConfig
 # Single source of truth for the version: pyproject reads this via
 # [tool.setuptools.dynamic] (a top-level literal, AST-read at build time without
 # importing NetBox). PluginConfig.version also derives from it.
-__version__ = "0.0.1"
+__version__ = "0.0.2"
 
 
 class NetBoxOpenNMSConfig(PluginConfig):

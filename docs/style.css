@@ -1,5 +1,5 @@
 /* Copyright 2026 Ronny Trommer <ronny@no42.org> · SPDX-License-Identifier: MIT */
-/* Shared styling for the docs pages (index.html, quickstart.html). */
+/* Styling for the docs page (index.html). */
 /* Layout/typography inspired by Anthropic's "html-effectiveness" (Apache-2.0); independent reimplementation. */
 
 :root {

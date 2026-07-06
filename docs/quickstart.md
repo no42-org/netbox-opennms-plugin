@@ -10,7 +10,7 @@ disposable OpenNMS Horizon 36 so the whole loop is self-contained.
 
 ## Run it
 
-From this directory (`quickstart/`):
+From the repo's [`quickstart/`](../quickstart/) directory:
 
 ```bash
 # NetBox UI + background worker only (point the plugin at your own OpenNMS)
@@ -38,7 +38,7 @@ panel appears on Device/VM pages). Direct links:
 
 - Requisitions — http://localhost:8000/plugins/opennms/requisitions/
 - Sync preview — http://localhost:8000/plugins/opennms/sync/
-- OpenNMS connection test — http://localhost:8000/plugins/opennms/connection-test/
+- Connect OpenNMS — http://localhost:8000/plugins/opennms/connection-test/
 
 ## Seed test data
 
@@ -58,7 +58,7 @@ declared services) — including a multi-node Foreign Source mixing devices **an
 VMs (`netbox.raleigh.router`), a requisition with an OpenNMS-unknown location
 (trips the no-Minion warning), per-object overrides (an excluded object, a
 suppressed service, extra interfaces), and one unmonitored object. Edit
-[`seed.py`](./seed.py) to taste.
+[`seed.py`](../quickstart/seed.py) to taste.
 
 After seeding, **Plugins → Requisitions** lists them; try **Sync all** (or a
 per-requisition **Dry run** first), or change a device's role and re-sync to watch
@@ -88,7 +88,7 @@ it move between Foreign Sources.
 
 ## Point at your own OpenNMS
 
-Edit [`configuration/plugins.py`](./configuration/plugins.py) — set `opennms_url`,
+Edit [`configuration/plugins.py`](../quickstart/configuration/plugins.py) — set `opennms_url`,
 `opennms_username`, `opennms_password` — then `docker compose up -d` (no
 `--profile opennms`). The plugin needs an account that can read/write requisitions
 and trigger imports.

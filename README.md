@@ -77,11 +77,10 @@ seeding, dry-run, and Sync — in the
 ## Installation
 
 Install into the same Python environment as NetBox. A **PyPI** release is a
-fast-follow; until then, install from the tagged Git ref (or download the wheel
-from the [latest release](https://github.com/no42-org/netbox-opennms-plugin/releases)):
+fast-follow; until then, install from the tagged Git ref:
 
 ```bash
-pip install "git+https://github.com/no42-org/netbox-opennms-plugin@v0.0.1"
+pip install "git+https://github.com/no42-org/netbox-opennms-plugin@v0.0.2"
 ```
 
 Enable the plugin in NetBox's `configuration.py`:
@@ -101,26 +100,34 @@ Then set the OpenNMS connection — see [Configuration](#configuration).
 ### Kubernetes (Helm chart)
 
 The [`netbox-community/netbox`](https://github.com/netbox-community/netbox-chart)
-chart's base image does not include the plugin, so bake it into a custom image,
-then reference that image and enable the plugin.
+chart enables plugins that are **already installed in the image** — it has no
+runtime pip step — so bake the plugin into a custom image, then point the chart at
+it and enable it. (This is also netbox-docker's own current guidance. Installing a
+plugin at runtime by mounting it into the container is **not** supported here — the
+plugin's compiled `lxml` dependency makes a host-built, mounted package
+non-portable; see [netbox-docker#1071](https://github.com/netbox-community/netbox-docker/pull/1071).)
 
-1. Build an image with the plugin (match the NetBox version to the chart's
-   `appVersion`):
+1. Build an image with the plugin. Match the base image to a NetBox version the
+   plugin supports (**4.6.1+**) and to the chart's `appVersion`:
 
    ```dockerfile
    # Dockerfile
-   FROM netboxcommunity/netbox:v4.6
+   FROM netboxcommunity/netbox:v4.6      # NetBox 4.6.1+; keep in step with the chart appVersion
    RUN /opt/netbox/venv/bin/pip install \
-       "git+https://github.com/no42-org/netbox-opennms-plugin@v0.0.1"
+       "git+https://github.com/no42-org/netbox-opennms-plugin@v0.0.2"
    ```
+
+   The tagged Git ref is the install source available today. PyPI is a fast-follow
+   (then this becomes `pip install netbox-opennms-plugin==<version>`); for an
+   air-gapped build, `make build` a wheel and `COPY` it in instead.
 
    ```bash
    docker build -t registry.example.org/netbox-opennms:v4.6 .
    docker push registry.example.org/netbox-opennms:v4.6
    ```
 
-2. In `values.yaml`, point the chart at that image, enable the plugin, and turn
-   on the worker (the sync / drift-reconciler jobs need it):
+2. In `values.yaml`, point the chart at that image, enable the plugin, and enable
+   the worker:
 
    ```yaml
    image:
@@ -134,7 +141,7 @@ then reference that image and enable the plugin.
      netbox_opennms:
        opennms_url: "https://opennms.example.org/opennms"
        opennms_username: "provision-svc"
-       opennms_password: "********"     # prefer a Secret via extraConfig
+       opennms_password: "********"     # lab only — in production source from a Secret via extraConfig
        default_location: ""
        import_mode: "false"
        reconcile_orphans: "true"
@@ -143,7 +150,14 @@ then reference that image and enable the plugin.
      enabled: true
    ```
 
-3. Install or upgrade, then confirm the migrations ran:
+   **The worker must run the same plugin-bearing image.** The plugin's Sync and
+   drift-reconciler jobs run in the RQ worker; the chart's worker uses `image` by
+   default, so leave it unset. If the worker runs an image without the plugin, the
+   deploy succeeds and the UI works, but background jobs fail at dequeue with an
+   import error.
+
+3. Install or upgrade. The image entrypoint applies migrations on boot (no separate
+   `manage.py migrate`), so just confirm the plugin's migrations ran:
 
    ```bash
    helm repo add netbox https://netbox-community.github.io/netbox-chart/

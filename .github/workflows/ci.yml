@@ -6,8 +6,6 @@ on:
   pull_request:
   push:
     branches: [main]
-  schedule:
-    - cron: "0 3 * * *"  # nightly — runs the live integration job
   workflow_dispatch:
 
 permissions:
@@ -61,9 +59,6 @@ jobs:
     runs-on: ubuntu-latest
     # Bound the run — OpenNMS boot is slow and the healthcheck can loop a while.
     timeout-minutes: 30
-    # Not PR-gating: a live external service must not flake-block merges. Runs
-    # nightly and on demand.
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
       - name: make integration

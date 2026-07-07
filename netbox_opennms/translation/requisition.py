@@ -13,12 +13,22 @@ services (reverses v1's AD-11 empty ``<detectors/>``), alongside the declared
 services the membership layer places on each interface.
 """
 
-from lxml import etree
+from xml.etree import ElementTree as etree
 
 from ..choices import InterfaceRoleChoices
 
 MODEL_IMPORT_NS = "http://xmlns.opennms.org/xsd/config/model-import"
 FOREIGN_SOURCE_NS = "http://xmlns.opennms.org/xsd/config/foreign-source"
+
+# ElementTree's prefix registry is process-global, and only one namespace can own
+# the empty (default) prefix. The high-volume requisition keeps it, so model-import
+# output stays byte-identical to the previous lxml rendering (``xmlns="…"``, no
+# prefix); the foreign-source definition takes an explicit ``fs:`` prefix. OpenNMS
+# unmarshals by namespace URI (JAXB), so the prefix is cosmetic on the wire.
+# Registered once at import — no per-call global mutation, so the renderers below
+# stay pure and thread-safe.
+etree.register_namespace("", MODEL_IMPORT_NS)
+etree.register_namespace("fs", FOREIGN_SOURCE_NS)
 
 
 class RenderError(Exception):
@@ -58,9 +68,7 @@ def render_requisition(foreign_source, nodes, date_stamp=None, default_location=
     non-primary (``N``). A node's location falls back to ``default_location``
     (passed in for purity). Returns bytes.
     """
-    root = etree.Element(
-        f"{{{MODEL_IMPORT_NS}}}model-import", nsmap={None: MODEL_IMPORT_NS}
-    )
+    root = etree.Element(f"{{{MODEL_IMPORT_NS}}}model-import")
     root.set("foreign-source", foreign_source)
     if date_stamp is not None:
         root.set("date-stamp", date_stamp)
@@ -120,9 +128,7 @@ def render_foreign_source_definition(foreign_source, requisition, date_stamp=Non
     OpenNMS links a definition to a requisition by name, and a mismatch silently
     falls back to OpenNMS's built-in default detectors. Returns bytes.
     """
-    root = etree.Element(
-        f"{{{FOREIGN_SOURCE_NS}}}foreign-source", nsmap={None: FOREIGN_SOURCE_NS}
-    )
+    root = etree.Element(f"{{{FOREIGN_SOURCE_NS}}}foreign-source")
     root.set("name", foreign_source)
     if date_stamp is not None:
         root.set("date-stamp", date_stamp)

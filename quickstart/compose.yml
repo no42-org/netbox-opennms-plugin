@@ -8,8 +8,9 @@
 # OpenNMS UI: http://localhost:8980/opennms   (admin / admin, with --profile opennms)
 #
 # The plugin is mounted from the repo (../) and put on PYTHONPATH, so the
-# image's bundled deps (requests, lxml) are reused — no rebuild. For a real
-# deployment you would `pip install netbox-opennms-plugin` into a custom image.
+# image's bundled `requests` is reused — no rebuild (the plugin is otherwise
+# pure-Python/stdlib). For a real deployment you would `pip install
+# netbox-opennms-plugin` into a custom image.
 name: netbox-opennms-example
 
 x-netbox-env: &netbox-env

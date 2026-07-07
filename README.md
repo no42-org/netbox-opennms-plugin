@@ -102,10 +102,14 @@ Then set the OpenNMS connection — see [Configuration](#configuration).
 The [`netbox-community/netbox`](https://github.com/netbox-community/netbox-chart)
 chart enables plugins that are **already installed in the image** — it has no
 runtime pip step — so bake the plugin into a custom image, then point the chart at
-it and enable it. (This is also netbox-docker's own current guidance. Installing a
-plugin at runtime by mounting it into the container is **not** supported here — the
-plugin's compiled `lxml` dependency makes a host-built, mounted package
-non-portable; see [netbox-docker#1071](https://github.com/netbox-community/netbox-docker/pull/1071).)
+it and enable it. (This is also netbox-docker's own current guidance.) Installing a
+plugin at runtime by mounting it into the container is **not** a supported path:
+netbox-docker declined to add runtime-mounted plugins
+([PR #1071](https://github.com/netbox-community/netbox-docker/pull/1071)) in favour
+of build-time images, because a container should be fully defined at build time and
+plugins that ship static assets need `collectstatic` to run during the build. (The
+plugin itself is pure-Python, so it is not the constraint — this is about the chart
+and netbox-docker, not the package.)
 
 1. Build an image with the plugin. Match the base image to a NetBox version the
    plugin supports (**4.6.1+**) and to the chart's `appVersion`:

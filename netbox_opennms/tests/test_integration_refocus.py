@@ -32,9 +32,9 @@ import os
 import time
 import unittest
 from urllib.parse import quote
+from xml.etree import ElementTree as etree
 
 import requests
-from lxml import etree
 from requests.auth import HTTPBasicAuth
 
 from netbox_opennms.client import OpenNMSClient
@@ -128,7 +128,7 @@ class RefocusSpikeH36(unittest.TestCase):
     # --- XML builders (hand-built; RD-2/RD-3 rendering not built yet) ------
 
     def _model_import(self):
-        root = etree.Element(_q("model-import"), nsmap={None: NS})
+        root = etree.Element(_q("model-import"))
         root.set("foreign-source", FS)
         root.set("date-stamp", DATE_STAMP)
         return root

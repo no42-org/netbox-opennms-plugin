@@ -26,14 +26,13 @@ classifiers = [
 # NetBox itself is the host application and is NOT declared here.
 dependencies = [
     "requests>=2.34",
-    "lxml>=6.1",
 ]
 
 [project.urls]
-Homepage = "https://github.com/no42-org/netbox-onms"
-Documentation = "https://github.com/no42-org/netbox-onms#readme"
-Source = "https://github.com/no42-org/netbox-onms"
-Tracker = "https://github.com/no42-org/netbox-onms/issues"
+Homepage = "https://github.com/no42-org/netbox-opennms-plugin"
+Documentation = "https://github.com/no42-org/netbox-opennms-plugin#readme"
+Source = "https://github.com/no42-org/netbox-opennms-plugin"
+Tracker = "https://github.com/no42-org/netbox-opennms-plugin/issues"
 
 [tool.setuptools.dynamic]
 version = { attr = "netbox_opennms.__version__" }

@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: MIT
 """Tests for the pure render layer (Epic 5): requisition + foreign-source def."""
 
+from xml.etree import ElementTree as etree
+
 from django.test import SimpleTestCase, TestCase
-from lxml import etree
 
 from netbox_opennms.membership import InterfaceSpec, NodeSpec
 from netbox_opennms.models import (

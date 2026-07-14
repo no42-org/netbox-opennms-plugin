@@ -17,10 +17,3 @@ updates:
       - "/quickstart"
     schedule:
       interval: "weekly"
-    ignore:
-      # A PostgreSQL major bump is a deliberate migration, not a routine
-      # update: the postgres:18 image moved PGDATA (breaks our
-      # /var/lib/postgresql/data mounts) and quickstart's persistent PG16
-      # volume needs pg_upgrade. See #40/#43.
-      - dependency-name: "postgres"
-        update-types: ["version-update:semver-major"]

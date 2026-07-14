@@ -3,13 +3,15 @@
 # are fixed throwaway values for the test DB only. See the Makefile for targets.
 services:
   postgres:
-    image: postgres:16
+    image: postgres:18
     environment:
       POSTGRES_DB: netbox
       POSTGRES_USER: netbox
       POSTGRES_PASSWORD: netbox
     tmpfs:
-      - /var/lib/postgresql/data
+      # postgres:18 moved PGDATA below /var/lib/postgresql (not .../data), so the
+      # ephemeral mount covers the parent — it matches the image's declared volume.
+      - /var/lib/postgresql
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "netbox", "-d", "netbox"]
       interval: 2s

@@ -33,13 +33,14 @@ x-netbox-env: &netbox-env
 
 services:
   postgres:
-    image: postgres:16
+    image: postgres:18
     environment:
       POSTGRES_DB: netbox
       POSTGRES_USER: netbox
       POSTGRES_PASSWORD: netbox
     volumes:
-      - netbox-postgres:/var/lib/postgresql/data
+      # postgres:18 moved PGDATA below /var/lib/postgresql, so mount the parent.
+      - netbox-postgres-pg18:/var/lib/postgresql
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "netbox", "-d", "netbox"]
       interval: 5s
@@ -96,13 +97,13 @@ services:
 
   # --- optional: a disposable OpenNMS Horizon 36 (docker compose --profile opennms) ---
   opennms-db:
-    image: postgres:16
+    image: postgres:18
     profiles: ["opennms"]
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
     tmpfs:
-      - /var/lib/postgresql/data
+      - /var/lib/postgresql
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "postgres"]
       interval: 5s
@@ -140,5 +141,9 @@ services:
       start_period: 180s
 
 volumes:
-  netbox-postgres:
+  # Renamed from netbox-postgres on the PG16→18 bump: PG18 cannot open PG16 data
+  # files, so existing demos start fresh instead of crashing. An old
+  # netbox-postgres volume is left untouched — dump it with a postgres:16
+  # container if you still need the data, or `docker volume rm` it.
+  netbox-postgres-pg18:
   netbox-media:

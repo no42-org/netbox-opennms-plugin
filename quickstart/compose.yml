@@ -33,7 +33,7 @@ x-netbox-env: &netbox-env
 
 services:
   postgres:
-    image: postgres:16
+    image: postgres:18
     environment:
       POSTGRES_DB: netbox
       POSTGRES_USER: netbox
@@ -96,7 +96,7 @@ services:
 
   # --- optional: a disposable OpenNMS Horizon 36 (docker compose --profile opennms) ---
   opennms-db:
-    image: postgres:16
+    image: postgres:18
     profiles: ["opennms"]
     environment:
       POSTGRES_USER: postgres

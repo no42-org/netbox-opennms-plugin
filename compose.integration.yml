@@ -7,7 +7,7 @@
 #   docker compose -f compose.yml -f compose.integration.yml run --rm netbox '<cmd>'
 services:
   opennms-db:
-    image: postgres:16
+    image: postgres:18
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres

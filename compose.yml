@@ -3,7 +3,7 @@
 # are fixed throwaway values for the test DB only. See the Makefile for targets.
 services:
   postgres:
-    image: postgres:16
+    image: postgres:18
     environment:
       POSTGRES_DB: netbox
       POSTGRES_USER: netbox

@@ -9,7 +9,11 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
-  - package-ecosystem: "docker"
-    directory: "/"
+  # The repo has no Dockerfiles — container images are pinned in Compose files,
+  # which the "docker" ecosystem does not scan (it fails the update job).
+  - package-ecosystem: "docker-compose"
+    directories:
+      - "/"
+      - "/quickstart"
     schedule:
       interval: "weekly"

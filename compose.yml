@@ -17,7 +17,7 @@ services:
       retries: 30
 
   redis:
-    image: redis:7-alpine
+    image: redis:8-alpine
 
   netbox:
     # NETBOX_VERSION lets CI matrix over supported tags; default keeps local runs

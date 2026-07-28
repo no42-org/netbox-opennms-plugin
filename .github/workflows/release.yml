@@ -106,6 +106,45 @@ jobs:
           output-file: dist/sbom.spdx.json
           upload-artifact: false
           upload-release-assets: false
+      # Post-process syft's output:
+      # 1. Drop the SPDX "document root" package it emits for the scanned
+      #    folder — scaffolding, not a shipped component; it renders as a
+      #    license-less entry in the report. Re-point DOCUMENT DESCRIBES at
+      #    the real packages it contained.
+      # 2. Normalize supplier/originator/homepage — syft copies the wheel's
+      #    Author (a person) into both party fields and leaves homepage unset.
+      - name: Normalize the SBOM
+        run: |
+          python3 - <<'PY'
+          import json
+          path = "dist/sbom.spdx.json"
+          d = json.load(open(path))
+          roots = {p["SPDXID"] for p in d["packages"]
+                   if p["SPDXID"].startswith("SPDXRef-DocumentRoot-")}
+          assert roots, "no document-root package found — syft output changed?"
+          d["packages"] = [p for p in d["packages"] if p["SPDXID"] not in roots]
+          rels, described = [], []
+          for r in d.get("relationships", []):
+              a, b, t = (r["spdxElementId"], r["relatedSpdxElement"],
+                         r["relationshipType"])
+              if a in roots and t == "CONTAINS":
+                  described.append(b)
+                  continue
+              if a in roots or b in roots:
+                  continue
+              rels.append(r)
+          rels += [{"spdxElementId": "SPDXRef-DOCUMENT",
+                    "relationshipType": "DESCRIBES",
+                    "relatedSpdxElement": x} for x in described]
+          d["relationships"] = rels
+          for p in d["packages"]:
+              p["supplier"] = "Organization: No42.org (ronny@no42.org)"
+              p["originator"] = "Organization: No42.org"
+              p["homepage"] = "https://github.com/no42-org/netbox-opennms-plugin"
+          json.dump(d, open(path, "w"), indent=1)
+          print(f"stripped {sorted(roots)}; document describes {described}; "
+                f"supplier/originator/homepage normalized to No42.org")
+          PY
       # Self-contained offline HTML rendering of the SBOM. Written into dist/
       # so it is attested and attached to the release like the JSON SBOM.
       # version/project/commit/build-url default from the workflow context.

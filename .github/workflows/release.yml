@@ -99,6 +99,22 @@ jobs:
           output-file: dist/sbom.spdx.json
           upload-artifact: false
           upload-release-assets: false
+      # Self-contained offline HTML rendering of the SBOM. Written into dist/
+      # so it is attested and attached to the release like the JSON SBOM.
+      # version/project/commit/build-url default from the workflow context.
+      - name: HTML SBOM report
+        id: sbom-report
+        uses: no42-org/blitsbom/report@38567e05bf41bd3348d928b657eca0efeeaa7db6  # v0.4.0
+        with:
+          sbom: dist/sbom.spdx.json
+          output: dist/sbom-report.html
+          # Generator image pinned by digest to match the action version.
+          image: ghcr.io/no42-org/blitsbom@sha256:40d888fa2cc7e8aa2c0f63268bbe06c0c9a8742c1aa9c6b86abfbe1ebce39741  # v0.4.0 (tag report-0.4.0)
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: sbom-report
+          path: ${{ steps.sbom-report.outputs.report }}
+          if-no-files-found: error
       - name: Attest build provenance
         uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373  # v4.1.1
         with:

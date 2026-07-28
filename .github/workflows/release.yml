@@ -92,10 +92,17 @@ jobs:
         with:
           name: dist
           path: dist/
+      # The SBOM must describe the shipped wheel, not the source checkout — a
+      # directory scan catalogs .github/workflows/ actions (syft's
+      # github-actions cataloger) and misses the plugin itself, which has no
+      # installed dist-info metadata in a source tree. Extract the wheel and
+      # scan its contents instead.
+      - name: Extract wheel for SBOM scan
+        run: python3 -m zipfile -e dist/*.whl wheel-contents/
       - name: SBOM
         uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610  # v0.24.0
         with:
-          path: .
+          path: wheel-contents
           output-file: dist/sbom.spdx.json
           upload-artifact: false
           upload-release-assets: false

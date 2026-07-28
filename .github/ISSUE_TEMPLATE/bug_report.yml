@@ -1,0 +1,47 @@
+name: Bug report
+description: Something doesn't work as documented
+labels: [bug, triage]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, what happened instead?
+      placeholder: Synced requisition "core-routers" and …
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Create a Requisition with filter …
+        2. Run Sync
+        3. …
+    validations:
+      required: true
+  - type: input
+    id: plugin-version
+    attributes:
+      label: Plugin version
+      placeholder: "0.0.4"
+    validations:
+      required: true
+  - type: input
+    id: netbox-version
+    attributes:
+      label: NetBox version
+      placeholder: "4.6.1"
+    validations:
+      required: true
+  - type: input
+    id: opennms-version
+    attributes:
+      label: OpenNMS version
+      placeholder: "Horizon 36.0.2"
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: NetBox job output / worker logs. Redact credentials and internal hostnames.
+      render: text

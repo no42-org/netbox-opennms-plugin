@@ -20,12 +20,20 @@ dynamically.
    workflow filename `release.yml` and the `pypi` environment. Renaming
    either breaks OIDC authentication until the binding on pypi.org is
    updated.
-5. The workflow asserts the tag matches `__version__`, builds the wheel +
-   sdist with `make build`, verifies the wheel ships the plugin templates,
-   and publishes to [PyPI](https://pypi.org/project/netbox-opennms-plugin/)
-   via **Trusted Publishing** (OIDC — no API token secrets).
+5. The workflow asserts the tag matches `__version__`, runs the full quality
+   gates (`make verify`, `make build`, wheel-template check, workflow lint —
+   the same reusable gates CI enforces on PRs), publishes to
+   [PyPI](https://pypi.org/project/netbox-opennms-plugin/) via **Trusted
+   Publishing** (OIDC — no API token secrets), and attaches the wheel, sdist
+   and an SPDX SBOM (`sbom.spdx.json`) to the GitHub Release.
 
 ## Provenance
+
+Release artifacts carry SLSA build provenance
+(`actions/attest-build-provenance`), verifiable with:
+
+    gh attestation verify netbox_opennms_plugin-X.Y.Z-py3-none-any.whl \
+      --repo no42-org/netbox-opennms-plugin
 
 Uploads use `pypa/gh-action-pypi-publish`, which generates
 [PEP 740](https://peps.python.org/pep-0740/) publish attestations. Each file's

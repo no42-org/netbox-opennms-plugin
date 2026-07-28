@@ -1,0 +1,84 @@
+# Quality gates, defined ONCE and shared by the CI and Release workflows — a
+# release can never publish through a gate PRs enforce. Jobs call Makefile
+# targets only, so local and CI stay identical.
+name: Quality gates
+on:
+  workflow_call:
+    inputs:
+      upload-dist:
+        description: Upload the built dist/ as a workflow artifact (release publishing)
+        type: boolean
+        default: false
+permissions:
+  contents: read
+jobs:
+  verify:
+    name: Lint + test (NetBox ${{ matrix.netbox }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        netbox: ["v4.6"]  # supported line; add tags here to widen the matrix
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - name: make verify
+        run: make verify
+        env:
+          NETBOX_VERSION: ${{ matrix.netbox }}
+
+  build:
+    name: Build + verify wheel ships templates
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - name: make build
+        run: make build
+      - name: Assert the wheel contains the templates
+        run: |
+          python3 - <<'PY'
+          import glob, sys, zipfile
+          wheel = sorted(glob.glob("dist/*.whl"))[-1]
+          names = set(zipfile.ZipFile(wheel).namelist())
+          required = [
+              "netbox_opennms/templates/netbox_opennms/requisition.html",
+              "netbox_opennms/templates/netbox_opennms/dry_run.html",
+              "netbox_opennms/templates/netbox_opennms/monitoringoverride.html",
+              "netbox_opennms/templates/netbox_opennms/sync_preview.html",
+              "netbox_opennms/templates/netbox_opennms/connection_test.html",
+              "netbox_opennms/templates/netbox_opennms/inc/sync_status_panel.html",
+          ]
+          missing = [r for r in required if r not in names]
+          if missing:
+              sys.exit(f"wheel is missing templates: {missing}")
+          print(f"ok: all templates present in {wheel}")
+          PY
+      - if: ${{ inputs.upload-dist }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  lint-workflows:
+    name: Lint workflows (actionlint + zizmor)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      # docker:// refs pin by image digest, not commit SHA.
+      - uses: docker://rhysd/actionlint@sha256:9d36088643581e728c969f35141f88139fec77280b2be23c1f66f8e40e1025e7  # v1.7.12
+        with:
+          args: -color
+      # advanced-security off: plain findings instead of a SARIF upload, so the
+      # gate also passes on Dependabot's read-only token (no security-events).
+      - uses: zizmorcore/zizmor-action@6fc4b006235f201fdab3722e17240ab420d580e5  # v0.6.1
+        with:
+          advanced-security: "false"

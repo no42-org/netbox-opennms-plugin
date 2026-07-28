@@ -1,14 +1,20 @@
 # Keep SHA-pinned GitHub Actions and the Python dependencies current (Story 4.4).
+# The 7-day cooldown lets upstream compromises be caught and yanked before a
+# bump PR pulls them in (zizmor: dependabot-cooldown).
 version: 2
 updates:
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 7
   - package-ecosystem: "pip"
     directory: "/"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 7
   # The repo has no Dockerfiles — container images are pinned in Compose files,
   # which the "docker" ecosystem does not scan (it fails the update job).
   - package-ecosystem: "docker-compose"
@@ -17,3 +23,5 @@ updates:
       - "/quickstart"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 7

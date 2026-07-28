@@ -1,65 +1,31 @@
-# CI for netbox-opennms-plugin (Story 4.4). Jobs call Makefile targets only, so
-# local and CI stay identical; `make verify` brings Postgres + Redis via compose.
+# CI for netbox-opennms-plugin. Lint/test/build live in the reusable
+# quality-gates workflow (shared with Release); only the slow live-OpenNMS
+# round-trip is CI-specific.
 name: CI
-
 on:
   pull_request:
   push:
     branches: [main]
   workflow_dispatch:
-
 permissions:
   contents: read
-
+# Supersede in-flight runs for the same ref; a force-push shouldn't leave
+# stale jobs consuming runners.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
-  verify:
-    name: Lint + test (NetBox ${{ matrix.netbox }})
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        netbox: ["v4.6"]  # supported line; add tags here to widen the matrix
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
-      - name: make verify
-        run: make verify
-        env:
-          NETBOX_VERSION: ${{ matrix.netbox }}
-
-  build:
-    name: Build + verify wheel ships templates
-    runs-on: ubuntu-latest
-    needs: verify
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
-      - name: make build
-        run: make build
-      - name: Assert the wheel contains the templates
-        run: |
-          python3 - <<'PY'
-          import glob, sys, zipfile
-          wheel = sorted(glob.glob("dist/*.whl"))[-1]
-          names = set(zipfile.ZipFile(wheel).namelist())
-          required = [
-              "netbox_opennms/templates/netbox_opennms/requisition.html",
-              "netbox_opennms/templates/netbox_opennms/dry_run.html",
-              "netbox_opennms/templates/netbox_opennms/monitoringoverride.html",
-              "netbox_opennms/templates/netbox_opennms/sync_preview.html",
-              "netbox_opennms/templates/netbox_opennms/connection_test.html",
-              "netbox_opennms/templates/netbox_opennms/inc/sync_status_panel.html",
-          ]
-          missing = [r for r in required if r not in names]
-          if missing:
-              sys.exit(f"wheel is missing templates: {missing}")
-          print(f"ok: all templates present in {wheel}")
-          PY
+  gates:
+    uses: ./.github/workflows/quality-gates.yml
 
   integration:
     name: Live OpenNMS Horizon 36 round-trip
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Bound the run — OpenNMS boot is slow and the healthcheck can loop a while.
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
       - name: make integration
         run: make integration

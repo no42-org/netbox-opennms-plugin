@@ -37,17 +37,26 @@ _NAME_FORBIDDEN_CHARS = _FORBIDDEN_CHARS | set("#%&+ \t\n\r")
 _LOCATION_ALLOWED = re.compile(r"\A[A-Za-z0-9.-]*\Z")
 
 
-def validate_location_name(name):
-    """Raise ``ValueError`` if *name* is not a valid OpenNMS location name (AD-9).
+def location_name_error(name):
+    """Return an error message if *name* is not a valid OpenNMS location name
+    (AD-9), else ``None``.
 
     An empty value is allowed (it means "use the default location"). Otherwise
     only ASCII letters, digits, ``-`` and ``.`` are permitted.
     """
     if name and not _LOCATION_ALLOWED.match(name):
-        raise ValueError(
+        return (
             f"Location name {name!r} may contain only ASCII letters, digits, "
             "'-' and '.'."
         )
+    return None
+
+
+def validate_location_name(name):
+    """Raise ``ValueError`` if *name* is not a valid OpenNMS location name (AD-9)."""
+    error = location_name_error(name)
+    if error:
+        raise ValueError(error)
     return name
 
 
@@ -66,8 +75,9 @@ def validate_foreign_source_name(name):
     return name
 
 
-def validate_requisition_name(name):
-    """Raise ``ValueError`` if *name* is not a safe OpenNMS Foreign Source name (H7).
+def requisition_name_error(name):
+    """Return an error message if *name* is not a safe OpenNMS Foreign Source
+    name (H7), else ``None``.
 
     A Requisition's name IS the Foreign Source name and is placed directly into a
     REST URL path, so it must reject whitespace and URL-significant characters in
@@ -75,15 +85,23 @@ def validate_requisition_name(name):
     Source must be named).
     """
     if not name or not name.strip():
-        raise ValueError("A Requisition name is required.")
+        return "A Requisition name is required."
     bad = sorted(_NAME_FORBIDDEN_CHARS.intersection(name))
     if bad:
         # repr() already renders whitespace legibly (' ', '\t', '\n').
         printable = ", ".join(repr(c) for c in bad)
-        raise ValueError(
+        return (
             f"Requisition name {name!r} contains characters that are not safe in "
             f"an OpenNMS Foreign Source / URL: {printable}."
         )
+    return None
+
+
+def validate_requisition_name(name):
+    """Raise ``ValueError`` if *name* is not a safe OpenNMS Foreign Source name (H7)."""
+    error = requisition_name_error(name)
+    if error:
+        raise ValueError(error)
     return name
 
 

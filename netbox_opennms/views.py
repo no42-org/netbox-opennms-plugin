@@ -7,12 +7,11 @@ from copy import deepcopy
 from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin, PermissionRequiredMixin
 from django.shortcuts import get_object_or_404, redirect, render
-from django.urls import reverse
-from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.generic import View
 from netbox.plugins import get_plugin_config
 from netbox.views import generic
 from utilities.rqworker import any_workers_for_queue
+from utilities.views import GetReturnURLMixin
 
 from . import filtersets, forms, tables
 from .client import OpenNMSClient, OpenNMSError
@@ -434,19 +433,16 @@ class MetadataEntryBulkDeleteView(generic.BulkDeleteView):
 # --- Sync actions -----------------------------------------------------------
 
 
-class ForeignSourceSyncView(PermissionRequiredMixin, View):
+class ForeignSourceSyncView(GetReturnURLMixin, PermissionRequiredMixin, View):
     """Enqueue a Sync (or Remove) for one Foreign Source named in the POST."""
 
     permission_required = SYNC_PERM
+    default_return_url = "plugins:netbox_opennms:sync_preview"
 
     def post(self, request):
         foreign_source = request.POST.get("foreign_source", "").strip()
         allow_empty = bool(request.POST.get("remove"))
-        return_url = request.POST.get("return_url")
-        if not return_url or not url_has_allowed_host_and_scheme(
-            return_url, allowed_hosts={request.get_host()}
-        ):
-            return_url = reverse("plugins:netbox_opennms:sync_preview")
+        return_url = self.get_return_url(request)
         if not foreign_source:
             messages.error(request, "No Foreign Source given.")
             return redirect(return_url)

@@ -102,6 +102,8 @@ class RefocusSpikeH36(unittest.TestCase):
                     f"{LIVE_URL.rstrip('/')}{path}", auth=self._auth(), timeout=10
                 )
             except requests.RequestException:
+                # Best-effort cleanup: a leftover copy surfaces as a test
+                # failure later, not here.
                 pass
 
     def _post_and_import(self, requisition_xml):

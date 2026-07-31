@@ -10,7 +10,9 @@ dynamically.
 
 1. Ensure CI on `main` is green.
 2. Open a PR bumping `__version__` in `netbox_opennms/__init__.py` to `X.Y.Z`
-   (`chore(release): set version to X.Y.Z`) and merge it.
+   **and** the `netbox-opennms-plugin==X.Y.Z` install pin in `README.md`
+   (`chore(release): set version to X.Y.Z`) and merge it. The quality gates
+   assert the two match, so the PR stays red until both are bumped.
 3. Create a GitHub Release with a new tag `vX.Y.Z` on the merged bump commit,
    with curated notes (Highlights / Breaking changes / Fixes — not a raw
    commit dump). Prerelease tags (`vX.Y.Z-rc1`) are marked as prereleases.

@@ -346,6 +346,13 @@ Before a PR: `make verify` green, [Conventional Commits](https://www.conventiona
 **signed** commits (`git commit -s` + `commit.gpgsign`), and an SPDX header on every
 source file. CI runs the same Makefile targets, so local and CI stay identical.
 
+## Support the project
+
+The plugin is MIT-licensed and free to use, with or without a donation.
+If it saves you time, a one-time donation via [GitHub Sponsors](https://github.com/sponsors/indigo423) or [Ko-fi](https://ko-fi.com/indigo423) helps fund releases, security fixes, issue triage, and CI infrastructure.
+Supporters are thanked in [SPONSORS.md](./SPONSORS.md).
+Starring the repo, filing good issues, and contributing PRs help just as much.
+
 ## License
 
 MIT — see [LICENSE](./LICENSE). Every source file carries an SPDX header.

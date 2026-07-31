@@ -442,10 +442,12 @@ class ForeignSourceSyncView(PermissionRequiredMixin, View):
     def post(self, request):
         foreign_source = request.POST.get("foreign_source", "").strip()
         allow_empty = bool(request.POST.get("remove"))
-        return_url = request.POST.get("return_url")
-        if not return_url or not url_has_allowed_host_and_scheme(
-            return_url, allowed_hosts={request.get_host()}
+        posted_url = request.POST.get("return_url", "")
+        if posted_url and url_has_allowed_host_and_scheme(
+            url=posted_url, allowed_hosts={request.get_host()}
         ):
+            return_url = posted_url
+        else:
             return_url = reverse("plugins:netbox_opennms:sync_preview")
         if not foreign_source:
             messages.error(request, "No Foreign Source given.")

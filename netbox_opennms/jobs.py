@@ -216,8 +216,9 @@ class SyncForeignSourceJob(JobRunner):
                             f"Location {location!r} is not a known OpenNMS "
                             "monitoring location — no Minion will poll it."
                         )
-                except Exception:
-                    pass
+                except Exception as exc:
+                    # Advisory only: never fail a sync because the check errored.
+                    self.logger.debug(f"location advisory skipped: {exc}")
                 # A Remove that resolved to ZERO nodes (a deleted/renamed Requisition,
                 # or one that now matches nothing): the nodes are cleared, so also
                 # drop the requisition + foreign-source shell AND the ownership record

@@ -8,7 +8,7 @@ from netbox.api.serializers import NetBoxModelSerializer
 from rest_framework import serializers
 from utilities.api import get_serializer_for_model
 
-from ..derivation import validate_location_name, validate_requisition_name
+from ..derivation import location_name_error, requisition_name_error
 from ..membership import filter_errors
 from ..models import (
     ASSIGNMENT_MODELS,
@@ -24,10 +24,9 @@ from ..models import (
 
 
 def _validate_location(value):
-    try:
-        validate_location_name(value)
-    except ValueError as exc:
-        raise serializers.ValidationError(str(exc)) from exc
+    error = location_name_error(value)
+    if error:
+        raise serializers.ValidationError(error)
     return value
 
 
@@ -61,10 +60,9 @@ class RequisitionSerializer(NetBoxModelSerializer):
         return _validate_location(value)
 
     def validate_name(self, value):
-        try:
-            validate_requisition_name(value)
-        except ValueError as exc:
-            raise serializers.ValidationError(str(exc)) from exc
+        error = requisition_name_error(value)
+        if error:
+            raise serializers.ValidationError(error)
         return value
 
     def validate(self, data):

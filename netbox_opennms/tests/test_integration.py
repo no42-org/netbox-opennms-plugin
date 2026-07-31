@@ -111,6 +111,8 @@ class OpenNMSRoundTripTest(TestCase):
                     f"{LIVE_URL.rstrip('/')}{path}", auth=self._auth(), timeout=10
                 )
             except requests.RequestException:
+                # Best-effort cleanup: a leftover copy surfaces as a test
+                # failure later, not here.
                 pass
 
     def _requisition_with_icmp(self):

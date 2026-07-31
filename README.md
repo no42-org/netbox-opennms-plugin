@@ -10,6 +10,7 @@
 ![NetBox 4.6.1+](https://img.shields.io/badge/NetBox-4.6.1%2B-blue)
 ![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-blue)
 [![Docs](https://img.shields.io/badge/docs-contributor%20guide-0d9488)](https://no42-org.github.io/netbox-opennms-plugin/)
+[![PyPI Downloads](https://static.pepy.tech/personalized-badge/netbox-opennms-plugin?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=GREEN&left_text=downloads)](https://pepy.tech/projects/netbox-opennms-plugin)
 
 📖 **[Documentation & contributor guide →](https://no42-org.github.io/netbox-opennms-plugin/)**
 

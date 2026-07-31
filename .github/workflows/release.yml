@@ -98,9 +98,13 @@ jobs:
       # wheel scan misses the dependencies, a source-tree scan catalogs
       # .github/workflows/ actions instead of the plugin. NetBox is
       # intentionally absent: it is the host application, not a pip
-      # dependency (see pyproject.toml).
+      # dependency (see pyproject.toml). --only-binary=:all: keeps the
+      # dependency resolve wheels-only, so no sdist build script can run in
+      # this job (it holds id-token: write).
       - name: Install wheel with dependencies for SBOM scan
-        run: python3 -m pip install --quiet --target sbom-root dist/*.whl
+        run: >-
+          python3 -m pip install --quiet --only-binary=:all:
+          --target sbom-root dist/*.whl
       - name: SBOM
         uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610  # v0.24.0
         with:

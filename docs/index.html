@@ -77,8 +77,8 @@
     <div class="sec-head"><span class="idx">02</span><h2>Release workflow</h2></div>
     <p class="sec-intro">
       The version is single-sourced, <code>main</code> requires signed commits, and
-      a release is a signed tag plus a GitHub release. PyPI publishing is a planned
-      fast-follow.
+      a release is a signed tag plus a GitHub release. Publishing the release
+      triggers the PyPI upload automatically (Trusted Publishing).
     </p>
     <ol>
       <li>Bump the single source of truth — <code>__version__</code> in
@@ -125,8 +125,8 @@ gh release create v0.0.1 --verify-tag --notes-file NOTES.md</code></pre>
 <pre><code># editable install into your NetBox virtualenv
 pip install -e .
 
-# install a tagged release straight from Git (until PyPI lands)
-pip install "git+https://github.com/no42-org/netbox-opennms-plugin@v0.0.1"
+# install a release from PyPI
+pip install netbox-opennms-plugin
 
 # build the wheel + sdist into dist/ (also asserts the wheel ships its templates)
 make build</code></pre>

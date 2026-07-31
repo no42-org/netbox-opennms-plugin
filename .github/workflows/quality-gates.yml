@@ -37,6 +37,36 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
+      # Same AST read release.yml uses for the tag check — importing the
+      # module needs NetBox. Keeps the README's Dockerfile install pin from
+      # rotting: the version-bump PR fails until the pin is bumped too.
+      - name: Assert README install pin matches __version__
+        run: |
+          python3 - <<'PY'
+          import ast, re, sys
+
+          tree = ast.parse(open("netbox_opennms/__init__.py").read())
+          for node in tree.body:
+              if isinstance(node, ast.Assign) and any(
+                  isinstance(t, ast.Name) and t.id == "__version__"
+                  for t in node.targets
+              ):
+                  version = node.value.value
+                  break
+          else:
+              sys.exit("no __version__ in netbox_opennms/__init__.py")
+          pins = re.findall(
+              r"netbox-opennms-plugin==([\w.]+)", open("README.md").read()
+          )
+          if not pins:
+              sys.exit("README.md has no netbox-opennms-plugin==X.Y.Z pin")
+          if stale := [p for p in pins if p != version]:
+              sys.exit(
+                  f"README.md pins {stale} but __version__ is {version!r} — "
+                  "bump the README install pin in the version-bump PR"
+              )
+          print(f"ok: README pin matches __version__ {version}")
+          PY
       - name: make build
         run: make build
       - name: Assert the wheel contains the templates

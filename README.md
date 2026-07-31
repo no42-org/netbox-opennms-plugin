@@ -77,11 +77,11 @@ seeding, dry-run, and Sync — in the
 
 ## Installation
 
-Install into the same Python environment as NetBox. A **PyPI** release is a
-fast-follow; until then, install from the tagged Git ref:
+Install into the same Python environment as NetBox, from
+[PyPI](https://pypi.org/project/netbox-opennms-plugin/):
 
 ```bash
-pip install "git+https://github.com/no42-org/netbox-opennms-plugin@v0.0.2"
+pip install netbox-opennms-plugin
 ```
 
 Enable the plugin in NetBox's `configuration.py`:
@@ -118,13 +118,11 @@ and netbox-docker, not the package.)
    ```dockerfile
    # Dockerfile
    FROM netboxcommunity/netbox:v4.6      # NetBox 4.6.1+; keep in step with the chart appVersion
-   RUN /opt/netbox/venv/bin/pip install \
-       "git+https://github.com/no42-org/netbox-opennms-plugin@v0.0.2"
+   RUN /opt/netbox/venv/bin/pip install netbox-opennms-plugin==0.0.8
    ```
 
-   The tagged Git ref is the install source available today. PyPI is a fast-follow
-   (then this becomes `pip install netbox-opennms-plugin==<version>`); for an
-   air-gapped build, `make build` a wheel and `COPY` it in instead.
+   Pin the plugin version so image builds stay reproducible; for an air-gapped
+   build, `make build` a wheel and `COPY` it in instead.
 
    ```bash
    docker build -t registry.example.org/netbox-opennms:v4.6 .

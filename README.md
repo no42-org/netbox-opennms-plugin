@@ -118,7 +118,7 @@ and netbox-docker, not the package.)
    ```dockerfile
    # Dockerfile
    FROM netboxcommunity/netbox:v4.6      # NetBox 4.6.1+; keep in step with the chart appVersion
-   RUN /opt/netbox/venv/bin/pip install netbox-opennms-plugin==0.0.8
+   RUN /opt/netbox/venv/bin/pip install netbox-opennms-plugin==0.0.9
    ```
 
    Pin the plugin version so image builds stay reproducible; for an air-gapped

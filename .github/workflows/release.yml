@@ -166,7 +166,7 @@ jobs:
       # version/project/commit/build-url default from the workflow context.
       - name: HTML SBOM report
         id: sbom-report
-        uses: no42-org/blitsbom/report@fe66bcc08b9cdf2ac3fbb5b00b9d761a3eec1e84  # v0.7.0
+        uses: no42-org/blitsbom/report@b3cb2b1bdd5664193478acf04812251fdc8eb124  # v0.7.1
         with:
           sbom: dist/sbom.spdx.json
           output: dist/sbom-report.html

@@ -13,21 +13,22 @@ permissions:
   contents: read
 jobs:
   verify:
-    name: Lint + test (NetBox ${{ matrix.netbox }})
+    # No matrix, and no version in the name. This is a required status check, and
+    # GitHub appends matrix values to the job name, so a single-entry matrix put
+    # the NetBox version into the context. Every pin bump then renamed the check
+    # into one the ruleset can never satisfy, blocking all merges until branch
+    # protection was edited. The version now comes from compose.yml alone.
+    # To test several NetBox versions, add the matrix back and gate on a separate
+    # aggregator job with a static name, not on the matrix legs themselves.
+    name: Lint + test
     runs-on: ubuntu-24.04
     timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        netbox: ["v4.6"]  # supported line; add tags here to widen the matrix
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
       - name: make verify
         run: make verify
-        env:
-          NETBOX_VERSION: ${{ matrix.netbox }}
 
   build:
     name: Build + verify wheel ships templates

@@ -22,9 +22,16 @@ services:
     image: redis:8-alpine
 
   netbox:
-    # NETBOX_VERSION lets CI matrix over supported tags; default keeps local runs
-    # on the pinned line.
-    image: netboxcommunity/netbox:${NETBOX_VERSION:-v4.6}
+    # This default is the single source of the tested NetBox version: CI sets no
+    # NETBOX_VERSION, so local and CI runs are reproducible and query_counts.json
+    # means something. An exact patch also lets Dependabot see patch releases; at
+    # two-component precision (v4.6) it has nothing newer to offer. Keep in step
+    # with quickstart/compose.yml. NETBOX_VERSION stays overridable for ad-hoc
+    # runs against another tag.
+    # Unverified whether Dependabot resolves this substitution or only reads the
+    # plain pins in quickstart/compose.yml; if a bump PR touches only quickstart,
+    # move this line in the same PR.
+    image: netboxcommunity/netbox:${NETBOX_VERSION:-v4.6.8}
     depends_on:
       postgres:
         condition: service_healthy

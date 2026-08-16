@@ -53,9 +53,13 @@ implicitly moved).
 
 ## Compatibility
 
+<!-- "verified against" is the pinned test image in compose.yml; keep the two in
+     step when bumping the pin. 4.6.1+ is the support contract (min_version in
+     netbox_opennms/__init__.py) and moves only when the plugin needs a newer API. -->
+
 | | |
 | --- | --- |
-| NetBox | 4.6.1+ |
+| NetBox | 4.6.1+ (verified against 4.6.8) |
 | Python | 3.12+ |
 | OpenNMS | Horizon 36 |
 | License | MIT |

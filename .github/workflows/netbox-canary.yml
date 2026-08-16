@@ -1,0 +1,79 @@
+# Weekly canary against the floating NetBox v4.6 tag. compose.yml pins an exact
+# patch so an upstream release cannot redden unrelated PRs; this workflow is what
+# still notices that release, deliberately off the merge-blocking path. It never
+# runs on pull_request and is not a required status check, so it can only ever
+# inform, never block. A red scheduled run nobody reads is not a warning, so a
+# failure files an issue.
+name: NetBox canary
+on:
+  schedule:
+    # Mondays 06:00 UTC, clear of Scorecard (Tue 05:30) and Dependabot (~04:00).
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: netbox-canary
+  cancel-in-progress: true
+
+jobs:
+  canary:
+    name: Test against floating NetBox v4.6
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      # `test`, not `verify`: ruff is version-independent and already gated on
+      # PRs, so linting here would only add unrelated failure modes.
+      - name: make test
+        run: make test
+        env:
+          # Deliberately the floating minor tag. Drift is the signal; everywhere
+          # else pins an exact patch.
+          NETBOX_VERSION: v4.6
+
+  report:
+    name: Report drift
+    needs: canary
+    # failure() excludes cancellations, so a cancelled run stays quiet.
+    if: failure()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write # open or comment on the drift issue
+    steps:
+      - name: Open or update the drift issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          body="$(cat <<EOF
+          The weekly canary against the floating \`netboxcommunity/netbox:v4.6\` tag failed.
+
+          A NetBox patch release has changed behaviour the plugin depends on. Nothing is
+          blocked: the gates pin an exact patch, so PRs and releases are unaffected.
+
+          Run: ${RUN_URL}
+
+          Reproduce with \`NETBOX_VERSION=v4.6 make test\`. Then either fix the plugin, or,
+          if the change is benign, bump the pin in \`compose.yml\` and
+          \`quickstart/compose.yml\` and regenerate baselines with \`make regen-counts\`.
+          EOF
+          )"
+          # One rolling issue: comment on the open one rather than filing a new
+          # issue every week for the same drift.
+          existing="$(gh issue list --repo "$REPO" --state open \
+            --label upstream-drift --limit 1 --json number --jq '.[0].number // empty')"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "$REPO" --body "$body"
+          else
+            gh issue create --repo "$REPO" --label upstream-drift \
+              --title "NetBox canary failing against floating v4.6" --body "$body"
+          fi

@@ -20,7 +20,7 @@ services:
       retries: 30
 
   opennms:
-    image: opennms/horizon:36.0.2
+    image: opennms/horizon:36.0.3
     depends_on:
       opennms-db:
         condition: service_healthy

@@ -51,7 +51,7 @@ services:
     image: redis:8-alpine
 
   netbox:
-    image: netboxcommunity/netbox:v4.6.8
+    image: netboxcommunity/netbox:v4.6.9
     depends_on:
       postgres:
         condition: service_healthy
@@ -78,7 +78,7 @@ services:
       start_period: 180s
 
   netbox-worker:
-    image: netboxcommunity/netbox:v4.6.8
+    image: netboxcommunity/netbox:v4.6.9
     depends_on:
       netbox:
         condition: service_healthy

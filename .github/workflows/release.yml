@@ -173,11 +173,11 @@ jobs:
       # lives at the repo ROOT since blitsbom v0.6.0 (was …/blitsbom/report);
       # a Dependabot SHA bump keeps whatever path is written here, so never
       # re-add the old suffix. No `image:` pin: the action derives the
-      # generator image matching its own ref (this SHA → :report-0.8.0), so
-      # the pair cannot drift when Dependabot bumps the action.
+      # generator image matching its own ref (a release SHA → its :report-X.Y.Z
+      # tag), so the pair cannot drift when Dependabot bumps the action.
       - name: HTML SBOM report
         id: sbom-report
-        uses: no42-org/blitsbom@48e615d57bd2a11d808cf52eb9f86bb8e853bee9  # v0.8.0
+        uses: no42-org/blitsbom@2340603607fe7154085ec12301d8056da2918ac1  # v0.8.1
         with:
           sbom: dist/sbom.spdx.json
           output: dist/sbom-report.html

@@ -74,6 +74,12 @@ jobs:
           name: dist
           path: dist/
       - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33  # v1.14.2
+        with:
+          # Re-firing the workflow after a partial failure (e.g. a later job
+          # broke) must not die on the files PyPI already has. The version job
+          # asserts tag == __version__, so a skip can only mean this exact
+          # release was already published.
+          skip-existing: true
 
   supply-chain:
     name: Attach dist, SBOM and provenance to the GitHub Release
@@ -163,15 +169,18 @@ jobs:
           PY
       # Self-contained offline HTML rendering of the SBOM. Written into dist/
       # so it is attested and attached to the release like the JSON SBOM.
-      # version/project/commit/build-url default from the workflow context.
+      # version/project defaults come from the workflow context. The action
+      # lives at the repo ROOT since blitsbom v0.6.0 (was …/blitsbom/report);
+      # a Dependabot SHA bump keeps whatever path is written here, so never
+      # re-add the old suffix. No `image:` pin: the action derives the
+      # generator image matching its own ref (this SHA → :report-0.8.0), so
+      # the pair cannot drift when Dependabot bumps the action.
       - name: HTML SBOM report
         id: sbom-report
-        uses: no42-org/blitsbom/report@48e615d57bd2a11d808cf52eb9f86bb8e853bee9  # v0.8.0
+        uses: no42-org/blitsbom@48e615d57bd2a11d808cf52eb9f86bb8e853bee9  # v0.8.0
         with:
           sbom: dist/sbom.spdx.json
           output: dist/sbom-report.html
-          # Generator image pinned by digest to match the action version.
-          image: ghcr.io/no42-org/blitsbom@sha256:40d888fa2cc7e8aa2c0f63268bbe06c0c9a8742c1aa9c6b86abfbe1ebce39741  # v0.4.0 (tag report-0.4.0)
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: sbom-report

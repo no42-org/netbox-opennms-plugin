@@ -5,6 +5,13 @@
 COMPOSE := docker compose -f compose.yml
 # Integration overlay adds a disposable OpenNMS Horizon 36 (slow boot).
 INTEGRATION := docker compose -f compose.yml -f compose.integration.yml
+# NETBOX_VERSION runs the stack against another NetBox tag (ad-hoc, weekly
+# canary). compose.yml keeps a literal pin so Dependabot can bump it; the
+# override is only stacked when the variable is set.
+ifdef NETBOX_VERSION
+COMPOSE += -f compose.override.netbox.yml
+INTEGRATION += -f compose.override.netbox.yml
+endif
 # Pinned ruff image so lint matches CI without a host install.
 RUFF := ghcr.io/astral-sh/ruff:0.15.20
 # Pinned Python image for builds — no host toolchain required.

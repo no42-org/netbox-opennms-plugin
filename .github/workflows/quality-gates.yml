@@ -68,6 +68,43 @@ jobs:
               )
           print(f"ok: README pin matches __version__ {version}")
           PY
+      # The tested NetBox version lives in compose.yml; Dependabot bumps it
+      # and the quickstart pin in one grouped PR (dependabot.yml), and the
+      # README states it as "verified against X.Y.Z". Fail when the three
+      # disagree, so a bump PR must carry all of them.
+      - name: Assert NetBox pins agree
+        run: |
+          python3 - <<'PY'
+          import re, sys
+
+          def tags(path):
+              found = set(re.findall(
+                  r"netboxcommunity/netbox:v(\d+\.\d+\.\d+)", open(path).read()
+              ))
+              if len(found) != 1:
+                  sys.exit(
+                      f"{path}: expected exactly one literal "
+                      f"netboxcommunity/netbox:vX.Y.Z pin, found {sorted(found)}"
+                  )
+              return found.pop()
+
+          tested = tags("compose.yml")
+          quickstart = tags("quickstart/compose.yml")
+          m = re.search(
+              r"verified against (\d+\.\d+\.\d+)", open("README.md").read()
+          )
+          if not m:
+              sys.exit('README.md: no "verified against X.Y.Z" statement')
+          readme = m.group(1)
+          if not (tested == quickstart == readme):
+              sys.exit(
+                  f"NetBox pins disagree: compose.yml={tested}, "
+                  f"quickstart/compose.yml={quickstart}, README says {readme} "
+                  "— keep the three in step (add the README and the other "
+                  "compose file to the bump PR)"
+              )
+          print(f"ok: NetBox pins agree at {tested}")
+          PY
       - name: make build
         run: make build
       - name: Assert the wheel contains the templates

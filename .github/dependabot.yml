@@ -29,3 +29,10 @@ updates:
       interval: "weekly"
     cooldown:
       default-days: 7
+    groups:
+      # One PR moves the tested pin (compose.yml) and the quickstart pin
+      # together — the quality gates assert they agree, so separate PRs
+      # per directory would each stay red.
+      netbox:
+        patterns:
+          - "netboxcommunity/netbox"

@@ -1,0 +1,7 @@
+# Overrides the tested NetBox pin from compose.yml with $NETBOX_VERSION. The
+# Makefile adds this file only when NETBOX_VERSION is set (ad-hoc runs, weekly
+# canary). The substitution is invisible to Dependabot on purpose — the
+# Dependabot-managed pin lives in compose.yml.
+services:
+  netbox:
+    image: netboxcommunity/netbox:${NETBOX_VERSION}

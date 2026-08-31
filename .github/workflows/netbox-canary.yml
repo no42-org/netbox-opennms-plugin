@@ -64,7 +64,8 @@ jobs:
 
           Reproduce with \`NETBOX_VERSION=v4.6 make test\`. Then either fix the plugin, or,
           if the change is benign, bump the pin in \`compose.yml\` and
-          \`quickstart/compose.yml\` and regenerate baselines with \`make regen-counts\`.
+          \`quickstart/compose.yml\`, update the README's "verified against", and
+          regenerate baselines with \`make regen-counts\`.
           EOF
           )"
           # One rolling issue: comment on the open one rather than filing a new

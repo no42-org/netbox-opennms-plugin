@@ -60,7 +60,7 @@ implicitly moved).
 
 | | |
 | --- | --- |
-| NetBox | 4.6.1+ (verified against 4.6.9) |
+| NetBox | 4.6.1+ (verified against 4.7.0) |
 | Python | 3.12+ |
 | OpenNMS | Horizon 36 |
 | License | MIT |

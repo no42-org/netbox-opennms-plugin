@@ -29,10 +29,16 @@ from core.exceptions import JobFailed
 from core.models import Job
 from dcim.models import Device
 from django.contrib.contenttypes.models import ContentType
-from django_pglocks import advisory_lock
 from netbox.jobs import JobRunner, system_job
 from netbox.plugins import get_plugin_config
 from virtualization.models import VirtualMachine
+
+# NetBox 4.7 moved from django-pglocks to django-pgware (netbox-community/netbox
+# #22571); 4.6.x ships only the former. Both expose the same context manager.
+try:
+    from django_pg_utils import advisory_lock
+except ImportError:  # NetBox < 4.7
+    from django_pglocks import advisory_lock
 
 from .client import OpenNMSClient, OpenNMSError
 from .derivation import validate_location_name

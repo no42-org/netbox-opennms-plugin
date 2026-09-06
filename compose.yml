@@ -30,7 +30,7 @@ services:
     # gates assert both pins and the README's "verified against" agree. Runs
     # against another tag still work: setting NETBOX_VERSION makes the Makefile
     # add compose.override.netbox.yml (the weekly canary uses that for v4.6).
-    image: netboxcommunity/netbox:v4.6.9
+    image: netboxcommunity/netbox:v4.7.0
     depends_on:
       postgres:
         condition: service_healthy

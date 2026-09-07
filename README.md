@@ -53,14 +53,15 @@ implicitly moved).
 
 ## Compatibility
 
-<!-- "verified against" is the pinned test image in compose.yml; the quality
-     gates assert it, the quickstart pin and this statement agree. 4.6.1+ is the
+<!-- The "verified against" badge reads the pinned test image straight from
+     compose.yml on main, so a Dependabot bump needs no README edit; the quality
+     gates assert compose.yml and the quickstart pin agree. 4.6.1+ is the
      support contract (min_version in netbox_opennms/__init__.py) and moves only
      when the plugin needs a newer API. -->
 
 | | |
 | --- | --- |
-| NetBox | 4.6.1+ (verified against 4.7.0) |
+| NetBox | 4.6.1+ ![verified against](https://img.shields.io/badge/dynamic/regex?url=https%3A%2F%2Fraw.githubusercontent.com%2Fno42-org%2Fnetbox-opennms-plugin%2Fmain%2Fcompose.yml&search=netboxcommunity%2Fnetbox%3Av(%5Cd%2B%5C.%5Cd%2B%5C.%5Cd%2B)&replace=%241&label=verified%20against&color=blue) |
 | Python | 3.12+ |
 | OpenNMS | Horizon 36 |
 | License | MIT |

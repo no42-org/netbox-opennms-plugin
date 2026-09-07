@@ -69,9 +69,9 @@ jobs:
           print(f"ok: README pin matches __version__ {version}")
           PY
       # The tested NetBox version lives in compose.yml; Dependabot bumps it
-      # and the quickstart pin in one grouped PR (dependabot.yml), and the
-      # README states it as "verified against X.Y.Z". Fail when the three
-      # disagree, so a bump PR must carry all of them.
+      # and the quickstart pin in one grouped PR (dependabot.yml). Fail when
+      # the two disagree, so a bump PR must carry both. The README shows the
+      # version via a badge that reads compose.yml on main, so it needs no edit.
       - name: Assert NetBox pins agree
         run: |
           python3 - <<'PY'
@@ -90,18 +90,11 @@ jobs:
 
           tested = tags("compose.yml")
           quickstart = tags("quickstart/compose.yml")
-          m = re.search(
-              r"verified against (\d+\.\d+\.\d+)", open("README.md").read()
-          )
-          if not m:
-              sys.exit('README.md: no "verified against X.Y.Z" statement')
-          readme = m.group(1)
-          if not (tested == quickstart == readme):
+          if tested != quickstart:
               sys.exit(
                   f"NetBox pins disagree: compose.yml={tested}, "
-                  f"quickstart/compose.yml={quickstart}, README says {readme} "
-                  "— keep the three in step (add the README and the other "
-                  "compose file to the bump PR)"
+                  f"quickstart/compose.yml={quickstart} — keep the two in step "
+                  "(add the other compose file to the bump PR)"
               )
           print(f"ok: NetBox pins agree at {tested}")
           PY

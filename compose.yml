@@ -27,7 +27,7 @@ services:
     # It must stay literal: Dependabot's docker-compose ecosystem cannot resolve
     # a ${VAR:-default} substitution, so only a plain tag gets bump PRs —
     # grouped with quickstart/compose.yml in dependabot.yml, and the quality
-    # gates assert both pins and the README's "verified against" agree. Runs
+    # gates assert both pins agree (the README badge reads this pin). Runs
     # against another tag still work: setting NETBOX_VERSION makes the Makefile
     # add compose.override.netbox.yml (the weekly canary uses that for v4.6).
     image: netboxcommunity/netbox:v4.7.0

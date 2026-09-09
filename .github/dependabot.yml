@@ -36,3 +36,9 @@ updates:
       netbox:
         patterns:
           - "netboxcommunity/netbox"
+      # Same reason: the integration pin (compose.integration.yml) and the
+      # quickstart pin move as one PR so a single `make integration` run
+      # covers both.
+      opennms:
+        patterns:
+          - "opennms/horizon"

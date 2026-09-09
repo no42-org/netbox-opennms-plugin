@@ -54,7 +54,8 @@ jobs:
           PY
 
   gates:
-    uses: ./.github/workflows/quality-gates.yml
+    # `$/` blocked by actionlint — see the note in ci.yml.
+    uses: ./.github/workflows/quality-gates.yml  # zizmor: ignore[self-repository]
     with:
       upload-dist: true
 

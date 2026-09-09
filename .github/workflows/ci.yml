@@ -16,7 +16,12 @@ concurrency:
   cancel-in-progress: true
 jobs:
   gates:
-    uses: ./.github/workflows/quality-gates.yml
+    # zizmor 1.30 wants GitHub's `$/` self-repository syntax here, but
+    # actionlint v1.7.12 rejects `$/` as a malformed workflow call
+    # (rhysd/actionlint#711, #732 — both open, no release supports it yet).
+    # Both linters gate this repo, so keep `./` until actionlint catches up,
+    # then drop this suppression and switch to `$/`.
+    uses: ./.github/workflows/quality-gates.yml  # zizmor: ignore[self-repository]
 
   integration:
     name: Live OpenNMS Horizon 36 round-trip

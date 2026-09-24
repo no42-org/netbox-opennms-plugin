@@ -214,10 +214,8 @@ Mounting a plugin into the container at runtime is not supported (see [netbox-do
 
    ```dockerfile
    # Dockerfile
-   ARG NETBOX_VERSION=v4.7.0
-   FROM netboxcommunity/netbox:${NETBOX_VERSION}
-   ARG PLUGIN_VERSION=0.0.11
-   RUN /opt/netbox/venv/bin/pip install "netbox-opennms-plugin==${PLUGIN_VERSION}"
+   FROM netboxcommunity/netbox:v4.7.0
+   RUN /opt/netbox/venv/bin/pip install netbox-opennms-plugin==0.0.11
    ```
 
    ```bash
@@ -225,7 +223,7 @@ Mounting a plugin into the container at runtime is not supported (see [netbox-do
    docker push registry.example.org/netbox-opennms:v4.7.0-0.0.11
    ```
 
-   Take the current plugin version from [Releases](https://github.com/no42-org/netbox-opennms-plugin/releases).
+   The pin above is the current release.
    For an air-gapped build, run `make build` and `COPY` the wheel from `dist/` instead.
 
 2. Point the chart at the image, enable the plugin and enable the worker in **`values.yaml`**:

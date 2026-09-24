@@ -107,11 +107,13 @@ jobs:
       # intentionally absent: it is the host application, not a pip
       # dependency (see pyproject.toml). --only-binary=:all: keeps the
       # dependency resolve wheels-only, so no sdist build script can run in
-      # this job (it holds id-token: write).
+      # this job (it holds id-token: write). Keep --target=<dir> joined:
+      # Scorecard (Pinned-Dependencies) reads a space-separated value as an
+      # extra package and flags the install as unpinned.
       - name: Install wheel with dependencies for SBOM scan
         run: >-
           python3 -m pip install --quiet --only-binary=:all:
-          --target sbom-root dist/*.whl
+          --target=sbom-root dist/*.whl
       - name: SBOM
         uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26  # v0.24.2
         with:

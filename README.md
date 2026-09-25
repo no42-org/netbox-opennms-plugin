@@ -215,12 +215,12 @@ Mounting a plugin into the container at runtime is not supported (see [netbox-do
    ```dockerfile
    # Dockerfile
    FROM netboxcommunity/netbox:v4.7.1
-   RUN /opt/netbox/venv/bin/pip install netbox-opennms-plugin==0.0.11
+   RUN /opt/netbox/venv/bin/pip install netbox-opennms-plugin==0.0.12
    ```
 
    ```bash
-   docker build -t registry.example.org/netbox-opennms:v4.7.1-0.0.11 .
-   docker push registry.example.org/netbox-opennms:v4.7.1-0.0.11
+   docker build -t registry.example.org/netbox-opennms:v4.7.1-0.0.12 .
+   docker push registry.example.org/netbox-opennms:v4.7.1-0.0.12
    ```
 
    The pin above is the current release.
@@ -231,7 +231,7 @@ Mounting a plugin into the container at runtime is not supported (see [netbox-do
    ```yaml
    image:
      repository: registry.example.org/netbox-opennms
-     tag: v4.7.1-0.0.11
+     tag: v4.7.1-0.0.12
 
    plugins:
      - netbox_opennms

@@ -30,9 +30,11 @@ menu_items = (
     PluginMenuItem(
         link="plugins:netbox_opennms:sync_preview",
         link_text="Sync Preview",
+        permissions=["netbox_opennms.view_requisition"],
     ),
     PluginMenuItem(
         link="plugins:netbox_opennms:connection_test",
         link_text="Connect OpenNMS",
+        permissions=["netbox_opennms.view_requisition"],
     ),
 )

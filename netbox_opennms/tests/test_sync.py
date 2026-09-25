@@ -142,6 +142,27 @@ class SyncViewTest(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, FS)
 
+    def test_preview_requires_view_permission(self):
+        self.client.force_login(self.plain)
+        url = reverse("plugins:netbox_opennms:sync_preview")
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 403)
+
+    def test_menu_hides_permission_gated_pages(self):
+        # The nav menu renders on every page; home is a cheap one to fetch.
+        links = [
+            reverse("plugins:netbox_opennms:sync_preview"),
+            reverse("plugins:netbox_opennms:connection_test"),
+        ]
+        self.client.force_login(self.plain)
+        response = self.client.get(reverse("home"))
+        for link in links:
+            self.assertNotContains(response, f'href="{link}"')
+        self.client.force_login(self.superuser)
+        response = self.client.get(reverse("home"))
+        for link in links:
+            self.assertContains(response, f'href="{link}"')
+
     def test_sync_requires_permission(self):
         self.client.force_login(self.plain)
         url = reverse("plugins:netbox_opennms:sync_all")

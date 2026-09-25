@@ -142,6 +142,12 @@ class SyncViewTest(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, FS)
 
+    def test_preview_requires_view_permission(self):
+        self.client.force_login(self.plain)
+        url = reverse("plugins:netbox_opennms:sync_preview")
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 403)
+
     def test_sync_requires_permission(self):
         self.client.force_login(self.plain)
         url = reverse("plugins:netbox_opennms:sync_all")

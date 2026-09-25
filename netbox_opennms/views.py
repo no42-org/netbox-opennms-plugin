@@ -5,7 +5,7 @@
 from copy import deepcopy
 
 from django.contrib import messages
-from django.contrib.auth.mixins import LoginRequiredMixin, PermissionRequiredMixin
+from django.contrib.auth.mixins import PermissionRequiredMixin
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.generic import View
 from netbox.plugins import get_plugin_config
@@ -502,7 +502,7 @@ class MonitoringSyncAllView(PermissionRequiredMixin, View):
         return redirect("plugins:netbox_opennms:sync_preview")
 
 
-class SyncPreviewView(LoginRequiredMixin, View):
+class SyncPreviewView(PermissionRequiredMixin, View):
     """The preview-and-sync overview: every Requisition + its resolved members.
 
     Lists every Requisition with its node count, any resolution warnings
@@ -512,6 +512,9 @@ class SyncPreviewView(LoginRequiredMixin, View):
     OpenNMS is a per-Requisition action (RequisitionDryRunView).
     """
 
+    # Lists every Requisition and names members in warnings/conflicts, so it
+    # needs the same permission as the Requisition pages, not just a login.
+    permission_required = "netbox_opennms.view_requisition"
     template_name = "netbox_opennms/sync_preview.html"
 
     def get(self, request):

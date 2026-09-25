@@ -226,7 +226,26 @@ Mounting a plugin into the container at runtime is not supported (see [netbox-do
    The pin above is the current release.
    For an air-gapped build, run `make build` and `COPY` the wheel from `dist/` instead.
 
-2. Point the chart at the image, enable the plugin and enable the worker in **`values.yaml`**:
+2. Store the OpenNMS password in a Kubernetes `Secret`. The key name must end in `.yaml`:
+
+   ```bash
+   cat > plugins.yaml <<'EOF'
+   PLUGINS_CONFIG:
+     netbox_opennms:
+       opennms_password: "********"
+   EOF
+   kubectl create secret generic netbox-opennms --from-file=plugins.yaml
+   ```
+
+   Expected output:
+
+   ```text
+   secret/netbox-opennms created
+   ```
+
+   The chart mounts each `extraConfig` entry into the NetBox and worker pods and deep-merges it over `pluginsConfig`, so the Secret only needs the password.
+
+3. Point the chart at the image, enable the plugin, load the Secret and enable the worker in **`values.yaml`**:
 
    ```yaml
    image:
@@ -244,15 +263,18 @@ Mounting a plugin into the container at runtime is not supported (see [netbox-do
        import_mode: "false"
        reconcile_orphans: "true"
 
+   extraConfig:
+     - secret:
+         secretName: netbox-opennms
+
    worker:
      enabled: true
    ```
 
    Leave the worker's image unset so it runs the same plugin-bearing image.
    A worker without the plugin deploys fine, but every sync job fails at dequeue with an import error.
-   Supply **`opennms_password`** from a Kubernetes `Secret` through the chart's **`extraConfig`**. Never put it in plaintext values.
 
-3. Install or upgrade. The NetBox image applies migrations on boot.
+4. Install or upgrade. The NetBox image applies migrations on boot.
 
    ```bash
    helm repo add netbox https://netbox-community.github.io/netbox-chart/
@@ -349,7 +371,7 @@ Shown on each Device/VM detail page, backed by the NetBox Job log.
 | Sync Preview | Plugins → NetBox OpenNMS | `netbox_opennms.view_requisition` |
 | Dry run | Requisition detail page | `netbox_opennms.view_requisition` |
 | Sync to OpenNMS | Requisition detail, Dry run | `netbox_opennms.change_requisition` |
-| Remove | `POST /plugins/opennms/sync/foreign-source/` with `remove` set | `netbox_opennms.change_requisition` |
+| Remove | `POST /plugins/opennms/sync/foreign-source/` with `remove` set. No button yet, see [#133](https://github.com/no42-org/netbox-opennms-plugin/issues/133) | `netbox_opennms.change_requisition` |
 | Connect OpenNMS | Plugins → NetBox OpenNMS | `netbox_opennms.view_requisition` |
 
 ### Requisition fields
@@ -408,9 +430,3 @@ Starring the repo, filing good issues, and contributing PRs help just as much.
 ## License
 
 MIT. See [LICENSE](./LICENSE).
-
-## Open questions
-
-- The exact shape of an `extraConfig` Secret that supplies `opennms_password` to `PLUGINS_CONFIG` in the NetBox Helm chart is not documented here (unverified). Add a tested snippet.
-- Remove has a view (`ForeignSourceSyncView`, POST `remove`) but no button in the plugin's templates. Confirm whether a UI entry point is intended.
-- The Monitoring Overrides menu permission is assumed to be NetBox's default model view permission (unverified).

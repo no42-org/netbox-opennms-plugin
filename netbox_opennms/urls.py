@@ -91,6 +91,11 @@ urlpatterns = (
         name="foreign_source_sync",
     ),
     path(
+        "sync/remove-object/",
+        views.ObjectRemoveView.as_view(),
+        name="object_remove",
+    ),
+    path(
         "connection-test/",
         views.OpenNMSConnectionTestView.as_view(),
         name="connection_test",

@@ -207,6 +207,30 @@ class SyncForeignSourceJobTest(TestCase):
 
     @mock.patch("netbox_opennms.jobs.advisory_lock")
     @mock.patch("netbox_opennms.jobs.OpenNMSClient.from_config")
+    def test_remove_of_excluded_last_member_pushes_empty(self, mock_from_config, _lock):
+        # #133: the panel Remove excludes the object, then removes its Foreign
+        # Source. The Requisition still exists but resolves to zero nodes.
+        client = mock_from_config.return_value.__enter__.return_value
+        client.import_requisition.return_value = mock.Mock(status_code=202)
+        MonitoringOverride.objects.create(assigned_object=self.device, exclude=True)
+        self._runner().run(foreign_source=FS, allow_empty=True)
+        requisition_xml = client.post_requisition.call_args.args[0]
+        self.assertNotIn(b"<node", requisition_xml)
+        client.import_requisition.assert_called_once()
+
+    def test_unexclude_restores_same_node_identity(self):
+        # #133: Remove is reversible. Clearing exclude renders the same node.
+        before = [node.foreign_id for node in resolve(FS).nodes]
+        override = MonitoringOverride.objects.create(
+            assigned_object=self.device, exclude=True
+        )
+        self.assertEqual(resolve(FS).nodes, [])
+        override.exclude = False
+        override.save()
+        self.assertEqual([node.foreign_id for node in resolve(FS).nodes], before)
+
+    @mock.patch("netbox_opennms.jobs.advisory_lock")
+    @mock.patch("netbox_opennms.jobs.OpenNMSClient.from_config")
     def test_remove_ungoverned_skips_definition(self, mock_from_config, _lock):
         # A bare Remove of a name with no Requisition has no definition to push —
         # only the empty requisition + import that clears the nodes.

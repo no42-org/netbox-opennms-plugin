@@ -4,14 +4,19 @@
 
 from copy import deepcopy
 
+from dcim.models import Device
 from django.contrib import messages
 from django.contrib.auth.mixins import PermissionRequiredMixin
+from django.contrib.contenttypes.models import ContentType
+from django.core.exceptions import PermissionDenied
+from django.db import transaction
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.generic import View
 from netbox.plugins import get_plugin_config
 from netbox.views import generic
 from utilities.rqworker import any_workers_for_queue
 from utilities.views import GetReturnURLMixin
+from virtualization.models import VirtualMachine
 
 from . import filtersets, forms, tables
 from .client import OpenNMSClient, OpenNMSError
@@ -22,6 +27,7 @@ from .jobs import (
 )
 from .membership import (
     filter_errors,
+    matching_requisitions,
     requisition_conflicts,
     resolve,
     resolve_all,
@@ -456,6 +462,91 @@ class ForeignSourceSyncView(GetReturnURLMixin, PermissionRequiredMixin, View):
                 f"(job #{job.pk}).",
             )
         return redirect(return_url)
+
+
+class ObjectRemoveView(GetReturnURLMixin, PermissionRequiredMixin, View):
+    """One-click Remove from OpenNMS for one Device/VM (FR-10, #133).
+
+    Records the intent as ``exclude`` on the object's override, then re-renders
+    every Foreign Source whose filter matches it, so the node drops out of each
+    requisition (AD-5). The exclude is committed BEFORE the enqueue: the worker
+    reads the database, and a refused enqueue must not lose the intent — the next
+    successful Sync applies it.
+
+    Each Foreign Source gets a plain Sync, keeping the mass-delete guard and the
+    rejected-filter block. Only one this exclude already left empty gets a Remove
+    (``allow_empty``), the deliberate last-node teardown. Object-permission
+    constraints apply to the target, the override and each Requisition.
+    """
+
+    permission_required = (
+        SYNC_PERM,
+        "netbox_opennms.add_monitoringoverride",
+        "netbox_opennms.change_monitoringoverride",
+    )
+    default_return_url = "plugins:netbox_opennms:sync_preview"
+    removable = {
+        "dcim.device": Device,
+        "virtualization.virtualmachine": VirtualMachine,
+    }
+
+    def post(self, request):
+        model = self.removable.get(request.POST.get("object_type", ""))
+        object_id = request.POST.get("object_id", "")
+        if model is None or not object_id.isdigit():
+            messages.error(
+                request, "Remove supports only Devices and Virtual Machines."
+            )
+            return redirect(self.get_return_url(request))
+        target = get_object_or_404(
+            model.objects.restrict(request.user, "view"), pk=object_id
+        )
+
+        overrides = MonitoringOverride.objects
+        with transaction.atomic():
+            override, created = overrides.get_or_create(
+                assigned_object_type=ContentType.objects.get_for_model(model),
+                assigned_object_id=target.pk,
+            )
+            if not override.exclude:
+                override.snapshot()
+                override.exclude = True
+                override.save()
+            # Constraints are checked against the saved row (as NetBox's edit
+            # views do); raising rolls the write back.
+            action = "add" if created else "change"
+            if not overrides.restrict(request.user, action).filter(
+                pk=override.pk
+            ).exists():
+                raise PermissionDenied()
+
+        allowed = Requisition.objects.restrict(request.user, "change")
+        for requisition in matching_requisitions(target):
+            if not allowed.filter(pk=requisition.pk).exists():
+                messages.warning(
+                    request,
+                    f"Not permitted to sync {requisition.name}; {target} stays "
+                    "there until that Requisition is synced.",
+                )
+                continue
+            resolution = resolve(requisition.name)
+            last_node = resolution is None or not resolution.nodes
+            job = _enqueue_foreign_source(
+                request, requisition.name, allow_empty=last_node
+            )
+            if job is not None:
+                verb = "Remove" if last_node else "Sync"
+                messages.success(
+                    request,
+                    f"{verb} submitted for Foreign Source {requisition.name} "
+                    f"to remove {target} (job #{job.pk}).",
+                )
+        messages.info(
+            request,
+            f"{target} is excluded. To restore it, clear Exclude on its "
+            "Monitoring Override and Sync its Requisition.",
+        )
+        return redirect(self.get_return_url(request, target))
 
 
 class MonitoringSyncAllView(PermissionRequiredMixin, View):

@@ -371,7 +371,8 @@ Shown on each Device/VM detail page, backed by the NetBox Job log.
 | Sync Preview | Plugins → NetBox OpenNMS | `netbox_opennms.view_requisition` |
 | Dry run | Requisition detail page | `netbox_opennms.view_requisition` |
 | Sync to OpenNMS | Requisition detail, Dry run | `netbox_opennms.change_requisition` |
-| Remove | `POST /plugins/opennms/sync/foreign-source/` with `remove` set. No button yet, see [#133](https://github.com/no42-org/netbox-opennms-plugin/issues/133) | `netbox_opennms.change_requisition` |
+| Remove from OpenNMS | OpenNMS Sync Status panel on a Device or VM. Sets Exclude on the object's override and removes its node. Clear Exclude and Sync to restore it. | `netbox_opennms.change_requisition`, `netbox_opennms.add_monitoringoverride`, `netbox_opennms.change_monitoringoverride` |
+| Remove a Foreign Source | `POST /plugins/opennms/sync/foreign-source/` with `remove` set. No button. | `netbox_opennms.change_requisition` |
 | Connect OpenNMS | Plugins → NetBox OpenNMS | `netbox_opennms.view_requisition` |
 
 ### Requisition fields

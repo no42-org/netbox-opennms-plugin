@@ -13,6 +13,8 @@ from dcim.models import (
     Site,
 )
 from django.contrib.auth import get_user_model
+from django.contrib.auth.context_processors import PermWrapper
+from django.middleware.csrf import get_token
 from django.test import RequestFactory, TestCase
 from ipam.models import IPAddress
 
@@ -139,11 +141,45 @@ class ObservabilityTest(TestCase):
 
     # --- template extension panel ------------------------------------------
 
-    def _panel_html(self, panel_cls, obj):
+    def _panel_html(self, panel_cls, obj, user=None):
+        # Mirror the context NetBox hands a PluginTemplateExtension.
         request = RequestFactory().get("/")
-        request.user = self.user
-        panel = panel_cls({"object": obj, "request": request})
+        request.user = user or self.user
+        panel = panel_cls(
+            {
+                "object": obj,
+                "request": request,
+                "csrf_token": get_token(request),
+                "perms": PermWrapper(request.user),
+            }
+        )
         return panel.right_page()
+
+    def test_panel_offers_remove_for_governed(self):
+        # #133: one-click node-level Remove from OpenNMS on the panel.
+        html = self._panel_html(DeviceSyncStatusPanel, self.device)
+        self.assertIn("Remove from OpenNMS", html)
+        self.assertIn('name="csrfmiddlewaretoken"', html)
+        self.assertIn('value="dcim.device"', html)
+        self.assertIn(f'value="{self.device.pk}"', html)
+
+    def test_panel_offers_remove_for_conflicted(self):
+        Requisition.objects.create(name="overlap", filter_params=OVERLAP_FILTER)
+        html = self._panel_html(DeviceSyncStatusPanel, self.device)
+        self.assertIn("Remove from OpenNMS", html)
+
+    def test_panel_hides_remove_when_excluded(self):
+        self._completed_job()
+        MonitoringOverride.objects.create(assigned_object=self.device, exclude=True)
+        html = self._panel_html(DeviceSyncStatusPanel, self.device)
+        self.assertIn("Excluded by override", html)
+        self.assertNotIn("Remove from OpenNMS", html)
+
+    def test_panel_hides_remove_without_permission(self):
+        viewer = User.objects.create_user(username="viewer", password="pw")
+        html = self._panel_html(DeviceSyncStatusPanel, self.device, user=viewer)
+        self.assertIn("OpenNMS Sync Status", html)
+        self.assertNotIn("Remove from OpenNMS", html)
 
     def test_panel_renders_for_governed(self):
         html = self._panel_html(DeviceSyncStatusPanel, self.device)

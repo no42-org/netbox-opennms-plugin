@@ -77,4 +77,19 @@
       </tr>
     {% endif %}
   </table>
+  {% if sync_status.governed or sync_status.conflicts %}
+    {% if perms.netbox_opennms.change_requisition and perms.netbox_opennms.add_monitoringoverride and perms.netbox_opennms.change_monitoringoverride %}
+      <div class="card-footer text-end">
+        <form method="post" action="{% url 'plugins:netbox_opennms:object_remove' %}" class="d-inline">
+          {% csrf_token %}
+          <input type="hidden" name="object_type" value="{{ object|meta:'label_lower' }}">
+          <input type="hidden" name="object_id" value="{{ object.pk }}">
+          <input type="hidden" name="return_url" value="{{ object.get_absolute_url }}">
+          <button type="submit" class="btn btn-sm btn-danger" title="Exclude this object and remove its node from OpenNMS">
+            <i class="mdi mdi-trash-can-outline"></i> Remove from OpenNMS
+          </button>
+        </form>
+      </div>
+    {% endif %}
+  {% endif %}
 </div>

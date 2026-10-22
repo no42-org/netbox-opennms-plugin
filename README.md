@@ -284,15 +284,15 @@ Mounting a plugin into the container at runtime is not supported (see [netbox-do
    ```dockerfile
    # Dockerfile
    FROM netboxcommunity/netbox:v4.7.3
-   RUN UV_SYSTEM_CERTS=true /usr/local/bin/uv pip install netbox-opennms-plugin==0.1.0
+   RUN UV_SYSTEM_CERTS=true /usr/local/bin/uv pip install netbox-opennms-plugin==0.1.1
    ```
 
    The image ships `uv`, not `pip`.
    `UV_SYSTEM_CERTS=true` makes `uv` trust the image's operating-system certificate store, which no longer contains the compromised emSign roots, instead of its own bundle.
 
    ```bash
-   docker build -t registry.example.org/netbox-opennms:v4.7.3-0.1.0 .
-   docker push registry.example.org/netbox-opennms:v4.7.3-0.1.0
+   docker build -t registry.example.org/netbox-opennms:v4.7.3-0.1.1 .
+   docker push registry.example.org/netbox-opennms:v4.7.3-0.1.1
    ```
 
    The pin above is the current release.
@@ -330,7 +330,7 @@ Mounting a plugin into the container at runtime is not supported (see [netbox-do
    ```yaml
    image:
      repository: registry.example.org/netbox-opennms
-     tag: v4.7.3-0.1.0
+     tag: v4.7.3-0.1.1
 
    plugins:
      - netbox_opennms

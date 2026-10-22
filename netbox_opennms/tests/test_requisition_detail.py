@@ -12,12 +12,15 @@ from django.test import TestCase
 from django.urls import reverse
 
 from netbox_opennms.models import Requisition
+from netbox_opennms.tests.servers import make_server
 
 
 class RequisitionAddButtonsTest(TestCase):
     @classmethod
     def setUpTestData(cls):
+        cls.server = make_server()
         cls.requisition = Requisition.objects.create(
+            server=cls.server,
             name="router", filter_params={"role": ["router"]}
         )
         cls.user = get_user_model().objects.create_user(

@@ -58,6 +58,7 @@ from netbox_opennms.presets import (
     resolve_detector,
     resolve_policy,
 )
+from netbox_opennms.tests.servers import make_server
 from netbox_opennms.translation import (
     render_foreign_source_definition,
     render_requisition,
@@ -117,6 +118,7 @@ class OpenNMSRoundTripTest(TestCase):
 
     def _requisition_with_icmp(self):
         requisition = Requisition.objects.create(
+            server=make_server(),
             name=FS,
             filter_params={"site": ["citest"], "role": ["router"]},
             services=["ICMP"],
@@ -259,6 +261,7 @@ class OpenNMSRoundTripTest(TestCase):
 
     def test_all_presets_accepted_and_round_trip(self):
         requisition = Requisition.objects.create(
+            server=make_server(),
             name="netbox.citest.allpresets", filter_params={"site": ["citest"]}
         )
         for key in DETECTOR_PRESETS:

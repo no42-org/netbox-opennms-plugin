@@ -23,6 +23,7 @@ from netbox_opennms.models import (
     MonitoringPolicy,
     Requisition,
 )
+from netbox_opennms.tests.servers import make_server
 
 DETECTOR_CLASS = "org.opennms.netmgt.provision.detector.icmp.IcmpDetector"
 POLICY_CLASS = (
@@ -61,10 +62,14 @@ class RequisitionViewTest(
 
     @classmethod
     def setUpTestData(cls):
+        cls.server = make_server()
         for name in ("req-1", "req-2", "req-3"):
-            Requisition.objects.create(name=name, filter_params=FILTER)
+            Requisition.objects.create(
+                server=cls.server, name=name, filter_params=FILTER
+            )
         cls.form_data = {
             "name": "req-4",
+            "server": cls.server.pk,
             "object_types": "both",
             "filter_params": '{"site": ["site-1"]}',
             "scan_interval": "1d",
@@ -90,7 +95,10 @@ class MonitoringDetectorViewTest(
 
     @classmethod
     def setUpTestData(cls):
-        req = Requisition.objects.create(name="req", filter_params=FILTER)
+        cls.server = make_server()
+        req = Requisition.objects.create(
+            server=cls.server, name="req", filter_params=FILTER
+        )
         for name in ("d1", "d2", "d3"):
             MonitoringDetector.objects.create(
                 requisition=req, name=name, rule_class=DETECTOR_CLASS
@@ -118,7 +126,10 @@ class MonitoringPolicyViewTest(
 
     @classmethod
     def setUpTestData(cls):
-        req = Requisition.objects.create(name="req", filter_params=FILTER)
+        cls.server = make_server()
+        req = Requisition.objects.create(
+            server=cls.server, name="req", filter_params=FILTER
+        )
         for name in ("p1", "p2", "p3"):
             MonitoringPolicy.objects.create(
                 requisition=req, name=name, rule_class=POLICY_CLASS
@@ -243,7 +254,9 @@ class AssetMappingViewTest(
 
     @classmethod
     def setUpTestData(cls):
+        cls.server = make_server()
         req = Requisition.objects.create(
+            server=cls.server,
             name="am-req", filter_params={"role": ["switch"]}
         )
         for source, field in [
@@ -277,7 +290,9 @@ class MetadataEntryViewTest(
 
     @classmethod
     def setUpTestData(cls):
+        cls.server = make_server()
         req = Requisition.objects.create(
+            server=cls.server,
             name="me-req", filter_params={"role": ["switch"]}
         )
         for scope, key in [("node", "k1"), ("node", "k2"), ("interface", "k3")]:

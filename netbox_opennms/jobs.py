@@ -214,7 +214,9 @@ class SyncForeignSourceJob(JobRunner):
                 # later even though its (user-chosen) name has no netbox. prefix.
                 # Only when we actually pushed nodes — an empty push is a teardown.
                 if nodes:
-                    DeployedForeignSource.objects.get_or_create(name=foreign_source)
+                    DeployedForeignSource.objects.get_or_create(
+                        server=resolution.requisition.server, name=foreign_source
+                    )
                 # Best-effort advisory (FR-5/AD-16): warn on an unknown location.
                 try:
                     for location in unknown_locations(client, locations):

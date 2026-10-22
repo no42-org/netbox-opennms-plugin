@@ -19,6 +19,7 @@ from netbox_opennms.catalog import (
 from netbox_opennms.client import DiscoveredParam, DiscoveredPlugin, OpenNMSError
 from netbox_opennms.models import MonitoringDetector, MonitoringPolicy, Requisition
 from netbox_opennms.presets import DETECTOR_PRESETS, POLICY_PRESETS
+from netbox_opennms.tests.servers import make_server
 
 ICMP_CLASS = DETECTOR_PRESETS["icmp"]["class"]
 MIP_CLASS = POLICY_PRESETS["match-ip-interface"]["class"]
@@ -149,6 +150,7 @@ class PresetSeedTest(TestCase):
 
     def test_apply_preset_seeds_class_and_defaults(self):
         req = Requisition.objects.create(
+            server=make_server(),
             name="r-seed", filter_params={"role": ["switch"]}
         )
         detector = MonitoringDetector.objects.create(
@@ -185,9 +187,11 @@ class PresetRuleFormTest(TestCase):
     """The detector/policy form renders parameters from the catalog (RD-1)."""
 
     def setUp(self):
+        self.server = make_server()
         cache.clear()
         self.addCleanup(cache.clear)
         self.req = Requisition.objects.create(
+            server=self.server,
             name="form-req", filter_params={"role": ["switch"]}
         )
 

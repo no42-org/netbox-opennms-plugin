@@ -19,6 +19,7 @@ from ipam.models import IPAddress
 from netbox_opennms.enrichment import resolve_source
 from netbox_opennms.membership import resolve_node
 from netbox_opennms.models import AssetMapping, MetadataEntry, Requisition
+from netbox_opennms.tests.servers import make_server
 
 
 class ResolveSourceTest(SimpleTestCase):
@@ -50,7 +51,9 @@ class ResolveSourceTest(SimpleTestCase):
 class AssetMappingValidationTest(TestCase):
     @classmethod
     def setUpTestData(cls):
+        cls.server = make_server()
         cls.req = Requisition.objects.create(
+            server=cls.server,
             name="asset-req", filter_params={"role": ["x"]}
         )
 
@@ -70,7 +73,9 @@ class AssetMappingValidationTest(TestCase):
 class MetadataEntryValidationTest(TestCase):
     @classmethod
     def setUpTestData(cls):
+        cls.server = make_server()
         cls.req = Requisition.objects.create(
+            server=cls.server,
             name="meta-req", filter_params={"role": ["x"]}
         )
 
@@ -104,6 +109,7 @@ class MetadataEntryValidationTest(TestCase):
 class EnrichmentResolveTest(TestCase):
     @classmethod
     def setUpTestData(cls):
+        cls.server = make_server()
         site = Site.objects.create(name="R", slug="r")
         role = DeviceRole.objects.create(name="Rtr", slug="rtr")
         mfr = Manufacturer.objects.create(name="Acme", slug="acme")
@@ -116,6 +122,7 @@ class EnrichmentResolveTest(TestCase):
         cls.device.primary_ip4 = ip
         cls.device.save()
         cls.req = Requisition.objects.create(
+            server=cls.server,
             name="enrich", filter_params={"role": ["rtr"]}, services=["ICMP"]
         )
         AssetMapping.objects.create(

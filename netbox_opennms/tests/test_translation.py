@@ -12,6 +12,7 @@ from netbox_opennms.models import (
     MonitoringPolicy,
     Requisition,
 )
+from netbox_opennms.tests.servers import make_server
 from netbox_opennms.translation import (
     RenderError,
     render_foreign_source_definition,
@@ -141,7 +142,9 @@ class RenderForeignSourceDefinitionTest(TestCase):
 
     @classmethod
     def setUpTestData(cls):
+        cls.server = make_server()
         cls.requisition = Requisition.objects.create(
+            server=cls.server,
             name="netbox.raleigh.router",
             scan_interval="30m",
             filter_params={"site": ["raleigh"], "role": ["router"]},
@@ -198,6 +201,7 @@ class RenderForeignSourceDefinitionTest(TestCase):
 
     def test_render_error_detector_without_class(self):
         bare = Requisition.objects.create(
+            server=self.server,
             name="bare", filter_params={"site": ["raleigh"]}
         )
         MonitoringDetector.objects.create(requisition=bare, name="x", rule_class="")

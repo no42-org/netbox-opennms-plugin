@@ -22,6 +22,7 @@ from netbox_opennms.models import (
     MonitoredService,
     MonitoringOverride,
 )
+from netbox_opennms.tests.servers import make_server
 
 
 class MonitoringOverrideFormTest(TestCase):
@@ -52,9 +53,14 @@ class MonitoringOverrideFormTest(TestCase):
 
 
 class RequisitionSavedFilterImportTest(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.server = make_server()
+
     def _form(self, **overrides):
         data = {
             "name": "core-switches",
+            "server": self.server.pk,
             "object_types": "device",
             "filter_params": "{}",
             "scan_interval": "1d",

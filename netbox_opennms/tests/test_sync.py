@@ -23,6 +23,7 @@ from virtualization.models import VirtualMachine
 
 from netbox_opennms.jobs import sync_status_for
 from netbox_opennms.models import MonitoringDetector, MonitoringOverride, Requisition
+from netbox_opennms.tests.servers import make_server
 
 User = get_user_model()
 FS = "netbox.raleigh.router"
@@ -31,6 +32,7 @@ FS = "netbox.raleigh.router"
 class SyncViewTest(TestCase):
     @classmethod
     def setUpTestData(cls):
+        cls.server = make_server()
         site = Site.objects.create(name="Raleigh", slug="raleigh")
         role = DeviceRole.objects.create(name="Router", slug="router")
         mfr = Manufacturer.objects.create(name="Acme", slug="acme")
@@ -45,6 +47,7 @@ class SyncViewTest(TestCase):
         cls.device.primary_ip4 = ip
         cls.device.save()
         cls.requisition = Requisition.objects.create(
+            server=cls.server,
             name=FS, filter_params={"site": ["raleigh"], "role": ["router"]}
         )
         MonitoringDetector.objects.create(
@@ -122,7 +125,9 @@ class SyncViewTest(TestCase):
     @mock.patch("netbox_opennms.views.SyncForeignSourceJob.enqueue_sync")
     def test_remove_conflicted_object_removes_from_every_match(self, mock_enqueue):
         mock_enqueue.return_value = mock.Mock(pk=23)
-        Requisition.objects.create(name="overlap", filter_params={"site": ["raleigh"]})
+        Requisition.objects.create(
+            server=self.server, name="overlap", filter_params={"site": ["raleigh"]}
+        )
         self._remove(self.device)
         self.assertTrue(self._override(self.device).exclude)
         enqueued = sorted(c.args[0] for c in mock_enqueue.call_args_list)
@@ -234,6 +239,7 @@ class SyncViewTest(TestCase):
         # Review #2: Sync-all must not enqueue a guaranteed-failed job for a
         # frozen requisition — it skips it with a warning.
         Requisition.objects.create(
+            server=self.server,
             name="overlap", filter_params={"site": ["raleigh"]}
         )
         self.client.force_login(self.superuser)
@@ -270,6 +276,7 @@ class SyncViewTest(TestCase):
         # Round-2 review #4: a zero-member source duplicates harmlessly — no
         # false freeze alarm.
         empty = Requisition.objects.create(
+            server=self.server,
             name="empty", filter_params={"site": ["raleigh"], "role": ["unused"]}
         )
         self.client.force_login(self.superuser)

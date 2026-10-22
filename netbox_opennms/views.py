@@ -161,6 +161,7 @@ class RequisitionDuplicateView(PermissionRequiredMixin, View):
         clone = Requisition(
             name=name,
             description=source.description,
+            server=source.server,
             object_types=source.object_types,
             filter_params=deepcopy(source.filter_params),
             scan_interval=source.scan_interval,

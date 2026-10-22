@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: MIT
 """Tests for the data model: clean() rules, constraints, helpers."""
 
+from unittest import mock
+
 from dcim.models import (
     Device,
     DeviceRole,
@@ -11,20 +13,24 @@ from dcim.models import (
     Site,
 )
 from django.core.exceptions import ValidationError
-from django.db import IntegrityError, transaction
+from django.db import IntegrityError, connection, transaction
 from django.test import TestCase
 from ipam.models import IPAddress
 
+from netbox_opennms.choices import ServerOriginChoices
 from netbox_opennms.models import (
+    DeployedForeignSource,
     MonitoredService,
     MonitoringDetector,
     MonitoringOverride,
     MonitoringPolicy,
+    OpenNMSServer,
     Requisition,
     object_ip_pks,
     override_ip_pks,
 )
 from netbox_opennms.presets import resolve_policy
+from netbox_opennms.tests.servers import make_server
 
 FILTER = {"site": ["raleigh"], "role": ["router"]}
 
@@ -33,7 +39,9 @@ class RequisitionAndRuleTest(TestCase):
     @classmethod
     def setUpTestData(cls):
         cls.req = Requisition.objects.create(
-            name="netbox.raleigh.router", filter_params=FILTER
+            server=make_server(),
+            name="netbox.raleigh.router",
+            filter_params=FILTER,
         )
 
     def test_requisition_str(self):
@@ -218,3 +226,62 @@ class OverrideAndServiceTest(TestCase):
             MonitoredService.objects.create(
                 override=override, ip_address=self.ip, name="ICMP"
             )
+
+
+class OpenNMSServerModelTest(TestCase):
+    def test_password_is_ciphertext_in_database(self):
+        server = make_server(password="hunter2")
+        with connection.cursor() as cur:
+            cur.execute(
+                "SELECT password, headers FROM netbox_opennms_opennmsserver "
+                "WHERE id = %s",
+                [server.pk],
+            )
+            password, headers = cur.fetchone()
+        self.assertNotIn("hunter2", password)
+        self.assertEqual(OpenNMSServer.objects.get(pk=server.pk).password, "hunter2")
+
+    def test_changelog_excludes_secrets(self):
+        server = make_server(password="hunter2", headers={"X-Token": "t"})
+        data = server.serialize_object()
+        self.assertNotIn("password", data)
+        self.assertNotIn("headers", data)
+
+    def test_url_scheme_required(self):
+        with self.assertRaises(ValidationError) as ctx:
+            OpenNMSServer(
+                name="x", url="onms.example.org", username="u", password="p"
+            ).full_clean()
+        self.assertIn("url", ctx.exception.message_dict)
+
+    def test_headers_must_be_string_mapping(self):
+        for bad in (["a"], {"X": 1}):
+            with self.assertRaises(ValidationError) as ctx:
+                OpenNMSServer(
+                    name="x", url="https://a/", username="u", password="p",
+                    headers=bad,
+                ).full_clean()
+            self.assertIn("headers", ctx.exception.message_dict)
+
+    def test_local_requires_credentials_on_create(self):
+        with self.assertRaises(ValidationError) as ctx:
+            OpenNMSServer(name="x", url="https://a/").full_clean()
+        self.assertIn("password", ctx.exception.message_dict)
+
+    def test_is_missing_for_provisioned_without_config(self):
+        server = OpenNMSServer.objects.create(
+            name="ghost", origin=ServerOriginChoices.PROVISIONED, url="https://g/"
+        )
+        with mock.patch("netbox_opennms.models.config.server_entry", return_value=None):
+            self.assertTrue(server.is_missing)
+
+    def test_requisition_requires_server(self):
+        with transaction.atomic(), self.assertRaises(IntegrityError):
+            Requisition.objects.create(name="r", filter_params={"site": ["x"]})
+
+    def test_deployed_foreign_source_unique_per_server(self):
+        a, b = make_server("a"), make_server("b")
+        DeployedForeignSource.objects.create(server=a, name="fs")
+        DeployedForeignSource.objects.create(server=b, name="fs")  # no error
+        with transaction.atomic(), self.assertRaises(IntegrityError):
+            DeployedForeignSource.objects.create(server=a, name="fs")

@@ -75,6 +75,7 @@ class RequisitionForm(NetBoxModelForm):
         fields = (
             "name",
             "description",
+            "server",
             "object_types",
             "import_from_saved_filter",
             "filter_params",

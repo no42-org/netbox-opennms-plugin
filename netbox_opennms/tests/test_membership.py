@@ -35,6 +35,7 @@ from netbox_opennms.models import (
     MonitoringOverride,
     Requisition,
 )
+from netbox_opennms.tests.servers import make_server
 
 FS = "netbox.raleigh.router"
 
@@ -42,6 +43,7 @@ FS = "netbox.raleigh.router"
 class MembershipTest(TestCase):
     @classmethod
     def setUpTestData(cls):
+        cls.onms_server = make_server()
         cls.site = Site.objects.create(name="Raleigh", slug="raleigh")
         cls.router = DeviceRole.objects.create(name="Router", slug="router")
         cls.server = DeviceRole.objects.create(name="Server", slug="server")
@@ -51,7 +53,9 @@ class MembershipTest(TestCase):
     def _requisition(self, name=FS, filter_params=None, **kw):
         if filter_params is None:
             filter_params = {"site": ["raleigh"], "role": ["router"]}
-        return Requisition.objects.create(name=name, filter_params=filter_params, **kw)
+        return Requisition.objects.create(
+            server=self.onms_server, name=name, filter_params=filter_params, **kw
+        )
 
     def _device(self, name, role=None, site=None, ip="10.0.0.1/24", primary=True):
         device = Device.objects.create(

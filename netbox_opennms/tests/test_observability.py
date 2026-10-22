@@ -28,6 +28,7 @@ from netbox_opennms.template_content import (
     DeviceSyncStatusPanel,
     VirtualMachineSyncStatusPanel,
 )
+from netbox_opennms.tests.servers import make_server
 
 User = get_user_model()
 FS = "netbox.raleigh.router"
@@ -37,11 +38,13 @@ OVERLAP_FILTER = {"site": ["raleigh"]}
 class ObservabilityTest(TestCase):
     @classmethod
     def setUpTestData(cls):
+        cls.server = make_server()
         cls.site = Site.objects.create(name="Raleigh", slug="raleigh")
         cls.role = DeviceRole.objects.create(name="Router", slug="router")
         mfr = Manufacturer.objects.create(name="Acme", slug="acme")
         cls.dt = DeviceType.objects.create(manufacturer=mfr, model="M1", slug="m1")
         cls.requisition = Requisition.objects.create(
+            server=cls.server,
             name=FS, filter_params={"site": ["raleigh"], "role": ["router"]}
         )
         cls.device = cls._device("rtr-1", "10.0.0.1/24")
@@ -101,7 +104,9 @@ class ObservabilityTest(TestCase):
 
     def test_conflicted_device(self):
         # C1: two matching filters → conflicted, named parties, not governed.
-        Requisition.objects.create(name="overlap", filter_params=OVERLAP_FILTER)
+        Requisition.objects.create(
+            server=self.server, name="overlap", filter_params=OVERLAP_FILTER
+        )
         status = sync_status_for(self.device)
         self.assertEqual(status["conflicts"], [FS, "overlap"])
         self.assertFalse(status["governed"])
@@ -112,14 +117,18 @@ class ObservabilityTest(TestCase):
         # actually synced the object — a conflict must not hide it. And the
         # outcome must NOT read "removed": the node is frozen-in-place (#2).
         self._completed_job()
-        Requisition.objects.create(name="overlap", filter_params=OVERLAP_FILTER)
+        Requisition.objects.create(
+            server=self.server, name="overlap", filter_params=OVERLAP_FILTER
+        )
         status = sync_status_for(self.device)
         self.assertEqual(status["conflicts"], [FS, "overlap"])
         self.assertIsNotNone(status["job"])
         self.assertEqual(status["outcome"][0], "succeeded-accepted")
 
     def test_panel_renders_conflicted_state(self):
-        Requisition.objects.create(name="overlap", filter_params=OVERLAP_FILTER)
+        Requisition.objects.create(
+            server=self.server, name="overlap", filter_params=OVERLAP_FILTER
+        )
         html = self._panel_html(DeviceSyncStatusPanel, self.device)
         self.assertIn("Conflicted between", html)
         self.assertIn("overlap", html)
@@ -164,7 +173,9 @@ class ObservabilityTest(TestCase):
         self.assertIn(f'value="{self.device.pk}"', html)
 
     def test_panel_offers_remove_for_conflicted(self):
-        Requisition.objects.create(name="overlap", filter_params=OVERLAP_FILTER)
+        Requisition.objects.create(
+            server=self.server, name="overlap", filter_params=OVERLAP_FILTER
+        )
         html = self._panel_html(DeviceSyncStatusPanel, self.device)
         self.assertIn("Remove from OpenNMS", html)
 

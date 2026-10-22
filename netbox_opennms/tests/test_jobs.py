@@ -30,6 +30,7 @@ from netbox_opennms.models import (
     MonitoringOverride,
     Requisition,
 )
+from netbox_opennms.tests.servers import make_server
 from netbox_opennms.translation import (
     render_foreign_source_definition,
     render_requisition,
@@ -41,11 +42,13 @@ FS = "netbox.raleigh.router"
 class SyncForeignSourceJobTest(TestCase):
     @classmethod
     def setUpTestData(cls):
+        cls.server = make_server()
         cls.site = Site.objects.create(name="Raleigh", slug="raleigh")
         cls.role = DeviceRole.objects.create(name="Router", slug="router")
         mfr = Manufacturer.objects.create(name="Acme", slug="acme")
         cls.dt = DeviceType.objects.create(manufacturer=mfr, model="M1", slug="m1")
         cls.requisition = Requisition.objects.create(
+            server=cls.server,
             name=FS, filter_params={"site": ["raleigh"], "role": ["router"]}
         )
         MonitoringDetector.objects.create(
@@ -142,6 +145,7 @@ class SyncForeignSourceJobTest(TestCase):
         # C1: an overlap blocks Sync of the involved Requisition — JobFailed with
         # the conflict error, and NOTHING is pushed to OpenNMS.
         Requisition.objects.create(
+            server=self.server,
             name="overlap", filter_params={"site": ["raleigh"]}
         )
         with self.assertRaises(JobFailed):
@@ -152,8 +156,9 @@ class SyncForeignSourceJobTest(TestCase):
     def test_reconcile_ignores_frozen_requisition(self, mock_from_config):
         # C5: a frozen (conflicted) Requisition counts as monitored — the drift
         # reconciler must never tear down the state the freeze protects.
-        DeployedForeignSource.objects.create(name=FS)
+        DeployedForeignSource.objects.create(server=self.server, name=FS)
         Requisition.objects.create(
+            server=self.server,
             name="overlap", filter_params={"site": ["raleigh"]}
         )
         client = mock_from_config.return_value.__enter__.return_value
@@ -315,7 +320,7 @@ class SyncForeignSourceJobTest(TestCase):
         # record, so the reconciler can't re-Remove it every interval (review #3).
         client = mock_from_config.return_value.__enter__.return_value
         client.import_requisition.return_value = mock.Mock(status_code=202)
-        DeployedForeignSource.objects.create(name=FS)
+        DeployedForeignSource.objects.create(server=self.server, name=FS)
         Device.objects.filter(pk=self.device.pk).delete()
         self._runner().run(foreign_source=FS, allow_empty=True)
         client.delete_requisition.assert_called_once_with(FS)
@@ -326,8 +331,8 @@ class SyncForeignSourceJobTest(TestCase):
     def test_reconcile_enqueues_remove_for_orphans(self, mock_from_config):
         # Ownership is tracked by DeployedForeignSource, not a name prefix — so a
         # USER-named orphan (no netbox. prefix) is detected (review #4).
-        DeployedForeignSource.objects.create(name=FS)
-        DeployedForeignSource.objects.create(name="core-switches")
+        DeployedForeignSource.objects.create(server=self.server, name=FS)
+        DeployedForeignSource.objects.create(server=self.server, name="core-switches")
         client = mock_from_config.return_value.__enter__.return_value
         client.list_requisition_names.return_value = {
             FS,  # managed + monitored (requisition + member) → kept
@@ -364,6 +369,7 @@ class SyncForeignSourceJobTest(TestCase):
     def test_monitored_foreign_sources_lists_syncable_requisitions(self):
         durham = Site.objects.create(name="Durham", slug="durham")
         Requisition.objects.create(
+            server=self.server,
             name="netbox.durham.router",
             filter_params={"site": ["durham"], "role": ["router"]},
         )

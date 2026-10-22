@@ -20,6 +20,11 @@ from django.db import models
 from django.urls import reverse
 from netbox.models import NetBoxModel
 
+# Not ``from . import config``: the package's ``config`` attribute is the
+# PluginConfig class until the submodule is imported, so that form can bind
+# the class. This form always imports (and binds) the module.
+import netbox_opennms.config as config
+
 from .choices import (
     DetectorPresetChoices,
     InterfaceRoleChoices,
@@ -28,9 +33,12 @@ from .choices import (
     NetBoxSourceChoices,
     ObjectTypeChoices,
     PolicyPresetChoices,
+    ServerOriginChoices,
     ServiceChoices,
 )
+from .crypto import Undecryptable
 from .derivation import validate_location_name, validate_requisition_name
+from .fields import EncryptedCharField, EncryptedJSONField
 from .presets import (
     detector_required_params,
     policy_required_params,
@@ -72,6 +80,105 @@ def _require_preset_params(rule, required):
         )
 
 
+class OpenNMSServer(NetBoxModel):
+    """An OpenNMS instance that Requisitions are synced to.
+
+    A **provisioned** server is declared in ``PLUGINS_CONFIG``; the row carries
+    only its name and URL and the credentials are read from config at use. A
+    **local** server is created in the UI and stores its credentials here,
+    Fernet-encrypted. ``password`` and ``headers`` never enter the changelog.
+    """
+
+    name = models.CharField(max_length=100, unique=True)
+    origin = models.CharField(
+        max_length=16,
+        choices=ServerOriginChoices,
+        default=ServerOriginChoices.LOCAL,
+    )
+    # Base URL including the context path. A CharField, not a URLField: Django's
+    # URLValidator rejects single-label hosts such as ``http://opennms:8980``.
+    url = models.CharField(max_length=255)
+    username = models.CharField(max_length=100, blank=True)
+    password = EncryptedCharField(blank=True)
+    # Extra HTTP headers sent with every request (e.g. for an auth proxy).
+    headers = EncryptedJSONField(default=dict, blank=True)
+    # Monitoring Location used when a Requisition and its member leave it blank.
+    default_location = models.CharField(max_length=255, blank=True, default="")
+    description = models.CharField(max_length=200, blank=True)
+
+    class Meta:
+        ordering = ("name",)
+        verbose_name = "OpenNMS server"
+        verbose_name_plural = "OpenNMS servers"
+
+    def __str__(self):
+        return self.name
+
+    def get_absolute_url(self):
+        return reverse("plugins:netbox_opennms:opennmsserver", args=[self.pk])
+
+    def clean(self):
+        super().clean()
+        errors = {}
+        if self.url and not self.url.startswith(("https://", "http://")):
+            errors["url"] = "The URL must start with https:// or http://."
+        try:
+            validate_location_name(self.default_location)
+        except ValueError as exc:
+            errors["default_location"] = str(exc)
+        if not isinstance(self.headers, dict) or not all(
+            isinstance(key, str) and isinstance(value, str)
+            for key, value in self.headers.items()
+        ):
+            errors["headers"] = "Headers must be a mapping of strings to strings."
+        if self.origin == ServerOriginChoices.LOCAL:
+            if not self.username:
+                errors["username"] = "A local server needs a username."
+            if not self.password and not self._stored_password():
+                errors["password"] = "A local server needs a password."
+        if errors:
+            raise ValidationError(errors)
+
+    def _stored_password(self):
+        """The saved password ("" for an unsaved row); a blank edit keeps it."""
+        if not self.pk:
+            return ""
+        stored = (
+            OpenNMSServer.objects.filter(pk=self.pk)
+            .values_list("password", flat=True)
+            .first()
+        )
+        return stored or ""
+
+    def serialize_object(self, exclude=None):
+        # Secrets (even as ciphertext) must never land in ObjectChange data.
+        exclude = [*(exclude or []), "password", "headers"]
+        return super().serialize_object(exclude=exclude)
+
+    @property
+    def is_provisioned(self):
+        return self.origin == ServerOriginChoices.PROVISIONED
+
+    @property
+    def is_missing(self):
+        """A provisioned row whose ``PLUGINS_CONFIG`` entry is gone."""
+        return self.is_provisioned and config.server_entry(self.name) is None
+
+    @property
+    def credentials_ok(self):
+        """False when stored secrets cannot be decrypted with the current key."""
+        return not isinstance(self.password, Undecryptable) and not isinstance(
+            self.headers, Undecryptable
+        )
+
+    @property
+    def effective_username(self):
+        if self.is_provisioned:
+            entry = config.server_entry(self.name)
+            return entry["username"] if entry else ""
+        return self.username
+
+
 class Requisition(NetBoxModel):
     """A user-named OpenNMS Foreign Source (definition + filter-scoped requisition).
 
@@ -85,6 +192,10 @@ class Requisition(NetBoxModel):
 
     name = models.CharField(max_length=100, unique=True)
     description = models.CharField(max_length=200, blank=True)
+    # The OpenNMS server this Foreign Source is synced to.
+    server = models.ForeignKey(
+        to=OpenNMSServer, on_delete=models.PROTECT, related_name="requisitions"
+    )
     # Which NetBox object types this Requisition's filter draws from.
     object_types = models.CharField(
         max_length=10,
@@ -573,10 +684,21 @@ class DeployedForeignSource(models.Model):
     never touches a requisition NetBox didn't create.
     """
 
-    name = models.CharField(max_length=100, unique=True)
+    server = models.ForeignKey(
+        to=OpenNMSServer,
+        on_delete=models.CASCADE,
+        related_name="deployed_foreign_sources",
+    )
+    name = models.CharField(max_length=100)
 
     class Meta:
         ordering = ("name",)
+        constraints = [
+            models.UniqueConstraint(
+                fields=("server", "name"),
+                name="netbox_opennms_deployedforeignsource_unique_server_name",
+            ),
+        ]
         verbose_name = "deployed foreign source"
         verbose_name_plural = "deployed foreign sources"
 

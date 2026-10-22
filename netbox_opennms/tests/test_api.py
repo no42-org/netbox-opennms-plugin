@@ -25,6 +25,7 @@ from netbox_opennms.models import (
     MonitoringPolicy,
     Requisition,
 )
+from netbox_opennms.tests.servers import make_server
 
 DETECTOR_CLASS = "org.opennms.netmgt.provision.detector.icmp.IcmpDetector"
 POLICY_CLASS = (
@@ -69,12 +70,28 @@ class RequisitionAPITest(_NoGraphQL, APIViewTestCases.APIViewTestCase):
 
     @classmethod
     def setUpTestData(cls):
+        cls.server = make_server()
         for name in ("r1", "r2", "r3"):
-            Requisition.objects.create(name=name, filter_params=FILTER)
+            Requisition.objects.create(
+                server=cls.server, name=name, filter_params=FILTER
+            )
         cls.create_data = [
-            {"name": "r4", "object_types": "both", "filter_params": {"site": ["rdu"]}},
-            {"name": "r5", "filter_params": {"role": ["router"]}},
-            {"name": "r6", "filter_params": {"site": ["raleigh"]}},
+            {
+                "name": "r4",
+                "server": cls.server.pk,
+                "object_types": "both",
+                "filter_params": {"site": ["rdu"]},
+            },
+            {
+                "name": "r5",
+                "server": cls.server.pk,
+                "filter_params": {"role": ["router"]},
+            },
+            {
+                "name": "r6",
+                "server": cls.server.pk,
+                "filter_params": {"site": ["raleigh"]},
+            },
         ]
 
 
@@ -85,7 +102,10 @@ class MonitoringDetectorAPITest(_NoGraphQL, APIViewTestCases.APIViewTestCase):
 
     @classmethod
     def setUpTestData(cls):
-        req = Requisition.objects.create(name="req", filter_params=FILTER)
+        cls.server = make_server()
+        req = Requisition.objects.create(
+            server=cls.server, name="req", filter_params=FILTER
+        )
         for name in ("d1", "d2", "d3"):
             MonitoringDetector.objects.create(
                 requisition=req, name=name, rule_class=DETECTOR_CLASS
@@ -104,7 +124,10 @@ class MonitoringPolicyAPITest(_NoGraphQL, APIViewTestCases.APIViewTestCase):
 
     @classmethod
     def setUpTestData(cls):
-        req = Requisition.objects.create(name="req", filter_params=FILTER)
+        cls.server = make_server()
+        req = Requisition.objects.create(
+            server=cls.server, name="req", filter_params=FILTER
+        )
         for name in ("p1", "p2", "p3"):
             MonitoringPolicy.objects.create(
                 requisition=req, name=name, rule_class=POLICY_CLASS
@@ -191,7 +214,9 @@ class AssetMappingAPITest(_NoGraphQL, APIViewTestCases.APIViewTestCase):
 
     @classmethod
     def setUpTestData(cls):
+        cls.server = make_server()
         req = Requisition.objects.create(
+            server=cls.server,
             name="am-api", filter_params={"role": ["switch"]}
         )
         for source, field in [
@@ -216,7 +241,9 @@ class MetadataEntryAPITest(_NoGraphQL, APIViewTestCases.APIViewTestCase):
 
     @classmethod
     def setUpTestData(cls):
+        cls.server = make_server()
         req = Requisition.objects.create(
+            server=cls.server,
             name="me-api", filter_params={"role": ["switch"]}
         )
         for key in ["k1", "k2", "k3"]:

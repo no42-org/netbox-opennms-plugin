@@ -44,9 +44,14 @@ lint: ## Ruff lint (pinned image, no host install)
 
 verify: lint test ## Lint + test (the CI entrypoint)
 
+# pip < 26.2.2 trusts the compromised emSign roots through its vendored
+# certifi, so upgrade it from a hash-pinned wheel before any PyPI download.
+PIP_WHEEL := https://files.pythonhosted.org/packages/3f/06/3e4420302363fbb71be3c7f35ce042f54bfca330e3e66b3a2e3c4cca579f/pip-26.2.2-py3-none-any.whl\#sha256=fd7f4dfa8190e014013b9f08f3e973f4e4c26ffd179a204895533a7254813a70
+
 build: ## Build the wheel + sdist into dist/ (pinned Python image)
 	docker run --rm -v "$(CURDIR)":/src -w /src $(BUILD_IMAGE) \
-		sh -c 'pip install --quiet build && python -m build && \
+		sh -c 'pip install --quiet "pip @ $(PIP_WHEEL)" && \
+		pip install --quiet build && python -m build && \
 		chown -R $(OWNER) dist build *.egg-info 2>/dev/null || true'
 
 integration: ## Live OpenNMS Horizon 36 round-trip (slow; boots OpenNMS)

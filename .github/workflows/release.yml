@@ -112,6 +112,10 @@ jobs:
       # (Pinned-Dependencies) reads any argument that is not a bare flag,
       # including the joined --option=value form, as an extra package and
       # flags the install as unpinned.
+      # pip < 26.2.2 trusts the compromised emSign roots through its vendored
+      # certifi; upgrade it from a hash-pinned wheel before touching PyPI.
+      - name: Upgrade pip to a build without the emSign roots
+        run: python3 -m pip install --quiet "pip @ https://files.pythonhosted.org/packages/3f/06/3e4420302363fbb71be3c7f35ce042f54bfca330e3e66b3a2e3c4cca579f/pip-26.2.2-py3-none-any.whl#sha256=fd7f4dfa8190e014013b9f08f3e973f4e4c26ffd179a204895533a7254813a70"
       - name: Install wheel with dependencies for SBOM scan
         env:
           PIP_ONLY_BINARY: ":all:"

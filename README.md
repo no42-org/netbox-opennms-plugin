@@ -284,8 +284,11 @@ Mounting a plugin into the container at runtime is not supported (see [netbox-do
    ```dockerfile
    # Dockerfile
    FROM netboxcommunity/netbox:v4.7.3
-   RUN /opt/netbox/venv/bin/pip install netbox-opennms-plugin==0.1.0
+   RUN UV_SYSTEM_CERTS=true /usr/local/bin/uv pip install netbox-opennms-plugin==0.1.0
    ```
+
+   The image ships `uv`, not `pip`.
+   `UV_SYSTEM_CERTS=true` makes `uv` trust the image's operating-system certificate store, which no longer contains the compromised emSign roots, instead of its own bundle.
 
    ```bash
    docker build -t registry.example.org/netbox-opennms:v4.7.3-0.1.0 .
@@ -294,6 +297,9 @@ Mounting a plugin into the container at runtime is not supported (see [netbox-do
 
    The pin above is the current release.
    For an air-gapped build, run `make build` and `COPY` the wheel from `dist/` instead.
+
+   Installing the plugin also upgrades `certifi` to a version without the emSign roots, which the plugin's HTTPS client trusts by default.
+   For an image you cannot rebuild yet, set `REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt` on the NetBox and worker containers so the client uses the operating-system store instead.
 
 2. Store the OpenNMS password in a Kubernetes `Secret`.
    The key name must end in `.yaml`:

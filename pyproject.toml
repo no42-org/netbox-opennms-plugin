@@ -25,6 +25,9 @@ classifiers = [
 ]
 # NetBox itself is the host application and is NOT declared here.
 dependencies = [
+    # 2026.10.19 drops the compromised emSign roots; requests trusts this
+    # bundle, and the NetBox image may ship an older certifi.
+    "certifi>=2026.10.19",
     "cryptography>=42",
     "requests>=2.34",
 ]

@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: MIT
 """Model fields that store their value Fernet-encrypted in a text column."""
 
+import copy
 import json
 
 from cryptography.fernet import InvalidToken
@@ -24,7 +25,7 @@ class _EncryptedField(models.TextField):
 
     def from_db_value(self, value, expression, connection):
         if value is None or value == "":
-            return self.empty_value
+            return copy.copy(self.empty_value)
         try:
             return self._load(decrypt(value))
         except InvalidToken:
@@ -32,7 +33,7 @@ class _EncryptedField(models.TextField):
 
     def to_python(self, value):
         if value is None or value == "":
-            return self.empty_value
+            return copy.copy(self.empty_value)
         return value
 
     def get_prep_value(self, value):

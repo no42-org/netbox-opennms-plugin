@@ -14,6 +14,9 @@ from netbox_opennms.fields import EncryptedCharField, EncryptedJSONField
 
 
 class CryptoTest(SimpleTestCase):
+    def setUp(self):
+        fernet.cache_clear()
+
     def tearDown(self):
         fernet.cache_clear()
 
@@ -71,6 +74,13 @@ class EncryptedFieldTest(SimpleTestCase):
         self.assertEqual(EncryptedJSONField().from_db_value("", None, None), {})
         self.assertEqual(EncryptedCharField().get_prep_value(""), "")
         self.assertEqual(EncryptedJSONField().get_prep_value({}), "")
+
+    def test_empty_json_loads_are_independent_objects(self):
+        f = EncryptedJSONField()
+        first = f.from_db_value("", None, None)
+        first["x"] = "y"
+        self.assertEqual(f.from_db_value("", None, None), {})
+        self.assertIsNot(f.to_python(""), f.to_python(None))
 
     def test_undecryptable_sentinel_preserves_ciphertext(self):
         f = EncryptedCharField()

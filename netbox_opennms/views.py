@@ -72,7 +72,7 @@ def _location_warnings(locations):
     ]
 
 
-def _enqueue_foreign_source(request, foreign_source, allow_empty=False):
+def _enqueue_foreign_source(request, foreign_source, server_id, allow_empty=False):
     """Validate a Foreign Source's resolved intent and enqueue a sync (FR-8)."""
     resolution = resolve(foreign_source)
     result = validate_resolution(resolution, removing=allow_empty)
@@ -91,7 +91,10 @@ def _enqueue_foreign_source(request, foreign_source, allow_empty=False):
         messages.warning(request, warning)
 
     return SyncForeignSourceJob.enqueue_sync(
-        foreign_source, user=request.user, allow_empty=allow_empty
+        foreign_source,
+        server_id=server_id,
+        user=request.user,
+        allow_empty=allow_empty,
     )
 
 
@@ -213,7 +216,9 @@ class RequisitionSyncView(PermissionRequiredMixin, View):
 
     def post(self, request, pk):
         requisition = get_object_or_404(Requisition, pk=pk)
-        job = _enqueue_foreign_source(request, requisition.name)
+        job = _enqueue_foreign_source(
+            request, requisition.name, requisition.server_id
+        )
         if job is not None:
             messages.success(
                 request, f"Sync submitted for {requisition.name} (job #{job.pk})."
@@ -453,8 +458,14 @@ class ForeignSourceSyncView(GetReturnURLMixin, PermissionRequiredMixin, View):
         if not foreign_source:
             messages.error(request, "No Foreign Source given.")
             return redirect(return_url)
+        requisition = Requisition.objects.filter(name=foreign_source).first()
+        if requisition is None:
+            messages.error(request, f"No Requisition named {foreign_source}.")
+            return redirect(return_url)
 
-        job = _enqueue_foreign_source(request, foreign_source, allow_empty=allow_empty)
+        job = _enqueue_foreign_source(
+            request, foreign_source, requisition.server_id, allow_empty=allow_empty
+        )
         if job is not None:
             verb = "Remove" if allow_empty else "Sync"
             messages.success(
@@ -533,7 +544,10 @@ class ObjectRemoveView(GetReturnURLMixin, PermissionRequiredMixin, View):
             resolution = resolve(requisition.name)
             last_node = resolution is None or not resolution.nodes
             job = _enqueue_foreign_source(
-                request, requisition.name, allow_empty=last_node
+                request,
+                requisition.name,
+                requisition.server_id,
+                allow_empty=last_node,
             )
             if job is not None:
                 verb = "Remove" if last_node else "Sync"
@@ -575,7 +589,9 @@ class MonitoringSyncAllView(PermissionRequiredMixin, View):
             if not resolution.nodes:
                 continue
             SyncForeignSourceJob.enqueue_sync(
-                resolution.foreign_source, user=request.user
+                resolution.foreign_source,
+                server_id=resolution.requisition.server_id,
+                user=request.user,
             )
             submitted += 1
         if blocked:

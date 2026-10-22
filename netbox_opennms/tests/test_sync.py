@@ -75,6 +75,15 @@ class SyncViewTest(TestCase):
         )
         self.assertContains(response, "Remove submitted")
         self.assertEqual(mock_enqueue.call_args.kwargs["allow_empty"], True)
+        self.assertEqual(mock_enqueue.call_args.kwargs["server_id"], self.server.pk)
+
+    @mock.patch("netbox_opennms.views.SyncForeignSourceJob.enqueue_sync")
+    def test_foreign_source_sync_unknown_name_errors(self, mock_enqueue):
+        self.client.force_login(self.superuser)
+        url = reverse("plugins:netbox_opennms:foreign_source_sync")
+        response = self.client.post(url, {"foreign_source": "nope"}, follow=True)
+        self.assertContains(response, "No Requisition named nope.")
+        mock_enqueue.assert_not_called()
 
     # --- node-level Remove (#133) -------------------------------------------
 
@@ -102,7 +111,7 @@ class SyncViewTest(TestCase):
         response = self._remove(self.device)
         self.assertTrue(self._override(self.device).exclude)
         mock_enqueue.assert_called_once_with(
-            FS, user=self.superuser, allow_empty=True
+            FS, server_id=self.server.pk, user=self.superuser, allow_empty=True
         )
         self.assertContains(response, "Remove submitted")
         self.assertEqual(response.redirect_chain[-1][0], self.device.get_absolute_url())
@@ -146,7 +155,7 @@ class SyncViewTest(TestCase):
         self.assertTrue(self._override(vm).exclude)
         # rtr-1 is still a member, so the VM leaves through a plain Sync.
         mock_enqueue.assert_called_once_with(
-            FS, user=self.superuser, allow_empty=False
+            FS, server_id=self.server.pk, user=self.superuser, allow_empty=False
         )
 
     @mock.patch("netbox_opennms.views.SyncForeignSourceJob.enqueue_sync")
@@ -178,7 +187,7 @@ class SyncViewTest(TestCase):
         response = self._remove(self.device)
         self.assertTrue(self._override(self.device).exclude)
         mock_enqueue.assert_called_once_with(
-            FS, user=self.superuser, allow_empty=False
+            FS, server_id=self.server.pk, user=self.superuser, allow_empty=False
         )
         self.assertContains(response, "Sync submitted")
 

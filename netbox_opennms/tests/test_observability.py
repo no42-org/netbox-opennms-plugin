@@ -62,7 +62,9 @@ class ObservabilityTest(TestCase):
         return device
 
     def _completed_job(self, foreign_source=FS, allow_empty=False):
-        job = SyncForeignSourceJob.enqueue_sync(foreign_source, allow_empty=allow_empty)
+        job = SyncForeignSourceJob.enqueue_sync(
+            foreign_source, self.server.pk, allow_empty=allow_empty
+        )
         Job.objects.filter(pk=job.pk).update(status=JobStatusChoices.STATUS_COMPLETED)
         return Job.objects.get(pk=job.pk)
 

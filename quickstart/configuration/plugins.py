@@ -11,7 +11,7 @@ PLUGINS_CONFIG = {
         "opennms_url": "http://opennms:8980/opennms",
         "opennms_username": "admin",
         "opennms_password": "admin",
-        # OpenNMS monitoring location for profiles that don't set one ("" = Default).
+        # OpenNMS monitoring location for Requisitions that set none ("" = Default).
         "default_location": "",
         # rescanExisting value for the import step: "true" | "false" | "dbonly".
         "import_mode": "false",

@@ -273,7 +273,7 @@ docker compose --profile opennms up -d</code></pre>
         changes; restart the <code>netbox</code> + <code>netbox-worker</code>
         containers to pick them up.</li>
       <li><code>netbox-worker</code> runs <code>manage.py rqworker</code> —
-        <b>required</b>, because Sync/Remove/Move run as background jobs.</li>
+        <b>required</b>, because Sync, Remove and the drift reconciler run as background jobs.</li>
       <li><code>configuration/plugins.py</code> is mounted at
         <code>/etc/netbox/config/plugins.py</code> to set <code>PLUGINS</code> +
         <code>PLUGINS_CONFIG</code>.</li>

@@ -174,8 +174,12 @@ The plugin can provision several OpenNMS servers.
 Each Requisition targets exactly one server.
 A server comes from one of two origins:
 
-- **Provisioned.** Declared in **`PLUGINS_CONFIG`** in NetBox's **`configuration.py`**. The UI shows it as **Managed by configuration** and refuses edits and deletes. Its credentials are read from the configuration at runtime and never reach the database.
-- **Local.** Created under **Plugins → NetBox OpenNMS → OpenNMS Servers** or through the REST API. Every field is editable. The password and headers are stored Fernet-encrypted.
+- **Provisioned.** Declared in **`PLUGINS_CONFIG`** in NetBox's **`configuration.py`**.
+  The UI shows it as **Managed by configuration** and refuses edits and deletes.
+  Its credentials are read from the configuration at runtime and never reach the database.
+- **Local.** Created under **Plugins → NetBox OpenNMS → OpenNMS Servers** or through the REST API.
+  Every field is editable.
+  The password and headers are stored Fernet-encrypted.
 
 Declare provisioned servers in the `servers` mapping, keyed by name:
 
@@ -236,7 +240,12 @@ To leave an object out of one server only, narrow that server's Requisition filt
 With the flat keys set, that server is `default`.
 With no flat keys and exactly one `servers` entry, it is that entry.
 Otherwise, for example with several `servers` entries, the server is `default` with no URL and shows as missing.
-To avoid that, keep the flat keys for the upgrade deploy, then switch to the `servers` mapping.
+To avoid that, keep the flat keys for the upgrade deploy.
+When you later switch to the `servers` mapping, name the entry for that server `default`.
+The migrated `default` row then reads its credentials from the new entry.
+To use another name, add the new `servers` entry next to the flat keys and deploy.
+Move every Requisition to the new server in the UI.
+Then remove the flat keys.
 
 All settings are listed in [Settings](#settings).
 
@@ -396,7 +405,7 @@ All values except `servers` are strings.
 | **`opennms_url`** | string | `""` | Single-server shorthand for `servers.default`. OpenNMS base URL including the context path, for example `https://opennms.example.org/opennms`. |
 | **`opennms_username`** | string | `""` | Single-server shorthand for `servers.default`. REST account with the provisioning role. |
 | **`opennms_password`** | string | `""` | Single-server shorthand for `servers.default`. Password for `opennms_username`. Load it from your secrets mechanism. |
-| **`default_location`** | string | `""` | The shorthand's per-server default: `servers.default.default_location`. Monitoring location for Requisitions that set none. Empty means OpenNMS's built-in `Default`. Each server has its own default location. |
+| **`default_location`** | string | `""` | Part of the single-server shorthand. It sets the per-server default `servers.default.default_location`. Monitoring location for Requisitions that set none. Empty means OpenNMS's built-in `Default`. Each server has its own default location. |
 | **`import_mode`** | `"true"` \| `"false"` \| `"dbonly"` | `"false"` | `rescanExisting` value sent with each import. See [`import_mode` values](#import_mode-values). |
 | **`reconcile_orphans`** | `"true"` \| `"false"` | `"true"` | Run the hourly drift reconciler. Needs an RQ worker. |
 

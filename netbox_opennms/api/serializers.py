@@ -3,6 +3,7 @@
 """REST API serializers (Requisition redesign)."""
 
 from django.contrib.contenttypes.models import ContentType
+from django.core.exceptions import ValidationError as DjangoValidationError
 from netbox.api.fields import ContentTypeField
 from netbox.api.serializers import NetBoxModelSerializer
 from rest_framework import serializers
@@ -31,10 +32,69 @@ def _validate_location(value):
     return value
 
 
+class OpenNMSServerSerializer(NetBoxModelSerializer):
+    """An OpenNMS server; ``password`` and ``headers`` are write-only.
+
+    ``address`` is the model's ``url`` (the API ``url`` is the self link). On
+    read, ``username`` is the effective one (from ``PLUGINS_CONFIG`` for a
+    provisioned row). NetBox also serializes servers for its event queue.
+    """
+
+    url = serializers.HyperlinkedIdentityField(
+        view_name="plugins-api:netbox_opennms-api:opennmsserver-detail"
+    )
+    address = serializers.CharField(source="url", max_length=255)
+    password = serializers.CharField(
+        write_only=True, required=False, allow_blank=True, max_length=255
+    )
+    headers = serializers.JSONField(write_only=True, required=False)
+
+    class Meta:
+        model = OpenNMSServer
+        fields = (
+            "id",
+            "url",
+            "display",
+            "name",
+            "origin",
+            "address",
+            "username",
+            "password",
+            "headers",
+            "default_location",
+            "description",
+            "tags",
+            "custom_fields",
+            "created",
+            "last_updated",
+        )
+        read_only_fields = ("origin",)
+        brief_fields = ("id", "url", "display", "name")
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        if "username" in data:
+            data["username"] = instance.effective_username
+        return data
+
+    def validate(self, data):
+        # A blank password on update keeps the stored one (as in the UI form).
+        if self.instance is not None and not data.get("password", True):
+            data.pop("password")
+        try:
+            return super().validate(data)
+        except DjangoValidationError as exc:
+            # The model calls the API "address" field "url".
+            if hasattr(exc, "error_dict") and "url" in exc.error_dict:
+                exc.error_dict["address"] = exc.error_dict.pop("url")
+            raise
+
+
 class RequisitionSerializer(NetBoxModelSerializer):
     url = serializers.HyperlinkedIdentityField(
         view_name="plugins-api:netbox_opennms-api:requisition-detail"
     )
+    server = OpenNMSServerSerializer(nested=True, required=False)
 
     class Meta:
         model = Requisition
@@ -68,6 +128,12 @@ class RequisitionSerializer(NetBoxModelSerializer):
         return value
 
     def validate(self, data):
+        if self.instance is None and "server" not in data:
+            servers = list(OpenNMSServer.objects.all()[:2])
+            if len(servers) != 1:
+                message = "This field is required when more than one server exists."
+                raise serializers.ValidationError({"server": message})
+            data["server"] = servers[0]
         data = super().validate(data)
         # Build a transient instance to reuse the resolver's filter guard (C1/H1).
         instance = self.instance or Requisition()
@@ -283,26 +349,3 @@ class MetadataEntrySerializer(NetBoxModelSerializer):
             "last_updated",
         )
         brief_fields = ("id", "url", "display", "key")
-
-
-class OpenNMSServerSerializer(NetBoxModelSerializer):
-    """Minimal, secret-free representation of a server.
-
-    NetBox serializes an object for its event queue on delete, so the UI delete
-    views need this class. Task 11 adds the REST endpoint and the full field set;
-    ``password`` and ``headers`` must stay out of any readable representation.
-    """
-
-    class Meta:
-        model = OpenNMSServer
-        fields = (
-            "id",
-            "display",
-            "name",
-            "origin",
-            "default_location",
-            "description",
-            "created",
-            "last_updated",
-        )
-        brief_fields = ("id", "display", "name")

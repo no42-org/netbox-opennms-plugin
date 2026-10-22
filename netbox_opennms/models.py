@@ -18,7 +18,19 @@ from django.contrib.contenttypes.fields import GenericForeignKey
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.urls import reverse
-from netbox.models import NetBoxModel
+from netbox.models import BaseModel, NetBoxModel
+from netbox.models.features import (
+    BookmarksMixin,
+    ChangeLoggingMixin,
+    CloningMixin,
+    CustomFieldsMixin,
+    CustomLinksMixin,
+    CustomValidationMixin,
+    EventRulesMixin,
+    JournalingMixin,
+    NotificationsMixin,
+    TagsMixin,
+)
 
 # Not ``from . import config``: the package's ``config`` attribute is the
 # PluginConfig class until the submodule is imported, so that form can bind
@@ -80,7 +92,31 @@ def _require_preset_params(rule, required):
         )
 
 
-class OpenNMSServer(NetBoxModel):
+class _NoExportTemplatesModel(
+    BookmarksMixin,
+    ChangeLoggingMixin,
+    CloningMixin,
+    CustomFieldsMixin,
+    CustomLinksMixin,
+    CustomValidationMixin,
+    JournalingMixin,
+    NotificationsMixin,
+    TagsMixin,
+    EventRulesMixin,
+    BaseModel,
+):
+    """``NetBoxModel`` minus ``ExportTemplatesMixin``.
+
+    An export template renders arbitrary model attributes for whoever runs it,
+    so a template author could print a server's decrypted ``password``. Keep the
+    mixin list in step with ``netbox.models.NetBoxFeatureSet``.
+    """
+
+    class Meta:
+        abstract = True
+
+
+class OpenNMSServer(_NoExportTemplatesModel):
     """An OpenNMS instance that Requisitions are synced to.
 
     A **provisioned** server is declared in ``PLUGINS_CONFIG``; the row carries

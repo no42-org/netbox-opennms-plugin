@@ -3,6 +3,7 @@
 """REST API tests for the plugin models."""
 
 import unittest
+from unittest import mock
 
 from dcim.models import (
     Device,
@@ -13,8 +14,11 @@ from dcim.models import (
     Site,
 )
 from ipam.models import IPAddress
-from utilities.testing import APIViewTestCases
+from netbox.models.features import get_model_features
+from utilities.testing import APITestCase, APIViewTestCases
 
+from netbox_opennms.choices import ServerOriginChoices
+from netbox_opennms.filtersets import OpenNMSServerFilterSet
 from netbox_opennms.models import (
     AssetMapping,
     MetadataEntry,
@@ -23,6 +27,7 @@ from netbox_opennms.models import (
     MonitoringDetector,
     MonitoringOverride,
     MonitoringPolicy,
+    OpenNMSServer,
     Requisition,
 )
 from netbox_opennms.tests.servers import make_server
@@ -259,3 +264,191 @@ class MetadataEntryAPITest(_NoGraphQL, APIViewTestCases.APIViewTestCase):
             {"requisition": req.pk, "scope": "service", "context": "X-netbox",
              "key": "c", "value_source": "name"},
         ]
+
+
+SERVERS = "/api/plugins/opennms/servers/"
+REQUISITIONS = "/api/plugins/opennms/requisitions/"
+
+
+class OpenNMSServerAPITest(_NoGraphQL, APIViewTestCases.APIViewTestCase):
+    model = OpenNMSServer
+    view_namespace = "plugins-api:netbox_opennms"
+    brief_fields = ["display", "id", "name", "url"]
+    # Write-only, so the round-trip comparison cannot read them back.
+    validation_excluded_fields = ["password", "headers"]
+    create_data = [
+        {"name": f"n{i}", "address": f"https://{i}/", "username": "u", "password": "p"}
+        for i in (4, 5, 6)
+    ]
+    bulk_update_data = {"description": "bulk"}
+
+    @classmethod
+    def setUpTestData(cls):
+        for name in ("s1", "s2", "s3"):
+            make_server(name)
+
+
+class _SuperuserAPITestCase(APITestCase):
+    """A NetBox API test client authenticated as a superuser via token."""
+
+    def setUp(self):
+        super().setUp()
+        self.user.is_superuser = True
+        self.user.save()
+
+    def get(self, url):
+        return self.client.get(url, **self.header)
+
+    def send(self, method, url, data=None):
+        return getattr(self.client, method)(url, data, format="json", **self.header)
+
+
+class ServerAPISecretsTest(_SuperuserAPITestCase):
+    def test_password_and_headers_are_write_only(self):
+        server = make_server(password="SUPER-SECRET", headers={"X": "TOKEN"})
+        for body in (self.get(f"{SERVERS}{server.pk}/").json(),
+                     self.get(SERVERS).json()["results"][0]):
+            self.assertNotIn("password", body)
+            self.assertNotIn("headers", body)
+            self.assertNotIn("SUPER-SECRET", str(body))
+            self.assertNotIn("TOKEN", str(body))
+        self.assertEqual(body["address"], "https://onms.example.org/opennms")
+
+    def test_provisioned_rows_reject_writes(self):
+        prod = OpenNMSServer.objects.create(
+            name="prod", origin=ServerOriginChoices.PROVISIONED, url="https://p/"
+        )
+        entry = {"url": "https://p/", "username": "cfg-user"}
+        with mock.patch(
+            "netbox_opennms.models.config.server_entry", return_value=entry
+        ):
+            self.assertEqual(self.get(f"{SERVERS}{prod.pk}/").json()["username"],
+                             "cfg-user")
+            response = self.send("patch", f"{SERVERS}{prod.pk}/", {"description": "x"})
+            self.assertEqual(response.status_code, 403)
+            self.assertIn("PLUGINS_CONFIG", str(response.json()))
+            response = self.send("delete", f"{SERVERS}{prod.pk}/")
+            self.assertEqual(response.status_code, 403)
+            bulk = [{"id": prod.pk, "description": "x"}]
+            response = self.send("patch", SERVERS, bulk)
+            self.assertEqual(response.status_code, 403)
+            response = self.send("delete", SERVERS, [{"id": prod.pk}])
+            self.assertEqual(response.status_code, 403)
+        prod.refresh_from_db()
+        self.assertEqual(prod.description, "")
+        self.assertTrue(OpenNMSServer.objects.filter(pk=prod.pk).exists())
+
+    def test_missing_provisioned_row_can_be_deleted(self):
+        gone = OpenNMSServer.objects.create(
+            name="gone", origin=ServerOriginChoices.PROVISIONED, url="https://g/"
+        )
+        with mock.patch("netbox_opennms.models.config.server_entry", return_value=None):
+            response = self.send("delete", f"{SERVERS}{gone.pk}/")
+        self.assertEqual(response.status_code, 204)
+
+    def test_origin_is_read_only(self):
+        response = self.send("post", SERVERS, {
+            "name": "x", "address": "https://x/", "username": "u", "password": "p",
+            "origin": "provisioned",
+        })
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.json()["origin"], "local")
+        self.assertEqual(OpenNMSServer.objects.get(name="x").password, "p")
+
+    def test_create_requires_credentials(self):
+        response = self.send("post", SERVERS, {"name": "x", "address": "https://x/"})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("username", response.json())
+        self.assertIn("password", response.json())
+
+    def test_blank_password_on_update_keeps_stored_value(self):
+        server = make_server(password="keep-me")
+        for data in ({"description": "d"}, {"password": ""}):
+            response = self.send("patch", f"{SERVERS}{server.pk}/", data)
+            self.assertEqual(response.status_code, 200)
+            server.refresh_from_db()
+            self.assertEqual(server.password, "keep-me")
+        self.send("patch", f"{SERVERS}{server.pk}/", {"password": "new"})
+        server.refresh_from_db()
+        self.assertEqual(server.password, "new")
+
+    def test_headers_must_map_strings_to_strings(self):
+        server = make_server()
+        for bad in ({"X": 1}, ["X"]):
+            response = self.send("patch", f"{SERVERS}{server.pk}/", {"headers": bad})
+            self.assertEqual(response.status_code, 400)
+            self.assertIn("headers", response.json())
+        response = self.send("patch", f"{SERVERS}{server.pk}/", {"headers": {"X": "y"}})
+        self.assertEqual(response.status_code, 200)
+        server.refresh_from_db()
+        self.assertEqual(server.headers, {"X": "y"})
+
+    def test_bad_address_error_names_address(self):
+        response = self.send("post", SERVERS, {
+            "name": "x", "address": "ftp://x/", "username": "u", "password": "p",
+        })
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("address", response.json())
+
+    def test_filterset_exposes_no_secret_filters(self):
+        for name in OpenNMSServerFilterSet.base_filters:
+            self.assertFalse(name.startswith(("password", "headers")), name)
+
+    def test_export_templates_feature_is_disabled(self):
+        self.assertNotIn("export_templates", get_model_features(OpenNMSServer))
+        self.assertIn("export_templates", get_model_features(Requisition))
+        # Every other NetBoxModel feature is kept.
+        dropped = set(get_model_features(Requisition)) - set(
+            get_model_features(OpenNMSServer)
+        )
+        self.assertEqual(dropped, {"export_templates"})
+
+
+class RequisitionServerDefaultTest(_SuperuserAPITestCase):
+    data = {"name": "r", "filter_params": {"site": ["x"]}}
+
+    def test_single_server_is_defaulted(self):
+        server = make_server()
+        response = self.send("post", REQUISITIONS, self.data)
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.json()["server"]["id"], server.pk)
+        self.assertEqual(response.json()["server"]["name"], server.name)
+
+    def test_two_servers_require_explicit_server(self):
+        make_server("a")
+        make_server("b")
+        response = self.send("post", REQUISITIONS, self.data)
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("server", response.json())
+
+    def test_no_server_requires_explicit_server(self):
+        response = self.send("post", REQUISITIONS, self.data)
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("server", response.json())
+
+    def test_explicit_server_is_used(self):
+        make_server("a")
+        b = make_server("b")
+        response = self.send("post", REQUISITIONS, {**self.data, "server": b.pk})
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.json()["server"]["id"], b.pk)
+
+    def test_update_without_server_keeps_it(self):
+        a = make_server("a")
+        make_server("b")
+        req = Requisition.objects.create(
+            server=a, name="r", filter_params={"site": ["x"]}
+        )
+        response = self.send("patch", f"{REQUISITIONS}{req.pk}/", {"description": "d"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["server"]["id"], a.pk)
+
+    def test_filter_by_server(self):
+        a = make_server("a")
+        b = make_server("b")
+        Requisition.objects.create(server=a, name="ra", filter_params={"site": ["x"]})
+        Requisition.objects.create(server=b, name="rb", filter_params={"site": ["y"]})
+        for query in (f"server_id={b.pk}", "server=b"):
+            results = self.get(f"{REQUISITIONS}?{query}").json()["results"]
+            names = [r["name"] for r in results]
+            self.assertEqual(names, ["rb"], query)

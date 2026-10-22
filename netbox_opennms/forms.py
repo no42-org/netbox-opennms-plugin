@@ -19,7 +19,7 @@ from utilities.forms.fields import (
 )
 from virtualization.models import VirtualMachine
 
-from .catalog import get_detector_catalog, get_policy_catalog
+from .catalog import get_detector_catalog, get_policy_catalog, overlay_catalog
 from .choices import ObjectTypeChoices, ServiceChoices
 from .membership import filter_errors
 from .models import (
@@ -32,6 +32,7 @@ from .models import (
     MonitoringPolicy,
     Requisition,
 )
+from .presets import DETECTOR_PRESETS, POLICY_PRESETS
 
 logger = logging.getLogger("netbox_opennms")
 
@@ -152,6 +153,10 @@ class _PresetRuleForm(NetBoxModelForm):
         """The detector/policy catalog, or ``None``. Overridden by subclasses."""
         return None
 
+    def _get_overlay_catalog(self):
+        """Overlay-only catalog for when no server resolves, or ``None``."""
+        return None
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         field = self.fields["rule_class"]
@@ -177,8 +182,9 @@ class _PresetRuleForm(NetBoxModelForm):
         try:
             server = _server_for_rule_form(self)
             if server is None:
-                return None, True
-            catalog = self._get_catalog(server)
+                catalog = self._get_overlay_catalog()
+            else:
+                catalog = self._get_catalog(server)
         except Exception:  # noqa: BLE001 — the editor must never fail on discovery
             # _get_catalog degrades network errors internally; anything here is a
             # real bug — log it and flag degraded so the UI note fires (never silent).
@@ -248,6 +254,9 @@ class MonitoringDetectorForm(_PresetRuleForm):
     def _get_catalog(self, server):
         return get_detector_catalog(server)
 
+    def _get_overlay_catalog(self):
+        return overlay_catalog(DETECTOR_PRESETS)
+
     class Meta:
         model = MonitoringDetector
         fields = ("requisition", "name", "preset", "rule_class", "parameters", "tags")
@@ -258,6 +267,9 @@ class MonitoringPolicyForm(_PresetRuleForm):
 
     def _get_catalog(self, server):
         return get_policy_catalog(server)
+
+    def _get_overlay_catalog(self):
+        return overlay_catalog(POLICY_PRESETS)
 
     class Meta:
         model = MonitoringPolicy

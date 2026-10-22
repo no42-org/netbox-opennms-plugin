@@ -27,7 +27,7 @@ from .presets import DETECTOR_PRESETS, POLICY_PRESETS
 CACHE_TTL = 300  # seconds — short; refreshed on demand and at Sync
 # A degraded (overlay-only) result is cached briefly so a configured-but-down
 # OpenNMS doesn't re-block every form render on the client timeout; it still
-# recovers within this window (and `refresh_catalogs()` clears it at Sync).
+# recovers within this window (or sooner via `refresh_catalogs(server)`).
 DEGRADED_CACHE_TTL = 30
 _KINDS = ("detectors", "policies", "assets")
 
@@ -143,6 +143,11 @@ def get_asset_fields(server, client=None, force_refresh=False):
 def refresh_catalogs(server):
     """Drop a server's cached catalogs so the next read re-discovers."""
     cache.delete_many([_cache_key(kind, server) for kind in _KINDS])
+
+
+def overlay_catalog(presets):
+    """An overlay-only catalog, for when no server is known."""
+    return Catalog(entries=_merge([], presets), live_unavailable=True)
 
 
 def _get_catalog(server, kind, presets, method_name, client, force_refresh):

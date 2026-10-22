@@ -27,9 +27,11 @@ from netbox_opennms.forms import (
 from netbox_opennms.models import (
     MonitoredInterface,
     MonitoredService,
+    MonitoringDetector,
     MonitoringOverride,
     Requisition,
 )
+from netbox_opennms.presets import DETECTOR_PRESETS
 from netbox_opennms.tests.servers import make_server
 from netbox_opennms.tests.test_catalog import FakeClient
 
@@ -197,6 +199,8 @@ class InterfaceServicePruneTest(TestCase):
             ).exists()
         )
 
+ICMP_CLASS = DETECTOR_PRESETS["icmp"]["class"]
+
 
 class DetectorFormServerTest(TestCase):
     def setUp(self):
@@ -205,20 +209,53 @@ class DetectorFormServerTest(TestCase):
         cache.clear()
         self.addCleanup(cache.clear)
 
-    def test_detector_form_uses_requisition_server(self):
+    def _prime(self):
         a, b = make_server("a"), make_server("b")
-        for server, cls in ((a, "x.A"), (b, "x.B")):
+        for server, key in ((a, "pA"), (b, "pB")):
             plugin = DiscoveredPlugin(
-                name=cls,
-                plugin_class=cls,
-                parameters=(DiscoveredParam(key=f"p{cls[-1]}"),),
+                name="ICMP",
+                plugin_class=ICMP_CLASS,
+                parameters=(DiscoveredParam(key=key),),
             )
             get_detector_catalog(server, client=FakeClient(detectors=[plugin]))
         req = Requisition.objects.create(
             server=b, name="r-b", filter_params={"role": ["switch"]}
         )
-        form = MonitoringDetectorForm(initial={"requisition": req.pk})
+        return a, b, req
+
+    def test_instance_path_uses_requisition_server(self):
+        _a, _b, req = self._prime()
+        det = MonitoringDetector.objects.create(
+            requisition=req, name="icmp", preset="icmp"
+        )
+        form = MonitoringDetectorForm(instance=det)
+        self.assertIn("param_pB", form.fields)
+        self.assertNotIn("param_pA", form.fields)
+
+    def test_data_path_uses_requisition_server(self):
+        _a, b, req = self._prime()
+        form = MonitoringDetectorForm(data={"requisition": str(req.pk)})
         self.assertEqual(_server_for_rule_form(form), b)
-        catalog = form._get_catalog(b)
-        self.assertIsNotNone(catalog.by_class("x.B"))
-        self.assertIsNone(catalog.by_class("x.A"))
+
+    def test_invalid_pk_resolves_no_server(self):
+        self._prime()
+        for bad in ("abc", "999999", ""):
+            form = MonitoringDetectorForm(data={"requisition": bad})
+            self.assertIsNone(_server_for_rule_form(form))
+
+    def test_no_server_falls_back_to_overlay(self):
+        det = MonitoringDetector(name="icmp", preset="icmp")
+        form = MonitoringDetectorForm(instance=det)
+        self.assertIn("param_timeout", form.fields)
+        self.assertIn("unavailable", str(form.fields["rule_class"].help_text))
+
+    def test_asset_form_uses_requisition_server(self):
+        a, b, req = self._prime()
+        from netbox_opennms.catalog import get_asset_fields
+        from netbox_opennms.forms import AssetMappingForm
+
+        get_asset_fields(a, client=FakeClient(assets=["fromA"]))
+        get_asset_fields(b, client=FakeClient(assets=["fromB"]))
+        form = AssetMappingForm(initial={"requisition": req.pk})
+        values = [v for v, _l in form.fields["asset_field"].choices]
+        self.assertEqual(values, ["fromB"])

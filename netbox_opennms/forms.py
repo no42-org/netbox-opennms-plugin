@@ -117,6 +117,18 @@ class RequisitionForm(NetBoxModelForm):
         return self.cleaned_data
 
 
+def _server_for_rule_form(form):
+    """The OpenNMS server of the form's Requisition, or ``None`` when unknown."""
+    if form.instance.requisition_id:
+        return form.instance.requisition.server
+    pk = form.initial.get("requisition") or form.data.get("requisition")
+    try:
+        requisition = Requisition.objects.select_related("server").filter(pk=pk).first()
+    except (TypeError, ValueError):
+        return None
+    return requisition.server if requisition else None
+
+
 class _PresetRuleForm(NetBoxModelForm):
     """Shared: the preset owns the rule class, so it isn't user-editable.
 
@@ -136,7 +148,7 @@ class _PresetRuleForm(NetBoxModelForm):
         queryset=Requisition.objects.all(), label=_("Requisition")
     )
 
-    def _get_catalog(self):
+    def _get_catalog(self, server):
         """The detector/policy catalog, or ``None``. Overridden by subclasses."""
         return None
 
@@ -163,7 +175,10 @@ class _PresetRuleForm(NetBoxModelForm):
         if not rule_class and not preset:
             return None, False
         try:
-            catalog = self._get_catalog()
+            server = _server_for_rule_form(self)
+            if server is None:
+                return None, True
+            catalog = self._get_catalog(server)
         except Exception:  # noqa: BLE001 — the editor must never fail on discovery
             # _get_catalog degrades network errors internally; anything here is a
             # real bug — log it and flag degraded so the UI note fires (never silent).
@@ -230,8 +245,8 @@ class _PresetRuleForm(NetBoxModelForm):
 class MonitoringDetectorForm(_PresetRuleForm):
     """Add/edit a detector on a Requisition (a preset, or a freeform class)."""
 
-    def _get_catalog(self):
-        return get_detector_catalog()
+    def _get_catalog(self, server):
+        return get_detector_catalog(server)
 
     class Meta:
         model = MonitoringDetector
@@ -241,8 +256,8 @@ class MonitoringDetectorForm(_PresetRuleForm):
 class MonitoringPolicyForm(_PresetRuleForm):
     """Add/edit a policy on a Requisition (a preset, or a freeform class)."""
 
-    def _get_catalog(self):
-        return get_policy_catalog()
+    def _get_catalog(self, server):
+        return get_policy_catalog(server)
 
     class Meta:
         model = MonitoringPolicy
@@ -374,9 +389,11 @@ class AssetMappingForm(NetBoxModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        from .catalog import get_asset_fields
+        from .catalog import ASSET_FIELDS, get_asset_fields
 
-        fields = sorted(get_asset_fields())
+        server = _server_for_rule_form(self)
+        known = get_asset_fields(server) if server is not None else ASSET_FIELDS
+        fields = sorted(known)
         current = getattr(self.instance, "asset_field", "") or ""
         if current and current not in fields:
             fields.append(current)

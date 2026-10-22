@@ -16,13 +16,22 @@ from django.test import TestCase
 from extras.models import SavedFilter
 from ipam.models import IPAddress
 
-from netbox_opennms.forms import MonitoringOverrideForm, RequisitionForm
+from netbox_opennms.catalog import get_detector_catalog
+from netbox_opennms.client import DiscoveredParam, DiscoveredPlugin
+from netbox_opennms.forms import (
+    MonitoringDetectorForm,
+    MonitoringOverrideForm,
+    RequisitionForm,
+    _server_for_rule_form,
+)
 from netbox_opennms.models import (
     MonitoredInterface,
     MonitoredService,
     MonitoringOverride,
+    Requisition,
 )
 from netbox_opennms.tests.servers import make_server
+from netbox_opennms.tests.test_catalog import FakeClient
 
 
 class MonitoringOverrideFormTest(TestCase):
@@ -187,3 +196,29 @@ class InterfaceServicePruneTest(TestCase):
                 override=self.override, ip_address=self.ip_a
             ).exists()
         )
+
+
+class DetectorFormServerTest(TestCase):
+    def setUp(self):
+        from django.core.cache import cache
+
+        cache.clear()
+        self.addCleanup(cache.clear)
+
+    def test_detector_form_uses_requisition_server(self):
+        a, b = make_server("a"), make_server("b")
+        for server, cls in ((a, "x.A"), (b, "x.B")):
+            plugin = DiscoveredPlugin(
+                name=cls,
+                plugin_class=cls,
+                parameters=(DiscoveredParam(key=f"p{cls[-1]}"),),
+            )
+            get_detector_catalog(server, client=FakeClient(detectors=[plugin]))
+        req = Requisition.objects.create(
+            server=b, name="r-b", filter_params={"role": ["switch"]}
+        )
+        form = MonitoringDetectorForm(initial={"requisition": req.pk})
+        self.assertEqual(_server_for_rule_form(form), b)
+        catalog = form._get_catalog(b)
+        self.assertIsNotNone(catalog.by_class("x.B"))
+        self.assertIsNone(catalog.by_class("x.A"))

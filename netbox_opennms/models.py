@@ -612,7 +612,11 @@ class AssetMapping(NetBoxModel):
         # Validate against the discovered/known OnmsAssetRecord field set (RD-2).
         from .catalog import get_asset_fields
 
-        if self.asset_field and self.asset_field not in get_asset_fields():
+        if (
+            self.asset_field
+            and self.requisition_id
+            and self.asset_field not in get_asset_fields(self.requisition.server)
+        ):
             raise ValidationError(
                 {"asset_field": f"Unknown OpenNMS asset field {self.asset_field!r}."}
             )

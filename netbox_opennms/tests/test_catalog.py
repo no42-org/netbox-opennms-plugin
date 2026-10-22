@@ -6,7 +6,7 @@ from unittest import mock
 
 from django import forms as django_forms
 from django.core.cache import cache
-from django.test import SimpleTestCase, TestCase
+from django.test import TestCase
 
 from netbox_opennms import catalog
 from netbox_opennms import forms as onms_forms
@@ -28,8 +28,9 @@ MIP_CLASS = POLICY_PRESETS["match-ip-interface"]["class"]
 class FakeClient:
     """A stand-in port: returns canned plugins or raises, counts calls."""
 
-    def __init__(self, detectors=None, raises=False):
+    def __init__(self, detectors=None, raises=False, assets=None):
         self._detectors = detectors or []
+        self._assets = assets or []
         self._raises = raises
         self.calls = 0
 
@@ -39,12 +40,20 @@ class FakeClient:
             raise OpenNMSError("offline")
         return self._detectors
 
+    def list_assets(self):
+        return set(self._assets)
+
     def close(self):
         pass
 
 
-class CatalogMergeTest(SimpleTestCase):
+def _plugin(name, plugin_class):
+    return DiscoveredPlugin(name=name, plugin_class=plugin_class, parameters=())
+
+
+class CatalogMergeTest(TestCase):
     def setUp(self):
+        self.server = make_server()
         cache.clear()
         self.addCleanup(cache.clear)
 
@@ -58,7 +67,7 @@ class CatalogMergeTest(SimpleTestCase):
                 )
             ]
         )
-        cat = catalog.get_detector_catalog(client=client)
+        cat = catalog.get_detector_catalog(self.server, client=client)
         self.assertFalse(cat.live_unavailable)
         entry = cat.by_class(ICMP_CLASS)
         self.assertIsNotNone(entry)
@@ -83,7 +92,7 @@ class CatalogMergeTest(SimpleTestCase):
                 )
             ]
         )
-        entry = catalog.get_detector_catalog(client=client).by_class(
+        entry = catalog.get_detector_catalog(self.server, client=client).by_class(
             "org.opennms.XDetector"
         )
         mode = entry.parameters[0]
@@ -92,7 +101,7 @@ class CatalogMergeTest(SimpleTestCase):
 
     def test_overlay_only_preset_offered_when_not_discovered(self):
         # OpenNMS reachable but reports no detectors → overlay presets still offered.
-        cat = catalog.get_detector_catalog(client=FakeClient(detectors=[]))
+        cat = catalog.get_detector_catalog(self.server, client=FakeClient(detectors=[]))
         self.assertFalse(cat.live_unavailable)
         icmp = cat.by_preset("icmp")
         self.assertIsNotNone(icmp)
@@ -100,35 +109,36 @@ class CatalogMergeTest(SimpleTestCase):
 
     def test_degrades_to_overlay_when_offline(self):
         client = FakeClient(raises=True)
-        cat = catalog.get_detector_catalog(client=client)
+        cat = catalog.get_detector_catalog(self.server, client=client)
         self.assertTrue(cat.live_unavailable)
         # Overlay presets are still usable while degraded.
         self.assertIsNotNone(cat.by_preset("icmp"))
 
     def test_degraded_result_is_cached_briefly(self):
         client = FakeClient(raises=True)
-        catalog.get_detector_catalog(client=client)
-        catalog.get_detector_catalog(client=client)
+        catalog.get_detector_catalog(self.server, client=client)
+        catalog.get_detector_catalog(self.server, client=client)
         # A degraded result is cached briefly, so the second read is served from
         # cache — a down OpenNMS is not re-hit on every call.
         self.assertEqual(client.calls, 1)
 
     def test_successful_result_is_cached(self):
         client = FakeClient(detectors=[])
-        catalog.get_detector_catalog(client=client)
-        catalog.get_detector_catalog(client=client)
+        catalog.get_detector_catalog(self.server, client=client)
+        catalog.get_detector_catalog(self.server, client=client)
         self.assertEqual(client.calls, 1)  # second read served from cache
 
     def test_refresh_clears_cache(self):
         client = FakeClient(detectors=[])
-        catalog.get_detector_catalog(client=client)
-        catalog.refresh_catalogs()
-        catalog.get_detector_catalog(client=client)
+        catalog.get_detector_catalog(self.server, client=client)
+        catalog.refresh_catalogs(self.server)
+        catalog.get_detector_catalog(self.server, client=client)
         self.assertEqual(client.calls, 2)
 
 
-class AssetFieldsTest(SimpleTestCase):
+class AssetFieldsTest(TestCase):
     def setUp(self):
+        self.server = make_server()
         cache.clear()
         self.addCleanup(cache.clear)
 
@@ -136,13 +146,16 @@ class AssetFieldsTest(SimpleTestCase):
         client = mock.Mock()
         client.list_assets.return_value = {"serialNumber", "customField"}
         self.assertEqual(
-            catalog.get_asset_fields(client=client), {"serialNumber", "customField"}
+            catalog.get_asset_fields(self.server, client=client),
+            {"serialNumber", "customField"},
         )
 
     def test_degrades_to_constant_when_offline(self):
         client = mock.Mock()
         client.list_assets.side_effect = OpenNMSError("offline")
-        self.assertEqual(catalog.get_asset_fields(client=client), ASSET_FIELDS)
+        self.assertEqual(
+            catalog.get_asset_fields(self.server, client=client), ASSET_FIELDS
+        )
 
 
 class PresetSeedTest(TestCase):
@@ -283,3 +296,35 @@ class PresetRuleFormTest(TestCase):
         # A blank add form (no preset, no class) must not hit OpenNMS.
         onms_forms.MonitoringDetectorForm()
         mock_cat.assert_not_called()
+
+
+class PerServerCacheTest(TestCase):
+    def setUp(self):
+        cache.clear()
+        self.addCleanup(cache.clear)
+
+    def test_catalogs_are_cached_per_server(self):
+        a, b = make_server("a"), make_server("b")
+        catalog.get_detector_catalog(
+            a, client=FakeClient(detectors=[_plugin("IcmpA", "x.A")])
+        )
+        catalog.get_detector_catalog(
+            b, client=FakeClient(detectors=[_plugin("IcmpB", "x.B")])
+        )
+        self.assertIsNotNone(catalog.get_detector_catalog(a).by_class("x.A"))
+        self.assertIsNone(catalog.get_detector_catalog(a).by_class("x.B"))
+
+    def test_refresh_clears_only_that_server(self):
+        a, b = make_server("a"), make_server("b")
+        catalog.get_asset_fields(a, client=FakeClient(assets=["foo"]))
+        catalog.get_asset_fields(b, client=FakeClient(assets=["bar"]))
+        catalog.refresh_catalogs(a)
+        self.assertEqual(catalog.get_asset_fields(b), {"bar"})
+
+    def test_misconfigured_server_degrades_to_overlay(self):
+        a = make_server("a")
+        with mock.patch.object(
+            catalog.OpenNMSClient, "for_server", side_effect=OpenNMSError("bad")
+        ):
+            self.assertTrue(catalog.get_detector_catalog(a).live_unavailable)
+            self.assertEqual(catalog.get_asset_fields(a), ASSET_FIELDS)

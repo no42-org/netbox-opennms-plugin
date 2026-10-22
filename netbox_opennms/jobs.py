@@ -364,7 +364,9 @@ def orphaned_foreign_sources(client):
     """
     deployed = set(client.list_requisition_names())
     managed = set(DeployedForeignSource.objects.values_list("name", flat=True))
-    return sorted((deployed & managed) - set(monitored_foreign_sources()))
+    # Names only for now; the reconciler becomes per server in a later step.
+    monitored = {name for _server_id, name in monitored_foreign_sources()}
+    return sorted((deployed & managed) - monitored)
 
 
 @system_job(interval=RECONCILE_INTERVAL_MINUTES)

@@ -376,7 +376,10 @@ class SyncForeignSourceJobTest(TestCase):
         self._make_device("rtr-d", "10.0.1.1/24", site=durham)
         self.assertEqual(
             monitored_foreign_sources(),
-            ["netbox.durham.router", "netbox.raleigh.router"],
+            {
+                (self.server.pk, "netbox.durham.router"),
+                (self.server.pk, "netbox.raleigh.router"),
+            },
         )
 
     @mock.patch("netbox_opennms.jobs.advisory_lock")

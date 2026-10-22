@@ -253,7 +253,10 @@ class MembershipTest(TestCase):
         self._device("rtr-1")
         self._requisition(name="a", filter_params={"role": ["router"]})
         self._requisition(name="b", filter_params={"site": ["raleigh"]})
-        self.assertEqual(monitored_foreign_sources(), ["a", "b"])
+        self.assertEqual(
+            monitored_foreign_sources(),
+            {(self.onms_server.pk, "a"), (self.onms_server.pk, "b")},
+        )
 
     def test_rejected_filter_populates_rejected_not_warnings(self):
         # Round-2: rejection lives on Resolution.rejected (blocking), not in
@@ -269,7 +272,7 @@ class MembershipTest(TestCase):
         # equally blocked from reconciler teardown.
         self._device("rtr-1")
         self._requisition(filter_params={"bogus": ["x"]})
-        self.assertEqual(monitored_foreign_sources(), [FS])
+        self.assertEqual(monitored_foreign_sources(), {(self.onms_server.pk, FS)})
 
     def test_warning_state_requisition_counts_as_monitored(self):
         # Review #1: a requisition whose filter value went stale (warning, no
@@ -277,7 +280,7 @@ class MembershipTest(TestCase):
         # reconciler would delete its live OpenNMS nodes on a NetBox rename.
         self._device("rtr-1")
         self._requisition(filter_params={"role": ["renamed-away"]})
-        self.assertEqual(monitored_foreign_sources(), [FS])
+        self.assertEqual(monitored_foreign_sources(), {(self.onms_server.pk, FS)})
 
     def test_mixed_frozen_resolution_keeps_unconflicted_nodes(self):
         # Review #14: a frozen requisition still resolves its unconflicted
@@ -441,4 +444,59 @@ class MembershipTest(TestCase):
         self._device("rtr-1")
         # An empty requisition (no matching members) is omitted.
         self._requisition(name="empty", filter_params={"role": ["server"]})
-        self.assertEqual(monitored_foreign_sources(), [FS])
+        self.assertEqual(monitored_foreign_sources(), {(self.onms_server.pk, FS)})
+
+
+class CrossServerMembershipTest(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        site = Site.objects.create(name="Raleigh", slug="raleigh")
+        role = DeviceRole.objects.create(name="Router", slug="router")
+        mfr = Manufacturer.objects.create(name="Acme", slug="acme")
+        dt = DeviceType.objects.create(manufacturer=mfr, model="M1", slug="m1")
+        cls.device = Device.objects.create(
+            name="rtr-1", device_type=dt, role=role, site=site
+        )
+        cls.a = make_server("a")
+        cls.b = make_server("b")
+        cls.r_a = Requisition.objects.create(
+            name="a", server=cls.a, filter_params={"site": ["raleigh"]}
+        )
+        cls.r_b = Requisition.objects.create(
+            name="b", server=cls.b, filter_params={"site": ["raleigh"]}
+        )
+
+    def test_same_object_on_two_servers_is_not_a_conflict(self):
+        by_name = {r.foreign_source: r for r in resolve_all()}
+        self.assertEqual(len(by_name["a"].nodes), 1)
+        self.assertEqual(len(by_name["b"].nodes), 1)
+        self.assertEqual(by_name["a"].conflicts, [])
+
+    def test_same_server_overlap_is_a_conflict_naming_the_server(self):
+        Requisition.objects.create(
+            name="a2", server=self.a, filter_params={"site": ["raleigh"]}
+        )
+        resolution = resolve("a")
+        self.assertEqual(len(resolution.conflicts), 1)
+        self.assertEqual(resolution.conflicts[0].server_name, "a")
+        self.assertIn("on server a", str(resolution.conflicts[0]))
+
+    def test_excluded_object_renders_on_no_server(self):
+        MonitoringOverride.objects.create(assigned_object=self.device, exclude=True)
+        self.assertTrue(all(not r.nodes for r in resolve_all()))
+
+    def test_monitored_foreign_sources_are_server_scoped(self):
+        self.assertEqual(
+            monitored_foreign_sources(), {(self.a.pk, "a"), (self.b.pk, "b")}
+        )
+
+    def test_requisition_conflicts_ignores_other_servers(self):
+        # The detail-page banner applies the same per-server rule as resolve_all.
+        self.assertEqual(requisition_conflicts(self.r_a), [])
+        Requisition.objects.create(
+            name="a2", server=self.a, filter_params={"site": ["raleigh"]}
+        )
+        conflicts = requisition_conflicts(self.r_a)
+        self.assertEqual(len(conflicts), 1)
+        self.assertEqual(conflicts[0].requisition_names, ["a", "a2"])
+        self.assertEqual(conflicts[0].server_name, "a")

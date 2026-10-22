@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: MIT
 """UI views for plugin models (Requisition redesign)."""
 
+import logging
 from copy import deepcopy
 
 from dcim.models import Device
@@ -12,13 +13,13 @@ from django.core.exceptions import PermissionDenied
 from django.db import transaction
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.generic import View
-from netbox.plugins import get_plugin_config
 from netbox.views import generic
 from utilities.rqworker import any_workers_for_queue
 from utilities.views import GetReturnURLMixin
 from virtualization.models import VirtualMachine
 
 from . import filtersets, forms, tables
+from .choices import ServerOriginChoices
 from .client import OpenNMSClient, OpenNMSError
 from .dryrun import dry_run
 from .jobs import (
@@ -40,9 +41,13 @@ from .models import (
     MonitoringDetector,
     MonitoringOverride,
     MonitoringPolicy,
+    OpenNMSServer,
     Requisition,
 )
+from .provisioning import reconcile_provisioned_servers
 from .validation import validate_resolution
+
+logger = logging.getLogger("netbox_opennms")
 
 # Sync jobs are enqueued without an instance, so they run on the default RQ
 # queue (get_queue_for_model(None) -> RQ_QUEUE_DEFAULT). FR-13 / AD-16.
@@ -96,6 +101,129 @@ def _enqueue_foreign_source(request, foreign_source, server_id, allow_empty=Fals
         user=request.user,
         allow_empty=allow_empty,
     )
+
+
+# --- OpenNMS server ---------------------------------------------------------
+
+LOCKED_MESSAGE = (
+    "Server {name!r} is managed by configuration "
+    "(PLUGINS_CONFIG['netbox_opennms']['servers']) and cannot be {action} here."
+)
+
+
+def _is_locked(server):
+    """A provisioned row whose config entry is present is read-only in the UI."""
+    return server.is_provisioned and not server.is_missing
+
+
+class OpenNMSServerView(generic.ObjectView):
+    queryset = OpenNMSServer.objects.all()
+
+
+class OpenNMSServerListView(generic.ObjectListView):
+    queryset = OpenNMSServer.objects.all()
+    table = tables.OpenNMSServerTable
+    filterset = filtersets.OpenNMSServerFilterSet
+
+    def get(self, request, *args, **kwargs):
+        # Spec decision 2: opening the list corrects provisioned rows after a
+        # restart that skipped `migrate`. Never let it break the page.
+        try:
+            reconcile_provisioned_servers()
+        except Exception:
+            logger.exception("reconciling provisioned OpenNMS servers failed")
+        return super().get(request, *args, **kwargs)
+
+
+class OpenNMSServerEditView(generic.ObjectEditView):
+    queryset = OpenNMSServer.objects.all()
+    form = forms.OpenNMSServerForm
+    template_name = "netbox_opennms/opennmsserver_edit.html"
+
+    def get_extra_context(self, request, instance):
+        return {"locked": _is_locked(instance)}
+
+    def post(self, request, *args, **kwargs):
+        server = self.get_object(**kwargs)
+        if server.pk and _is_locked(server):
+            messages.error(
+                request, LOCKED_MESSAGE.format(name=server.name, action="edited")
+            )
+            return redirect(server.get_absolute_url())
+        return super().post(request, *args, **kwargs)
+
+
+class OpenNMSServerDeleteView(generic.ObjectDeleteView):
+    queryset = OpenNMSServer.objects.all()
+
+    def _refuse(self, request, server):
+        messages.error(
+            request, LOCKED_MESSAGE.format(name=server.name, action="deleted")
+        )
+        return redirect(server.get_absolute_url())
+
+    def get(self, request, *args, **kwargs):
+        server = self.get_object(**kwargs)
+        if _is_locked(server):
+            return self._refuse(request, server)
+        return super().get(request, *args, **kwargs)
+
+    def post(self, request, *args, **kwargs):
+        server = self.get_object(**kwargs)
+        if _is_locked(server):
+            return self._refuse(request, server)
+        return super().post(request, *args, **kwargs)
+
+
+class OpenNMSServerBulkDeleteView(generic.BulkDeleteView):
+    queryset = OpenNMSServer.objects.all()
+    filterset = filtersets.OpenNMSServerFilterSet
+    table = tables.OpenNMSServerTable
+
+    def post(self, request, **kwargs):
+        # Narrow the queryset rather than rewrite request.POST, so both the
+        # selected-pk and the "_all" paths of BulkDeleteView skip locked rows.
+        locked = [
+            server
+            for server in self.queryset.filter(origin=ServerOriginChoices.PROVISIONED)
+            if _is_locked(server)
+        ]
+        if request.POST.get("_all"):
+            skipped = locked
+        else:
+            selected = set(request.POST.getlist("pk"))
+            skipped = [server for server in locked if str(server.pk) in selected]
+        if skipped:
+            messages.warning(
+                request,
+                "Skipped servers managed by configuration "
+                "(PLUGINS_CONFIG['netbox_opennms']['servers']): "
+                + ", ".join(server.name for server in skipped),
+            )
+        self.queryset = self.queryset.exclude(pk__in=[server.pk for server in locked])
+        return super().post(request, **kwargs)
+
+
+class OpenNMSServerTestConnectionView(PermissionRequiredMixin, View):
+    """Probe one server for reachability and accepted credentials."""
+
+    permission_required = "netbox_opennms.view_opennmsserver"
+
+    def post(self, request, pk):
+        server = get_object_or_404(
+            OpenNMSServer.objects.restrict(request.user, "view"), pk=pk
+        )
+        try:
+            with OpenNMSClient.for_server(server) as client:
+                client.test_connection()
+        except OpenNMSError as exc:
+            messages.error(request, f"OpenNMS connection failed: {exc}")
+        else:
+            messages.success(
+                request,
+                "OpenNMS connection OK — reachable and credentials accepted.",
+            )
+        return redirect(server.get_absolute_url())
 
 
 # --- Requisition ------------------------------------------------------------
@@ -644,49 +772,3 @@ class SyncPreviewView(PermissionRequiredMixin, View):
             self.template_name,
             {"rows": rows, "no_worker_warning": _no_worker_running()},
         )
-
-
-class OpenNMSConnectionTestView(PermissionRequiredMixin, View):
-    """"Connect OpenNMS" page: verify the CONFIGURED connection (Option D).
-
-    Probes the OpenNMS instance defined in ``PLUGINS_CONFIG`` for reachability and
-    valid credentials, and shows the effective URL/username (never the password)
-    read-only. The connection is configured in NetBox's plugin config
-    (``configuration.py`` / Helm ``pluginsConfig``), never here — so the view
-    accepts no user-supplied URL or credentials (which could send the stored
-    secret to an arbitrary host) and stores nothing (AD-13). Permission-gated,
-    like the dry-run, because it issues an outbound call with stored credentials.
-    """
-
-    permission_required = "netbox_opennms.view_requisition"
-    template_name = "netbox_opennms/connection_test.html"
-
-    def _context(self):
-        # Show the effective connection so the user knows what will be tested;
-        # the password is reported only as set / not set, never rendered.
-        return {
-            "opennms_url": get_plugin_config("netbox_opennms", "opennms_url") or "",
-            "opennms_username": get_plugin_config(
-                "netbox_opennms", "opennms_username"
-            )
-            or "",
-            "password_set": bool(
-                get_plugin_config("netbox_opennms", "opennms_password")
-            ),
-        }
-
-    def get(self, request):
-        return render(request, self.template_name, self._context())
-
-    def post(self, request):
-        try:
-            with OpenNMSClient.from_config() as client:
-                client.test_connection()
-        except OpenNMSError as exc:
-            messages.error(request, f"OpenNMS connection failed: {exc}")
-        else:
-            messages.success(
-                request,
-                "OpenNMS connection OK — reachable and credentials accepted.",
-            )
-        return redirect("plugins:netbox_opennms:connection_test")

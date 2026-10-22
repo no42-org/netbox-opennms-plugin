@@ -19,6 +19,7 @@ from ..models import (
     MonitoringDetector,
     MonitoringOverride,
     MonitoringPolicy,
+    OpenNMSServer,
     Requisition,
 )
 
@@ -282,3 +283,26 @@ class MetadataEntrySerializer(NetBoxModelSerializer):
             "last_updated",
         )
         brief_fields = ("id", "url", "display", "key")
+
+
+class OpenNMSServerSerializer(NetBoxModelSerializer):
+    """Minimal, secret-free representation of a server.
+
+    NetBox serializes an object for its event queue on delete, so the UI delete
+    views need this class. Task 11 adds the REST endpoint and the full field set;
+    ``password`` and ``headers`` must stay out of any readable representation.
+    """
+
+    class Meta:
+        model = OpenNMSServer
+        fields = (
+            "id",
+            "display",
+            "name",
+            "origin",
+            "default_location",
+            "description",
+            "created",
+            "last_updated",
+        )
+        brief_fields = ("id", "display", "name")

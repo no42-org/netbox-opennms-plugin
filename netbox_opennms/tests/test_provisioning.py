@@ -56,6 +56,13 @@ class ReconcileProvisionedServersTest(TestCase):
         self.assertEqual(OpenNMSServer.objects.count(), 0)
         self.assertEqual(len(logs.records), 2)
 
+    def test_unchanged_row_is_not_saved(self):
+        with mock.patch(PATCH, return_value={"prod": ENTRY}):
+            reconcile_provisioned_servers()
+            with mock.patch.object(OpenNMSServer, "save") as save:
+                reconcile_provisioned_servers()
+        save.assert_not_called()
+
     def test_post_migrate_signal_is_connected(self):
         receivers = [r[1]() if callable(r[1]) else r[1] for r in post_migrate.receivers]
         self.assertIn(on_post_migrate, receivers)

@@ -21,16 +21,23 @@ def reconcile_provisioned_servers():
                 f"Provisioned server {name!r} skipped: missing url or credentials."
             )
             continue
-        row, _ = OpenNMSServer.objects.update_or_create(
-            name=name,
-            defaults={
-                "origin": ServerOriginChoices.PROVISIONED,
-                "url": entry["url"],
-                "default_location": entry["default_location"],
-                "username": "",
-                "password": "",
-                "headers": {},
-            },
-        )
+        wanted = {
+            "origin": ServerOriginChoices.PROVISIONED,
+            "url": entry["url"],
+            "default_location": entry["default_location"],
+            "username": "",
+            "password": "",
+            "headers": {},
+        }
+        row = OpenNMSServer.objects.filter(name=name).first()
+        if row is None:
+            row = OpenNMSServer.objects.create(name=name, **wanted)
+        elif any(getattr(row, field) != value for field, value in wanted.items()):
+            # Save only on drift: the server list view calls this on every
+            # GET, and a no-op save would still write an ObjectChange.
+            row.snapshot()
+            for field, value in wanted.items():
+                setattr(row, field, value)
+            row.save()
         rows.append(row)
     return rows

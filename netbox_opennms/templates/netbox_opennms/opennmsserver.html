@@ -1,0 +1,74 @@
+{# Copyright 2026 Ronny Trommer <ronny@no42.org> #}
+{# SPDX-License-Identifier: MIT #}
+{% extends 'generic/object.html' %}
+{% load helpers %}
+
+{% block extra_controls %}
+  {% if perms.netbox_opennms.view_opennmsserver %}
+    <form method="post" action="{% url 'plugins:netbox_opennms:opennmsserver_test' pk=object.pk %}" class="d-inline">
+      {% csrf_token %}
+      <button type="submit" class="btn btn-sm btn-outline-primary">
+        <i class="mdi mdi-lan-connect"></i> Test connection
+      </button>
+    </form>
+  {% endif %}
+{% endblock %}
+
+{% block content %}
+  {% if object.is_missing %}
+    <div class="alert alert-warning" role="alert">
+      <i class="mdi mdi-alert"></i>
+      This server is no longer declared in <code>PLUGINS_CONFIG['netbox_opennms']['servers']</code>.
+      Its credentials are gone, so it cannot sync. Re-add it to the configuration, or edit it here to keep it as a local server.
+    </div>
+  {% endif %}
+  {% if not object.credentials_ok %}
+    <div class="alert alert-warning" role="alert">
+      <i class="mdi mdi-alert"></i>
+      The stored credentials cannot be decrypted (SECRET_KEY or credentials_key changed).
+      Edit the server and re-enter the password and headers.
+    </div>
+  {% endif %}
+  <div class="row">
+    <div class="col col-md-6">
+      <div class="card">
+        <h2 class="card-header">OpenNMS server</h2>
+        <table class="table table-hover attr-table">
+          <tr><th scope="row">Name</th><td>{{ object.name }}</td></tr>
+          <tr><th scope="row">Description</th><td>{{ object.description|placeholder }}</td></tr>
+          <tr>
+            <th scope="row">Origin</th>
+            <td>
+              {% if object.is_provisioned %}
+                {% if object.is_missing %}
+                  <span class="badge text-bg-danger">Missing from configuration</span>
+                {% else %}
+                  <span class="badge text-bg-info">Managed by configuration</span>
+                {% endif %}
+              {% else %}
+                <span class="badge text-bg-secondary">{{ object.get_origin_display }}</span>
+              {% endif %}
+            </td>
+          </tr>
+          <tr><th scope="row">URL</th><td><code>{{ object.url }}</code></td></tr>
+          <tr><th scope="row">Username</th><td>{{ object.effective_username|placeholder }}</td></tr>
+          <tr><th scope="row">Default location</th><td>{{ object.default_location|placeholder }}</td></tr>
+          <tr>
+            <th scope="row">Headers</th>
+            <td>
+              {% if not object.credentials_ok %}
+                <span class="text-warning">Cannot be decrypted</span>
+              {% else %}
+                {% for key in object.headers.keys %}<code>{{ key }}</code>{% if not forloop.last %}, {% endif %}{% empty %}{{ ""|placeholder }}{% endfor %}
+              {% endif %}
+            </td>
+          </tr>
+        </table>
+      </div>
+      {% include 'inc/panels/tags.html' %}
+    </div>
+    <div class="col col-md-6">
+      {% include 'inc/panels/custom_fields.html' %}
+    </div>
+  </div>
+{% endblock %}

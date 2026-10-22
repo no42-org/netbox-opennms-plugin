@@ -13,8 +13,24 @@ from .models import (
     MonitoringDetector,
     MonitoringOverride,
     MonitoringPolicy,
+    OpenNMSServer,
     Requisition,
 )
+
+
+class OpenNMSServerFilterSet(NetBoxModelFilterSet):
+    class Meta:
+        model = OpenNMSServer
+        fields = ("id", "name", "origin", "url", "default_location")
+
+    def search(self, queryset, name, value):
+        if value:
+            return queryset.filter(
+                Q(name__icontains=value)
+                | Q(description__icontains=value)
+                | Q(url__icontains=value)
+            )
+        return queryset
 
 
 class RequisitionFilterSet(NetBoxModelFilterSet):

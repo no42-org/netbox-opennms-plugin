@@ -20,7 +20,7 @@ from utilities.forms.fields import (
 from virtualization.models import VirtualMachine
 
 from .catalog import get_detector_catalog, get_policy_catalog, overlay_catalog
-from .choices import ObjectTypeChoices, ServiceChoices
+from .choices import ObjectTypeChoices, ServerOriginChoices, ServiceChoices
 from .membership import filter_errors
 from .models import (
     AssetMapping,
@@ -30,11 +30,81 @@ from .models import (
     MonitoringDetector,
     MonitoringOverride,
     MonitoringPolicy,
+    OpenNMSServer,
     Requisition,
 )
 from .presets import DETECTOR_PRESETS, POLICY_PRESETS
 
 logger = logging.getLogger("netbox_opennms")
+
+
+class OpenNMSServerForm(NetBoxModelForm):
+    """Create/edit an OpenNMS server.
+
+    A provisioned row whose config entry is present is read-only (every field
+    disabled). A provisioned row whose entry is gone is edited as a local row
+    and saved with ``origin = local``. The password is never rendered; leaving
+    it blank on edit keeps the stored one.
+    """
+
+    password = forms.CharField(
+        widget=forms.PasswordInput(render_value=False),
+        required=False,
+        label=_("Password"),
+        help_text=_("Leave blank to keep the stored password."),
+    )
+    headers = JSONField(
+        required=False,
+        label=_("Headers"),
+        help_text=_(
+            'Extra HTTP headers sent with every request, e.g. {"X-Api-Key": "key"}.'
+        ),
+    )
+
+    class Meta:
+        model = OpenNMSServer
+        fields = (
+            "name",
+            "description",
+            "url",
+            "username",
+            "password",
+            "headers",
+            "default_location",
+            "tags",
+        )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.initial.pop("password", None)
+        if not self.instance.pk:
+            self.fields["password"].help_text = ""
+        if self.instance.is_provisioned and not self.instance.is_missing:
+            for field in self.fields.values():
+                field.disabled = True
+        if not self.instance.credentials_ok:
+            # Spec decision 3: the stored secrets cannot be decrypted, so both
+            # are cleared and must be entered again.
+            self.initial["headers"] = {}
+            self.fields["password"].required = True
+            self.fields["password"].help_text = _(
+                "The stored credentials cannot be decrypted (SECRET_KEY or "
+                "credentials_key changed). Re-enter the password and headers."
+            )
+
+    def clean(self):
+        super().clean()
+        if self.instance.is_missing:
+            self.instance.origin = ServerOriginChoices.LOCAL
+        if self.cleaned_data.get("headers") is None:
+            self.cleaned_data["headers"] = {}
+        if not self.cleaned_data.get("password") and "password" not in self.errors:
+            stored = self.instance.password if self.instance.credentials_ok else ""
+            if self.instance.pk and stored:
+                self.cleaned_data["password"] = stored
+            else:
+                self.add_error("password", _("A local server needs a password."))
+        return self.cleaned_data
 
 
 class RequisitionForm(NetBoxModelForm):

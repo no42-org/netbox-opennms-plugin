@@ -1,0 +1,13 @@
+{# Copyright 2026 Ronny Trommer <ronny@no42.org> #}
+{# SPDX-License-Identifier: MIT #}
+{% extends 'generic/object_edit.html' %}
+
+{% block content %}
+  {% if locked %}
+    <div class="alert alert-info" role="alert">
+      <i class="mdi mdi-information"></i>
+      Managed by configuration: this server is declared in <code>PLUGINS_CONFIG['netbox_opennms']['servers']</code> and cannot be edited here.
+    </div>
+  {% endif %}
+  {{ block.super }}
+{% endblock %}

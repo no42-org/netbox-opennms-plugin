@@ -2,6 +2,9 @@
 # SPDX-License-Identifier: MIT
 """UI view (CRUD) tests for the plugin models."""
 
+from unittest import mock
+
+from core.models import ObjectChange
 from dcim.models import (
     Device,
     DeviceRole,
@@ -10,9 +13,13 @@ from dcim.models import (
     Manufacturer,
     Site,
 )
+from django.contrib.auth import get_user_model
+from django.test import TestCase
+from django.urls import reverse
 from ipam.models import IPAddress
 from utilities.testing import ViewTestCases
 
+from netbox_opennms.crypto import Undecryptable
 from netbox_opennms.models import (
     AssetMapping,
     MetadataEntry,
@@ -21,6 +28,7 @@ from netbox_opennms.models import (
     MonitoringDetector,
     MonitoringOverride,
     MonitoringPolicy,
+    OpenNMSServer,
     Requisition,
 )
 from netbox_opennms.tests.servers import make_server
@@ -308,3 +316,171 @@ class MetadataEntryViewTest(
             "value_source": "",
             "literal_value": "v4",
         }
+
+
+class OpenNMSServerViewTest(
+    ViewTestCases.GetObjectViewTestCase,
+    ViewTestCases.GetObjectChangelogViewTestCase,
+    ViewTestCases.CreateObjectViewTestCase,
+    ViewTestCases.EditObjectViewTestCase,
+    ViewTestCases.DeleteObjectViewTestCase,
+    ViewTestCases.ListObjectsViewTestCase,
+    ViewTestCases.BulkDeleteObjectsViewTestCase,
+):
+    model = OpenNMSServer
+    form_data = {
+        "name": "new",
+        "url": "https://n/opennms",
+        "username": "u",
+        "password": "p",
+        "headers": "{}",
+    }
+    # The JSON headers field posts a string but stores a dict.
+    validation_excluded_fields = ("headers",)
+
+    def _get_base_url(self):
+        return "plugins:netbox_opennms:opennmsserver_{}"
+
+    @classmethod
+    def setUpTestData(cls):
+        for name in ("srv-1", "srv-2", "srv-3"):
+            make_server(name)
+
+
+class ServerLockingTest(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = get_user_model().objects.create_user(
+            username="admin", password="pw", is_superuser=True
+        )
+        cls.prod = OpenNMSServer.objects.create(
+            name="prod", origin="provisioned", url="https://p/opennms"
+        )
+        cls.local = make_server("local", url="https://l/")
+
+    def setUp(self):
+        self.client.force_login(self.user)
+        patcher = mock.patch(
+            "netbox_opennms.models.config.server_entry",
+            return_value={"url": "https://p/opennms", "username": "cfg"},
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_provisioned_edit_is_refused(self):
+        response = self.client.post(
+            reverse("plugins:netbox_opennms:opennmsserver_edit", args=[self.prod.pk]),
+            {"name": "prod", "url": "https://x/"},
+        )
+        self.assertRedirects(response, self.prod.get_absolute_url())
+        self.assertEqual(
+            OpenNMSServer.objects.get(pk=self.prod.pk).url, "https://p/opennms"
+        )
+
+    def test_provisioned_edit_form_is_locked(self):
+        response = self.client.get(
+            reverse("plugins:netbox_opennms:opennmsserver_edit", args=[self.prod.pk])
+        )
+        self.assertContains(response, "Managed by configuration")
+        self.assertTrue(
+            all(f.disabled for f in response.context["form"].fields.values())
+        )
+
+    def test_provisioned_delete_is_refused(self):
+        url = reverse(
+            "plugins:netbox_opennms:opennmsserver_delete", args=[self.prod.pk]
+        )
+        self.assertRedirects(self.client.get(url), self.prod.get_absolute_url())
+        self.client.post(url, {"confirm": True})
+        self.assertTrue(OpenNMSServer.objects.filter(pk=self.prod.pk).exists())
+
+    def test_bulk_delete_skips_provisioned(self):
+        response = self.client.post(
+            reverse("plugins:netbox_opennms:opennmsserver_bulk_delete"),
+            {"pk": [self.prod.pk, self.local.pk], "confirm": True, "_confirm": True},
+            follow=True,
+        )
+        self.assertTrue(OpenNMSServer.objects.filter(pk=self.prod.pk).exists())
+        self.assertFalse(OpenNMSServer.objects.filter(pk=self.local.pk).exists())
+        self.assertContains(response, "prod")
+
+    def test_missing_provisioned_converts_to_local(self):
+        with mock.patch("netbox_opennms.models.config.server_entry", return_value=None):
+            self.client.post(
+                reverse(
+                    "plugins:netbox_opennms:opennmsserver_edit", args=[self.prod.pk]
+                ),
+                {
+                    "name": "prod",
+                    "url": "https://p/opennms",
+                    "username": "u",
+                    "password": "p",
+                    "headers": "{}",
+                },
+            )
+        self.assertEqual(OpenNMSServer.objects.get(pk=self.prod.pk).origin, "local")
+
+    def test_detail_never_renders_password(self):
+        self.local.password = "SUPER-SECRET"
+        self.local.headers = {"X-Token": "HEADER-SECRET"}
+        self.local.save()
+        response = self.client.get(self.local.get_absolute_url())
+        self.assertNotContains(response, "SUPER-SECRET")
+        self.assertNotContains(response, "HEADER-SECRET")
+        self.assertContains(response, "X-Token")
+
+    def test_blank_password_on_edit_keeps_stored_value(self):
+        self.client.post(
+            reverse("plugins:netbox_opennms:opennmsserver_edit", args=[self.local.pk]),
+            {
+                "name": "local",
+                "url": "https://l/",
+                "username": "u",
+                "password": "",
+                "headers": "{}",
+            },
+        )
+        self.assertEqual(OpenNMSServer.objects.get(pk=self.local.pk).password, "pw")
+
+    def test_blank_password_on_create_is_a_field_error(self):
+        from netbox_opennms.forms import OpenNMSServerForm
+
+        form = OpenNMSServerForm(
+            data={"name": "n", "url": "https://n/", "username": "u", "password": ""}
+        )
+        self.assertFalse(form.is_valid())
+        self.assertIn("password", form.errors)
+
+    def test_undecryptable_edit_requires_new_password(self):
+        from netbox_opennms.forms import OpenNMSServerForm
+
+        self.local.password = Undecryptable("gAAAA-broken")
+        form = OpenNMSServerForm(
+            data={"name": "local", "url": "https://l/", "username": "u",
+                  "password": "", "headers": "{}"},
+            instance=self.local,
+        )
+        self.assertFalse(form.is_valid())
+        self.assertIn("password", form.errors)
+
+    def test_list_reconciles_provisioned_servers(self):
+        with mock.patch(
+            "netbox_opennms.views.reconcile_provisioned_servers"
+        ) as reconcile:
+            response = self.client.get(
+                reverse("plugins:netbox_opennms:opennmsserver_list")
+            )
+        self.assertEqual(response.status_code, 200)
+        reconcile.assert_called_once_with()
+
+
+    def test_list_reconcile_logs_no_change_when_nothing_drifted(self):
+        entry = {"url": "https://c/opennms", "username": "u", "password": "p",
+                 "default_location": "", "headers": {}}
+        with mock.patch(
+            "netbox_opennms.config.server_entries", return_value={"cfg": entry}
+        ):
+            for _ in range(3):
+                self.client.get(reverse("plugins:netbox_opennms:opennmsserver_list"))
+        changes = ObjectChange.objects.filter(object_repr="cfg")
+        self.assertEqual(list(changes.values_list("action", flat=True)), ["create"])

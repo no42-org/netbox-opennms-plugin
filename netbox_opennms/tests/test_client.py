@@ -349,23 +349,6 @@ class OpenNMSClientTest(SimpleTestCase):
         _, url = mock_request.call_args.args
         self.assertTrue(url.endswith("/rest/foreignSourcesConfig/assets"))
 
-    def test_from_config_requires_url(self):
-        with mock.patch(
-            "netbox_opennms.client.client.get_plugin_config", return_value=""
-        ):
-            with self.assertRaises(OpenNMSError):
-                OpenNMSClient.from_config()
-
-    def test_from_config_requires_credentials(self):
-        def fake(_plugin, key):
-            return "https://onms.example/opennms" if key == "opennms_url" else ""
-
-        with mock.patch(
-            "netbox_opennms.client.client.get_plugin_config", side_effect=fake
-        ):
-            with self.assertRaises(OpenNMSError):
-                OpenNMSClient.from_config()
-
 
 class ForServerTest(TestCase):
     def test_local_server_uses_row(self):

@@ -331,7 +331,7 @@ class SyncViewTest(TestCase):
         # The nav menu renders on every page; home is a cheap one to fetch.
         links = [
             reverse("plugins:netbox_opennms:sync_preview"),
-            reverse("plugins:netbox_opennms:connection_test"),
+            reverse("plugins:netbox_opennms:opennmsserver_list"),
         ]
         self.client.force_login(self.plain)
         response = self.client.get(reverse("home"))

@@ -12,7 +12,6 @@ import logging
 from urllib.parse import quote
 
 import requests
-from netbox.plugins import get_plugin_config
 from requests.auth import HTTPBasicAuth
 
 import netbox_opennms.config as config
@@ -28,7 +27,6 @@ from .errors import (
 logger = logging.getLogger("netbox_opennms")
 
 DEFAULT_TIMEOUT = 10
-PLUGIN_NAME = "netbox_opennms"
 
 
 class OpenNMSClient:
@@ -92,31 +90,6 @@ class OpenNMSClient:
         return cls(
             base_url=base_url, username=username, password=password, headers=headers
         )
-
-    @classmethod
-    def from_config(cls):
-        """Build a client from PLUGINS_CONFIG (credentials never come from models)."""
-        base_url = get_plugin_config(PLUGIN_NAME, "opennms_url")
-        if not base_url:
-            raise OpenNMSError(
-                "OpenNMS URL is not configured "
-                "(set PLUGINS_CONFIG['netbox_opennms']['opennms_url'])."
-            )
-        if not base_url.startswith(("https://", "http://")):
-            raise OpenNMSError("OpenNMS URL must start with https:// or http://.")
-        if base_url.startswith("http://"):
-            logger.warning(
-                "OpenNMS URL uses http:// — credentials are sent in cleartext; "
-                "use https:// (AD-13)."
-            )
-        username = get_plugin_config(PLUGIN_NAME, "opennms_username")
-        password = get_plugin_config(PLUGIN_NAME, "opennms_password")
-        if not username or not password:
-            raise OpenNMSError(
-                "OpenNMS credentials are not configured "
-                "(set opennms_username and opennms_password)."
-            )
-        return cls(base_url=base_url, username=username, password=password)
 
     def close(self):
         self._session.close()

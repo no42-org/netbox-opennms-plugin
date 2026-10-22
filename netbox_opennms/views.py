@@ -58,10 +58,10 @@ def _no_worker_running():
         return True
 
 
-def _location_warnings(locations):
+def _location_warnings(server, locations):
     """Best-effort warnings for chosen locations with no Minion (FR-5/AD-16)."""
     try:
-        with OpenNMSClient.from_config() as client:
+        with OpenNMSClient.for_server(server) as client:
             missing = unknown_locations(client, locations)
     except Exception:
         return []
@@ -87,8 +87,8 @@ def _enqueue_foreign_source(request, foreign_source, server_id, allow_empty=Fals
     if resolution is not None:
         locations.add(resolution.requisition.location)
         locations.update(node.location for node in resolution.nodes)
-    for warning in _location_warnings(locations):
-        messages.warning(request, warning)
+        for warning in _location_warnings(resolution.requisition.server, locations):
+            messages.warning(request, warning)
 
     return SyncForeignSourceJob.enqueue_sync(
         foreign_source,

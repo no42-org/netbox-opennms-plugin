@@ -2,10 +2,14 @@
 # SPDX-License-Identifier: MIT
 """Tests for the pure dry-run differ (Requisition redesign, R7)."""
 
-from django.test import SimpleTestCase
+from unittest import mock
 
-from netbox_opennms.dryrun import diff
+from django.test import SimpleTestCase, TestCase
+
+from netbox_opennms.dryrun import diff, dry_run
 from netbox_opennms.membership import Conflict, InterfaceSpec, NodeSpec, Resolution
+from netbox_opennms.models import Requisition
+from netbox_opennms.tests.servers import make_server
 
 
 class _Rules:
@@ -132,3 +136,18 @@ class DryRunDiffTest(SimpleTestCase):
         result = diff(_resolution([_node()]), current, {"scan-interval": "1d"})
         self.assertEqual(result.added, [])
         self.assertEqual(result.unchanged, 1)
+
+
+class DryRunServerTest(TestCase):
+    """The dry run talks to the Requisition's own server."""
+
+    def test_dry_run_uses_requisition_server(self):
+        make_server("other")
+        server = make_server("lab", default_location="Lab")
+        Requisition.objects.create(server=server, name="lab-fs", filter_params={})
+        with mock.patch("netbox_opennms.dryrun.OpenNMSClient.for_server") as m:
+            client = m.return_value.__enter__.return_value
+            client.get_requisition.return_value = {}
+            client.get_foreign_source.return_value = {}
+            dry_run("lab-fs")
+        m.assert_called_once_with(server)

@@ -18,6 +18,7 @@ from django.test import TestCase
 from ipam.models import IPAddress
 
 from netbox_opennms.choices import ServerOriginChoices
+from netbox_opennms.crypto import Undecryptable
 from netbox_opennms.models import (
     DeployedForeignSource,
     MonitoredService,
@@ -266,7 +267,62 @@ class OpenNMSServerModelTest(TestCase):
     def test_local_requires_credentials_on_create(self):
         with self.assertRaises(ValidationError) as ctx:
             OpenNMSServer(name="x", url="https://a/").full_clean()
+        self.assertIn("username", ctx.exception.message_dict)
         self.assertIn("password", ctx.exception.message_dict)
+
+    def _errors(self, server):
+        try:
+            server.full_clean()
+        except ValidationError as exc:
+            return exc.message_dict
+        return {}
+
+    def test_untouched_stored_password_is_kept(self):
+        server = OpenNMSServer.objects.get(pk=make_server().pk)
+        self.assertEqual(self._errors(server), {})
+
+    def test_new_password_on_edit_is_accepted(self):
+        server = OpenNMSServer.objects.get(pk=make_server().pk)
+        server.password = "new"
+        self.assertEqual(self._errors(server), {})
+
+    def test_empty_stored_password_requires_one(self):
+        # E.g. a missing provisioned row being adopted as local.
+        server = OpenNMSServer.objects.create(
+            name="gone", origin=ServerOriginChoices.PROVISIONED, url="https://g/"
+        )
+        server.origin = ServerOriginChoices.LOCAL
+        server.username = "u"
+        self.assertIn("password", self._errors(server))
+        server.password = "p"
+        self.assertEqual(self._errors(server), {})
+
+    def test_undecryptable_password_is_not_a_stored_password(self):
+        server = make_server()
+        server.password = Undecryptable("gAAAA-broken")
+        self.assertFalse(server.credentials_ok)
+        self.assertIn("password", self._errors(server))
+        server.password = "re-entered"
+        self.assertEqual(self._errors(server), {})
+
+    def test_undecryptable_headers_must_be_re_entered(self):
+        server = make_server()
+        server.headers = Undecryptable("gAAAA-broken")
+        self.assertFalse(server.credentials_ok)
+        self.assertIn("cannot be decrypted", self._errors(server)["headers"][0])
+        server.headers = {}
+        self.assertEqual(self._errors(server), {})
+
+    def test_local_requires_username(self):
+        server = OpenNMSServer.objects.get(pk=make_server().pk)
+        server.username = ""
+        self.assertIn("username", self._errors(server))
+
+    def test_provisioned_needs_no_stored_credentials(self):
+        server = OpenNMSServer(
+            name="prod", origin=ServerOriginChoices.PROVISIONED, url="https://p/"
+        )
+        self.assertEqual(self._errors(server), {})
 
     def test_is_missing_for_provisioned_without_config(self):
         server = OpenNMSServer.objects.create(

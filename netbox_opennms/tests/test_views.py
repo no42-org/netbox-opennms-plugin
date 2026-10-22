@@ -377,6 +377,27 @@ class ServerLockingTest(TestCase):
             OpenNMSServer.objects.get(pk=self.prod.pk).url, "https://p/opennms"
         )
 
+    def test_crafted_rename_cannot_unlock_a_provisioned_row(self):
+        # Only "prod" has a config entry; the view judges the stored row.
+        entry = {"url": "https://p/opennms", "username": "cfg"}
+        with mock.patch(
+            "netbox_opennms.models.config.server_entry",
+            side_effect=lambda name: entry if name == "prod" else None,
+        ):
+            response = self.client.post(
+                reverse(
+                    "plugins:netbox_opennms:opennmsserver_edit", args=[self.prod.pk]
+                ),
+                {"name": "renamed", "url": "https://evil/", "username": "u",
+                 "password": "p", "headers": "{}"},
+            )
+        self.assertRedirects(response, self.prod.get_absolute_url())
+        prod = OpenNMSServer.objects.get(pk=self.prod.pk)
+        self.assertEqual(
+            (prod.name, prod.origin, prod.url),
+            ("prod", "provisioned", "https://p/opennms"),
+        )
+
     def test_provisioned_edit_form_is_locked(self):
         response = self.client.get(
             reverse("plugins:netbox_opennms:opennmsserver_edit", args=[self.prod.pk])

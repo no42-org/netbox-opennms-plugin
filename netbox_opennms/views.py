@@ -20,7 +20,7 @@ from virtualization.models import VirtualMachine
 
 from . import filtersets, forms, tables
 from .choices import ServerOriginChoices
-from .client import OpenNMSClient, OpenNMSError
+from .client import OpenNMSClient, OpenNMSError, OpenNMSHTTPError
 from .dryrun import dry_run
 from .jobs import (
     SyncForeignSourceJob,
@@ -216,6 +216,14 @@ class OpenNMSServerTestConnectionView(PermissionRequiredMixin, View):
         try:
             with OpenNMSClient.for_server(server) as client:
                 client.test_connection()
+        except OpenNMSHTTPError as exc:
+            # Status and reason only: a proxy that echoes request headers into
+            # the body would put tokens into the flash message.
+            messages.error(
+                request,
+                f"OpenNMS connection failed: HTTP {exc.status_code} "
+                f"{exc.reason}".rstrip(),
+            )
         except OpenNMSError as exc:
             messages.error(request, f"OpenNMS connection failed: {exc}")
         else:
@@ -267,7 +275,13 @@ class RequisitionEditView(generic.ObjectEditView):
         # A redirect means the save succeeded; a re-rendered form means it did not.
         if old and response.status_code == 302:
             new = Requisition.objects.select_related("server").get(pk=obj.pk).server
-            if new != old:
+            if new != old and new.points_at_same_opennms(old):
+                messages.warning(
+                    request,
+                    f"Moved to server {new.name}, which points at the same "
+                    f"OpenNMS as {old.name}; the existing nodes stay in place.",
+                )
+            elif new != old:
                 messages.warning(
                     request,
                     f"Moved to server {new.name}: the next Sync pushes there "

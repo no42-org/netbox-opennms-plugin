@@ -22,6 +22,7 @@ class OpenNMSAuthError(OpenNMSError):
 class OpenNMSHTTPError(OpenNMSError):
     """OpenNMS returned an unexpected non-2xx HTTP status."""
 
-    def __init__(self, message, status_code=None):
+    def __init__(self, message, status_code=None, reason=""):
         super().__init__(message)
         self.status_code = status_code
+        self.reason = reason

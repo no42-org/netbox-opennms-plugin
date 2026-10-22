@@ -8,7 +8,7 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.urls import NoReverseMatch, reverse
 
-from netbox_opennms.client import OpenNMSError
+from netbox_opennms.client import OpenNMSError, OpenNMSHTTPError
 from netbox_opennms.tests.servers import make_server
 
 URL = "plugins:netbox_opennms:opennmsserver_test"
@@ -53,6 +53,19 @@ class ServerTestConnectionViewTest(TestCase):
         client.test_connection.side_effect = OpenNMSError("unreachable")
         response = self.client.post(self._url(), follow=True)
         self.assertContains(response, "OpenNMS connection failed: unreachable")
+
+    @mock.patch("netbox_opennms.views.OpenNMSClient.for_server")
+    def test_http_failure_shows_status_and_reason_only(self, mock_for_server):
+        # A proxy that echoes request headers must not leak them via the body.
+        client = mock_for_server.return_value.__enter__.return_value
+        client.test_connection.side_effect = OpenNMSHTTPError(
+            "OpenNMS returned HTTP 502 for /rest/requisitions. — X-Token: SECRET",
+            status_code=502,
+            reason="Bad Gateway",
+        )
+        response = self.client.post(self._url(), follow=True)
+        self.assertContains(response, "OpenNMS connection failed: HTTP 502 Bad Gateway")
+        self.assertNotContains(response, "SECRET")
 
     def test_global_connection_page_is_gone(self):
         with self.assertRaises(NoReverseMatch):

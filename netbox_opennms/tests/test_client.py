@@ -375,6 +375,25 @@ class ForServerTest(TestCase):
         self.assertEqual(client._session.auth.username, "cfg")
         self.assertEqual(client._session.headers["X-B"], "2")
 
+    def test_provisioned_url_comes_from_config_not_row(self):
+        # The row URL is a display copy; config credentials must go to the
+        # config URL even when the row is stale or was edited.
+        server = OpenNMSServer.objects.create(
+            name="prod", origin="provisioned", url="https://stale.example/opennms"
+        )
+        entry = {
+            "url": "https://config.example/opennms",
+            "username": "cfg",
+            "password": "pw",
+            "default_location": "",
+            "headers": {},
+        }
+        with mock.patch(
+            "netbox_opennms.client.client.config.server_entry", return_value=entry
+        ):
+            client = OpenNMSClient.for_server(server)
+        self.assertEqual(client.base_url, "https://config.example/opennms")
+
     def test_missing_provisioned_entry_raises(self):
         server = OpenNMSServer.objects.create(
             name="ghost", origin="provisioned", url="https://g/"

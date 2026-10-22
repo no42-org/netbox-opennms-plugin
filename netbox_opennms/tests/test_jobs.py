@@ -560,6 +560,51 @@ class MultiServerJobTest(TestCase):
         client = mock.Mock(list_requisition_names=lambda: ["a"])
         self.assertEqual(orphaned_foreign_sources(client, self.a), ["a"])
 
+    def test_move_between_rows_for_same_opennms_is_not_an_orphan(self):
+        # C1: Foreign Source names are global on one OpenNMS. A row "a2" that
+        # points at the same instance as "a" (other spelling of the URL) holds
+        # the moved Requisition's live copy; "a" must not tear it down.
+        a2 = make_server("a2", url="HTTPS://ONMS.EXAMPLE.ORG/opennms/")
+        DeployedForeignSource.objects.create(server=self.a, name="a")
+        self.r_a.server = a2
+        self.r_a.save()
+        client = mock.Mock(list_requisition_names=lambda: ["a"])
+        self.assertEqual(orphaned_foreign_sources(client, self.a), [])
+        # The stale ownership row is left in place; the guard keeps it inert.
+        self.assertTrue(
+            DeployedForeignSource.objects.filter(server=self.a, name="a").exists()
+        )
+
+    @mock.patch("netbox_opennms.jobs.advisory_lock")
+    @mock.patch("netbox_opennms.jobs.OpenNMSClient.for_server")
+    def test_remove_on_old_row_for_same_opennms_is_skipped(
+        self, mock_for_server, _lock
+    ):
+        a2 = make_server("a2", url="https://onms.example.org/opennms/")
+        self.r_a.server = a2
+        self.r_a.save()
+        SyncForeignSourceJob(job=mock.Mock()).run(
+            foreign_source="a", server_id=self.a.pk, allow_empty=True
+        )
+        mock_for_server.assert_not_called()
+
+    @mock.patch("netbox_opennms.jobs.advisory_lock")
+    @mock.patch("netbox_opennms.jobs.OpenNMSClient.for_server")
+    def test_job_without_server_id_uses_requisition_server(
+        self, mock_for_server, _lock
+    ):
+        # M2: an RQ job queued before the upgrade carries no server_id.
+        SyncForeignSourceJob(job=mock.Mock()).run(foreign_source="b")
+        mock_for_server.assert_called_once_with(self.b)
+
+    @mock.patch("netbox_opennms.jobs.OpenNMSClient.for_server")
+    def test_job_without_server_id_or_requisition_fails(self, mock_for_server):
+        runner = SyncForeignSourceJob(job=mock.Mock())
+        with self.assertLogs("netbox.jobs.SyncForeignSourceJob", level="ERROR"):
+            with self.assertRaises(JobFailed):
+                runner.run(foreign_source="nope", allow_empty=True)
+        mock_for_server.assert_not_called()
+
     @mock.patch("netbox_opennms.jobs.advisory_lock")
     @mock.patch("netbox_opennms.jobs.OpenNMSClient.for_server")
     def test_remove_on_old_server_tears_down_moved_copy(

@@ -9,6 +9,7 @@ from netbox.api.serializers import NetBoxModelSerializer
 from rest_framework import serializers
 from utilities.api import get_serializer_for_model
 
+from ..choices import ServerOriginChoices
 from ..derivation import location_name_error, requisition_name_error
 from ..membership import filter_errors
 from ..models import (
@@ -78,9 +79,15 @@ class OpenNMSServerSerializer(NetBoxModelSerializer):
         return data
 
     def validate(self, data):
-        # A blank password on update keeps the stored one (as in the UI form).
+        # A blank password on update keeps the stored one (as in the UI form):
+        # leave the field untouched; OpenNMSServer.clean() owns the rule.
         if self.instance is not None and not data.get("password", True):
             data.pop("password")
+        # A provisioned row whose config entry is gone is adopted as local, as
+        # the UI form does. Checked before super().validate() applies the
+        # request's attributes (a new name) to the instance.
+        if self.instance is not None and self.instance.is_missing:
+            data["origin"] = ServerOriginChoices.LOCAL
         try:
             return super().validate(data)
         except DjangoValidationError as exc:
@@ -130,7 +137,10 @@ class RequisitionSerializer(NetBoxModelSerializer):
     def validate(self, data):
         if self.instance is None and "server" not in data:
             servers = list(OpenNMSServer.objects.all()[:2])
-            if len(servers) != 1:
+            if not servers:
+                message = "This field is required: no OpenNMS server exists yet."
+                raise serializers.ValidationError({"server": message})
+            if len(servers) > 1:
                 message = "This field is required when more than one server exists."
                 raise serializers.ValidationError({"server": message})
             data["server"] = servers[0]

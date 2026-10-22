@@ -52,8 +52,10 @@ class OpenNMSClient:
     def for_server(cls, server):
         """Build a client from an ``OpenNMSServer`` row.
 
-        Provisioned rows take credentials and headers from the PLUGINS_CONFIG
-        entry; local rows take everything from the (encrypted) row.
+        Provisioned rows take the URL, credentials and headers from the
+        PLUGINS_CONFIG entry (the row's URL is only a display copy, so config
+        credentials never go to a stale or edited host); local rows take
+        everything from the (encrypted) row.
         """
         if server.is_provisioned:
             entry = config.server_entry(server.name)
@@ -62,6 +64,7 @@ class OpenNMSClient:
                     f"Server {server.name!r} is provisioned but has no entry in "
                     "PLUGINS_CONFIG['netbox_opennms']['servers']."
                 )
+            base_url = entry["url"]
             username = entry["username"]
             password = entry["password"]
             headers = entry.get("headers")
@@ -72,10 +75,10 @@ class OpenNMSClient:
                     "decrypted (SECRET_KEY or credentials_key changed); "
                     "re-enter them."
                 )
+            base_url = server.url
             username = server.username
             password = server.password
             headers = server.headers
-        base_url = server.url
         if not base_url:
             raise OpenNMSError(f"Server {server.name!r} has no URL.")
         if not base_url.startswith(("https://", "http://")):
@@ -126,9 +129,11 @@ class OpenNMSClient:
             detail = ""
             if isinstance(text, str) and text.strip():
                 detail = f" — {text.strip()[:500]}"
+            reason = getattr(response, "reason", "")
             raise OpenNMSHTTPError(
                 f"OpenNMS returned HTTP {response.status_code} for {path}.{detail}",
                 status_code=response.status_code,
+                reason=reason if isinstance(reason, str) else "",
             )
         return response
 

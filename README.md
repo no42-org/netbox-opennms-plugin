@@ -172,6 +172,7 @@ The plugin writes requisitions. It does not configure OpenNMS polling.
 
 The plugin can provision several OpenNMS servers.
 Each Requisition targets exactly one server.
+Two server rows must not point at the same OpenNMS instance, because Foreign Source names are global on an instance.
 A server comes from one of two origins:
 
 - **Provisioned.** Declared in **`PLUGINS_CONFIG`** in NetBox's **`configuration.py`**.
@@ -243,9 +244,6 @@ Otherwise, for example with several `servers` entries, the server is `default` w
 To avoid that, keep the flat keys for the upgrade deploy.
 When you later switch to the `servers` mapping, name the entry for that server `default`.
 The migrated `default` row then reads its credentials from the new entry.
-To use another name, add the new `servers` entry next to the flat keys and deploy.
-Move every Requisition to the new server in the UI.
-Then remove the flat keys.
 
 All settings are listed in [Settings](#settings).
 
@@ -439,7 +437,7 @@ Shown on each Device/VM detail page, backed by the NetBox Job log.
 | Dry run | Requisition detail page | `netbox_opennms.view_requisition` |
 | Sync to OpenNMS | Requisition detail, Dry run | `netbox_opennms.change_requisition` |
 | Remove from OpenNMS | OpenNMS Sync Status panel on a Device or VM. Sets Exclude on the object's override and removes its node. Clear Exclude and Sync to restore it. | `netbox_opennms.change_requisition`, `netbox_opennms.add_monitoringoverride`, `netbox_opennms.change_monitoringoverride` |
-| Remove a Foreign Source | `POST /plugins/opennms/sync/foreign-source/` with `remove` set. No button. | `netbox_opennms.change_requisition` |
+| Remove a Foreign Source | `POST /plugins/opennms/sync/foreign-source/` with `remove` set. No button. Needs an existing Requisition of that name. The reconciler removes the copy of a deleted Requisition. | `netbox_opennms.change_requisition` |
 ### Requisition fields
 
 | Field | Rule |

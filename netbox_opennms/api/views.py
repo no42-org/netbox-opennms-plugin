@@ -54,7 +54,12 @@ class OpenNMSServerViewSet(NetBoxModelViewSet):
             )
 
     def perform_update(self, serializer):
-        self._check_editable(serializer.instance)
+        # The serializer has already applied the request's attributes to
+        # serializer.instance, so a rename would make a present provisioned row
+        # look "missing". Judge the lock on the stored row. Bulk PATCH/PUT call
+        # perform_update per object, so this covers them too.
+        stored = OpenNMSServer.objects.get(pk=serializer.instance.pk)
+        self._check_editable(stored)
         super().perform_update(serializer)
 
     def perform_destroy(self, instance):

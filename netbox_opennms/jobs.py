@@ -47,7 +47,12 @@ from .membership import (
     monitored_foreign_sources,
     resolve,
 )
-from .models import DeployedForeignSource, MonitoringOverride, OpenNMSServer
+from .models import (
+    DeployedForeignSource,
+    MonitoringOverride,
+    OpenNMSServer,
+    Requisition,
+)
 from .translation import (
     RenderError,
     render_foreign_source_definition,
@@ -121,7 +126,21 @@ class SyncForeignSourceJob(JobRunner):
             allow_empty=allow_empty,
         )
 
-    def run(self, foreign_source, server_id, allow_empty=False, **kwargs):
+    def run(self, foreign_source, server_id=None, allow_empty=False, **kwargs):
+        if server_id is None:
+            # A job queued before the upgrade carries no server_id: use the
+            # Requisition's server.
+            server_id = (
+                Requisition.objects.filter(name=foreign_source)
+                .values_list("server_id", flat=True)
+                .first()
+            )
+            if server_id is None:
+                self.logger.error(
+                    f"No server given for {foreign_source} and no Requisition "
+                    "of that name exists."
+                )
+                raise JobFailed()
         server = OpenNMSServer.objects.filter(pk=server_id).first()
         if server is None:
             self.logger.error(
@@ -167,6 +186,17 @@ class SyncForeignSourceJob(JobRunner):
         # A Requisition moved to another server no longer governs this server's
         # copy: a Remove here tears that copy down instead of re-pushing it.
         if resolution is not None and resolution.requisition.server_id != server.pk:
+            if allow_empty and server.points_at_same_opennms(
+                resolution.requisition.server
+            ):
+                # Same OpenNMS, same global Foreign Source name: the "old copy"
+                # IS the moved Requisition's live copy. Never tear it down.
+                self.logger.info(
+                    f"{foreign_source} now lives on server "
+                    f"{resolution.requisition.server.name!r}, which points at the "
+                    f"same OpenNMS as {server.name!r} — Remove skipped."
+                )
+                return False
             resolution = None
 
         if resolution is None and not allow_empty:
@@ -393,6 +423,13 @@ def orphaned_foreign_sources(client, server):
     NetBox never created is never touched. Catches every drift cause uniformly:
     last-member departure, membership move, requisition rename, deletion, and a
     Requisition moved to another server. Scoped to ``server`` throughout.
+
+    Foreign Source names are global on one OpenNMS instance. A name monitored on
+    another server row that points at the same OpenNMS (``points_at_same_opennms``)
+    is that row's live copy, so it is never an orphan here: removing it would
+    delete the nodes just pushed through the other row. The stale
+    ``DeployedForeignSource(server, name)`` row is left in place; it is harmless
+    because this guard keeps it from being acted on.
     """
     deployed = set(client.list_requisition_names())
     managed = set(
@@ -400,10 +437,15 @@ def orphaned_foreign_sources(client, server):
             "name", flat=True
         )
     )
+    same_instance = {server.pk} | {
+        other.pk
+        for other in OpenNMSServer.objects.exclude(pk=server.pk)
+        if server.points_at_same_opennms(other)
+    }
     monitored = {
         name
         for server_id, name in monitored_foreign_sources()
-        if server_id == server.pk
+        if server_id in same_instance
     }
     return sorted((deployed & managed) - monitored)
 

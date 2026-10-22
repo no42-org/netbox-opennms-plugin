@@ -5,6 +5,7 @@
 import unittest
 from unittest import mock
 
+from core.models import ObjectType
 from dcim.models import (
     Device,
     DeviceRole,
@@ -13,6 +14,7 @@ from dcim.models import (
     Manufacturer,
     Site,
 )
+from extras.models import CustomLink
 from ipam.models import IPAddress
 from netbox.models.features import get_model_features
 from utilities.testing import APITestCase, APIViewTestCases
@@ -346,6 +348,45 @@ class ServerAPISecretsTest(_SuperuserAPITestCase):
             response = self.send("delete", f"{SERVERS}{gone.pk}/")
         self.assertEqual(response.status_code, 204)
 
+    def test_rename_cannot_unlock_a_provisioned_row(self):
+        # Only "prod" has a config entry: a rename must not make the row look
+        # missing (I1). Single and bulk PATCH both judge the stored row.
+        prod = OpenNMSServer.objects.create(
+            name="prod", origin=ServerOriginChoices.PROVISIONED, url="https://p/"
+        )
+        entry = {"url": "https://p/", "username": "cfg-user"}
+        with mock.patch(
+            "netbox_opennms.models.config.server_entry",
+            side_effect=lambda name: entry if name == "prod" else None,
+        ):
+            data = {"name": "renamed", "address": "https://evil/"}
+            response = self.send("patch", f"{SERVERS}{prod.pk}/", data)
+            self.assertEqual(response.status_code, 403)
+            response = self.send("patch", SERVERS, [{"id": prod.pk, **data}])
+            self.assertEqual(response.status_code, 403)
+        prod.refresh_from_db()
+        self.assertEqual(
+            (prod.name, prod.origin, prod.url),
+            ("prod", ServerOriginChoices.PROVISIONED, "https://p/"),
+        )
+
+    def test_missing_provisioned_row_is_adopted_as_local(self):
+        gone = OpenNMSServer.objects.create(
+            name="gone", origin=ServerOriginChoices.PROVISIONED, url="https://g/"
+        )
+        with mock.patch("netbox_opennms.models.config.server_entry", return_value=None):
+            response = self.send("patch", f"{SERVERS}{gone.pk}/", {"description": "d"})
+            self.assertEqual(response.status_code, 400)
+            self.assertIn("password", response.json())
+            response = self.send(
+                "patch", f"{SERVERS}{gone.pk}/", {"username": "u", "password": "p"}
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["origin"], ServerOriginChoices.LOCAL)
+        gone.refresh_from_db()
+        self.assertEqual(gone.origin, ServerOriginChoices.LOCAL)
+        self.assertEqual(gone.password, "p")
+
     def test_origin_is_read_only(self):
         response = self.send("post", SERVERS, {
             "name": "x", "address": "https://x/", "username": "u", "password": "p",
@@ -394,14 +435,33 @@ class ServerAPISecretsTest(_SuperuserAPITestCase):
         for name in OpenNMSServerFilterSet.base_filters:
             self.assertFalse(name.startswith(("password", "headers")), name)
 
-    def test_export_templates_feature_is_disabled(self):
-        self.assertNotIn("export_templates", get_model_features(OpenNMSServer))
-        self.assertIn("export_templates", get_model_features(Requisition))
+    def test_export_templates_and_custom_links_are_disabled(self):
+        for feature in ("export_templates", "custom_links"):
+            self.assertNotIn(feature, get_model_features(OpenNMSServer))
+            self.assertIn(feature, get_model_features(Requisition))
         # Every other NetBoxModel feature is kept.
         dropped = set(get_model_features(Requisition)) - set(
             get_model_features(OpenNMSServer)
         )
-        self.assertEqual(dropped, {"export_templates"})
+        self.assertEqual(dropped, {"export_templates", "custom_links"})
+
+    def test_custom_link_cannot_target_servers(self):
+        # A custom link renders arbitrary attributes ({{ object.password }}) on
+        # the detail page and in table exports; NetBox only lets one target a
+        # model with the custom_links feature.
+        response = self.send("post", "/api/extras/custom-links/", {
+            "name": "leak",
+            "object_types": ["netbox_opennms.opennmsserver"],
+            "link_text": "{{ object.password }}",
+            "link_url": "https://x/{{ object.password }}",
+        })
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("object_types", response.json())
+        self.assertFalse(CustomLink.objects.filter(name="leak").exists())
+        self.assertNotIn(
+            ObjectType.objects.get_for_model(OpenNMSServer),
+            ObjectType.objects.with_feature("custom_links"),
+        )
 
 
 class RequisitionServerDefaultTest(_SuperuserAPITestCase):
@@ -424,7 +484,19 @@ class RequisitionServerDefaultTest(_SuperuserAPITestCase):
     def test_no_server_requires_explicit_server(self):
         response = self.send("post", REQUISITIONS, self.data)
         self.assertEqual(response.status_code, 400)
-        self.assertIn("server", response.json())
+        self.assertEqual(
+            response.json()["server"],
+            ["This field is required: no OpenNMS server exists yet."],
+        )
+
+    def test_two_servers_message_names_the_reason(self):
+        make_server("a")
+        make_server("b")
+        response = self.send("post", REQUISITIONS, self.data)
+        self.assertEqual(
+            response.json()["server"],
+            ["This field is required when more than one server exists."],
+        )
 
     def test_explicit_server_is_used(self):
         make_server("a")

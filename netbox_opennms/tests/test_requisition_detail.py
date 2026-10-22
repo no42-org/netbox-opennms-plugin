@@ -54,11 +54,10 @@ class RequisitionAddButtonsTest(TestCase):
         response = self.client.get(url)
         self.assertContains(response, self.server.get_absolute_url())
 
-    def test_server_change_warns(self):
-        b = make_server("b")
+    def _move_to(self, server):
         data = {
             "name": self.requisition.name,
-            "server": b.pk,
+            "server": server.pk,
             "object_types": self.requisition.object_types,
             "filter_params": '{"role": ["router"]}',
             "scan_interval": self.requisition.scan_interval,
@@ -73,5 +72,23 @@ class RequisitionAddButtonsTest(TestCase):
             follow=True,
         )
         self.requisition.refresh_from_db()
-        self.assertEqual(self.requisition.server_id, b.pk)
-        self.assertContains(response, "Moved to server b")
+        self.assertEqual(self.requisition.server_id, server.pk)
+        return response
+
+    def test_server_change_warns(self):
+        b = make_server("b", url="https://b.example.org/opennms")
+        response = self._move_to(b)
+        self.assertContains(
+            response, "the reconciler removes the copy on default"
+        )
+
+    def test_move_to_same_opennms_keeps_nodes(self):
+        # Same instance, different spelling of the URL.
+        b = make_server("b", url="HTTPS://ONMS.example.org/opennms/")
+        response = self._move_to(b)
+        self.assertContains(
+            response,
+            "Moved to server b, which points at the same OpenNMS as default; "
+            "the existing nodes stay in place.",
+        )
+        self.assertNotContains(response, "reconciler removes")

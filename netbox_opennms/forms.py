@@ -86,7 +86,6 @@ class OpenNMSServerForm(NetBoxModelForm):
             # Spec decision 3: the stored secrets cannot be decrypted, so both
             # are cleared and must be entered again.
             self.initial["headers"] = {}
-            self.fields["password"].required = True
             self.fields["password"].help_text = _(
                 "The stored credentials cannot be decrypted (SECRET_KEY or "
                 "credentials_key changed). Re-enter the password and headers."
@@ -98,12 +97,10 @@ class OpenNMSServerForm(NetBoxModelForm):
             self.instance.origin = ServerOriginChoices.LOCAL
         if self.cleaned_data.get("headers") is None:
             self.cleaned_data["headers"] = {}
-        if not self.cleaned_data.get("password") and "password" not in self.errors:
-            stored = self.instance.password if self.instance.credentials_ok else ""
-            if self.instance.pk and stored:
-                self.cleaned_data["password"] = stored
-            else:
-                self.add_error("password", _("A local server needs a password."))
+        # Blank keeps the stored password: leave the field untouched and let
+        # OpenNMSServer.clean() decide whether a password is required.
+        if not self.cleaned_data.get("password"):
+            self.cleaned_data.pop("password", None)
         return self.cleaned_data
 
 

@@ -14,6 +14,8 @@ changes ``requisition-redesign`` (R1–R8) and ``replace-priority-with-conflicts
 (C1–C7) for the full design.
 """
 
+from urllib.parse import urlsplit
+
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.core.exceptions import ValidationError
 from django.db import models
@@ -24,7 +26,6 @@ from netbox.models.features import (
     ChangeLoggingMixin,
     CloningMixin,
     CustomFieldsMixin,
-    CustomLinksMixin,
     CustomValidationMixin,
     EventRulesMixin,
     JournalingMixin,
@@ -92,12 +93,17 @@ def _require_preset_params(rule, required):
         )
 
 
-class _NoExportTemplatesModel(
+def _normalised_url(url):
+    """``url`` without a trailing slash and with a lower-case scheme and host."""
+    parts = urlsplit((url or "").strip())
+    return (parts.scheme.lower(), parts.netloc.lower(), parts.path.rstrip("/"))
+
+
+class _SecretSafeModel(
     BookmarksMixin,
     ChangeLoggingMixin,
     CloningMixin,
     CustomFieldsMixin,
-    CustomLinksMixin,
     CustomValidationMixin,
     JournalingMixin,
     NotificationsMixin,
@@ -105,18 +111,19 @@ class _NoExportTemplatesModel(
     EventRulesMixin,
     BaseModel,
 ):
-    """``NetBoxModel`` minus ``ExportTemplatesMixin``.
+    """``NetBoxModel`` minus ``ExportTemplatesMixin`` and ``CustomLinksMixin``.
 
-    An export template renders arbitrary model attributes for whoever runs it,
-    so a template author could print a server's decrypted ``password``. Keep the
-    mixin list in step with ``netbox.models.NetBoxFeatureSet``.
+    Export templates and custom links both render arbitrary model attributes
+    (Jinja ``{{ object.password }}``) for whoever views or exports them, so a
+    template or link author could print a server's decrypted ``password``. Keep
+    the mixin list in step with ``netbox.models.NetBoxFeatureSet``.
     """
 
     class Meta:
         abstract = True
 
 
-class OpenNMSServer(_NoExportTemplatesModel):
+class OpenNMSServer(_SecretSafeModel):
     """An OpenNMS instance that Requisitions are synced to.
 
     A **provisioned** server is declared in ``PLUGINS_CONFIG``; the row carries
@@ -162,29 +169,28 @@ class OpenNMSServer(_NoExportTemplatesModel):
             validate_location_name(self.default_location)
         except ValueError as exc:
             errors["default_location"] = str(exc)
-        if not isinstance(self.headers, dict) or not all(
+        if isinstance(self.headers, Undecryptable):
+            errors["headers"] = (
+                "The stored headers cannot be decrypted (SECRET_KEY or "
+                "credentials_key changed); re-enter them."
+            )
+        elif not isinstance(self.headers, dict) or not all(
             isinstance(key, str) and isinstance(value, str)
             for key, value in self.headers.items()
         ):
             errors["headers"] = "Headers must be a mapping of strings to strings."
+        # The one owner of the credential rule. Forms and serializers translate
+        # "blank keeps the stored password" into "leave the field untouched", so
+        # self.password is the value that will be saved: the stored one, a new
+        # one, or "" when there is none. An Undecryptable stored value is not a
+        # usable password, so credentials_ok false must be fixed by re-entering.
         if self.origin == ServerOriginChoices.LOCAL:
             if not self.username:
                 errors["username"] = "A local server needs a username."
-            if not self.password and not self._stored_password():
+            if not self.password or isinstance(self.password, Undecryptable):
                 errors["password"] = "A local server needs a password."
         if errors:
             raise ValidationError(errors)
-
-    def _stored_password(self):
-        """The saved password ("" for an unsaved row); a blank edit keeps it."""
-        if not self.pk:
-            return ""
-        stored = (
-            OpenNMSServer.objects.filter(pk=self.pk)
-            .values_list("password", flat=True)
-            .first()
-        )
-        return stored or ""
 
     def serialize_object(self, exclude=None):
         # Secrets (even as ciphertext) must never land in ObjectChange data.
@@ -205,6 +211,26 @@ class OpenNMSServer(_NoExportTemplatesModel):
         """False when stored secrets cannot be decrypted with the current key."""
         return not isinstance(self.password, Undecryptable) and not isinstance(
             self.headers, Undecryptable
+        )
+
+    @property
+    def effective_url(self):
+        """The URL requests go to: the config entry's for a provisioned row."""
+        if self.is_provisioned:
+            entry = config.server_entry(self.name)
+            if entry:
+                return entry["url"]
+        return self.url
+
+    def points_at_same_opennms(self, other):
+        """True when ``other`` reaches the same OpenNMS instance as this row.
+
+        Compares the effective URLs, ignoring a trailing slash and the case of
+        the scheme and host. Foreign Source names are global on an instance, so
+        two such rows share every Foreign Source.
+        """
+        return _normalised_url(self.effective_url) == _normalised_url(
+            other.effective_url
         )
 
     @property

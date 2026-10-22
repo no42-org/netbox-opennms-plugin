@@ -21,8 +21,6 @@ from .client import OpenNMSClient
 from .membership import resolve
 from .models import Requisition
 
-PLUGIN_NAME = "netbox_opennms"
-
 
 def _as_list(value, key=None):
     """Normalize an OpenNMS JSON collection to a list.

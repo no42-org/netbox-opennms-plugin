@@ -5,7 +5,7 @@
 from unittest import mock
 
 import requests
-from django.test import SimpleTestCase
+from django.test import SimpleTestCase, TestCase
 
 from netbox_opennms.client import (
     OpenNMSAuthError,
@@ -14,6 +14,9 @@ from netbox_opennms.client import (
     OpenNMSHTTPError,
     OpenNMSTransportError,
 )
+from netbox_opennms.crypto import Undecryptable
+from netbox_opennms.models import OpenNMSServer
+from netbox_opennms.tests.servers import make_server
 
 
 def _client():
@@ -346,19 +349,79 @@ class OpenNMSClientTest(SimpleTestCase):
         _, url = mock_request.call_args.args
         self.assertTrue(url.endswith("/rest/foreignSourcesConfig/assets"))
 
-    def test_from_config_requires_url(self):
-        with mock.patch(
-            "netbox_opennms.client.client.get_plugin_config", return_value=""
-        ):
-            with self.assertRaises(OpenNMSError):
-                OpenNMSClient.from_config()
 
-    def test_from_config_requires_credentials(self):
-        def fake(_plugin, key):
-            return "https://onms.example/opennms" if key == "opennms_url" else ""
+class ForServerTest(TestCase):
+    def test_local_server_uses_row(self):
+        client = OpenNMSClient.for_server(make_server(headers={"X-A": "1"}))
+        self.assertEqual(client.base_url, "https://onms.example.org/opennms")
+        self.assertEqual(client._session.auth.username, "svc")
+        self.assertEqual(client._session.headers["X-A"], "1")
 
+    def test_provisioned_reads_config_entry(self):
+        server = OpenNMSServer.objects.create(
+            name="prod", origin="provisioned", url="https://p/opennms"
+        )
+        entry = {
+            "url": "https://p/opennms",
+            "username": "cfg",
+            "password": "pw",
+            "default_location": "",
+            "headers": {"X-B": "2"},
+        }
         with mock.patch(
-            "netbox_opennms.client.client.get_plugin_config", side_effect=fake
+            "netbox_opennms.client.client.config.server_entry", return_value=entry
         ):
-            with self.assertRaises(OpenNMSError):
-                OpenNMSClient.from_config()
+            client = OpenNMSClient.for_server(server)
+        self.assertEqual(client._session.auth.username, "cfg")
+        self.assertEqual(client._session.headers["X-B"], "2")
+
+    def test_provisioned_url_comes_from_config_not_row(self):
+        # The row URL is a display copy; config credentials must go to the
+        # config URL even when the row is stale or was edited.
+        server = OpenNMSServer.objects.create(
+            name="prod", origin="provisioned", url="https://stale.example/opennms"
+        )
+        entry = {
+            "url": "https://config.example/opennms",
+            "username": "cfg",
+            "password": "pw",
+            "default_location": "",
+            "headers": {},
+        }
+        with mock.patch(
+            "netbox_opennms.client.client.config.server_entry", return_value=entry
+        ):
+            client = OpenNMSClient.for_server(server)
+        self.assertEqual(client.base_url, "https://config.example/opennms")
+
+    def test_missing_provisioned_entry_raises(self):
+        server = OpenNMSServer.objects.create(
+            name="ghost", origin="provisioned", url="https://g/"
+        )
+        with mock.patch(
+            "netbox_opennms.client.client.config.server_entry", return_value=None
+        ):
+            with self.assertRaisesRegex(OpenNMSError, "no entry in PLUGINS_CONFIG"):
+                OpenNMSClient.for_server(server)
+
+    def test_undecryptable_raises(self):
+        server = make_server()
+        server.password = Undecryptable("gAAAA-garbage")
+        with self.assertRaisesRegex(OpenNMSError, "cannot be decrypted"):
+            OpenNMSClient.for_server(server)
+
+    def test_empty_credentials_raise(self):
+        server = make_server()
+        server.password = ""
+        with self.assertRaisesRegex(OpenNMSError, "no credentials"):
+            OpenNMSClient.for_server(server)
+
+    def test_empty_url_raises(self):
+        server = make_server(url="")
+        with self.assertRaisesRegex(OpenNMSError, "has no URL"):
+            OpenNMSClient.for_server(server)
+
+    def test_bad_scheme_raises(self):
+        server = make_server(url="ftp://x")
+        with self.assertRaisesRegex(OpenNMSError, "must start with"):
+            OpenNMSClient.for_server(server)

@@ -3,6 +3,7 @@
 """REST API views (Requisition redesign)."""
 
 from netbox.api.viewsets import NetBoxModelViewSet
+from rest_framework.exceptions import PermissionDenied
 
 from ..filtersets import (
     AssetMappingFilterSet,
@@ -12,6 +13,7 @@ from ..filtersets import (
     MonitoringDetectorFilterSet,
     MonitoringOverrideFilterSet,
     MonitoringPolicyFilterSet,
+    OpenNMSServerFilterSet,
     RequisitionFilterSet,
 )
 from ..models import (
@@ -22,6 +24,7 @@ from ..models import (
     MonitoringDetector,
     MonitoringOverride,
     MonitoringPolicy,
+    OpenNMSServer,
     Requisition,
 )
 from .serializers import (
@@ -32,12 +35,42 @@ from .serializers import (
     MonitoringDetectorSerializer,
     MonitoringOverrideSerializer,
     MonitoringPolicySerializer,
+    OpenNMSServerSerializer,
     RequisitionSerializer,
 )
 
 
+class OpenNMSServerViewSet(NetBoxModelViewSet):
+    queryset = OpenNMSServer.objects.all()
+    serializer_class = OpenNMSServerSerializer
+    filterset_class = OpenNMSServerFilterSet
+
+    @staticmethod
+    def _check_editable(instance):
+        if instance.is_provisioned and not instance.is_missing:
+            raise PermissionDenied(
+                f"Server {instance.name!r} is managed by PLUGINS_CONFIG "
+                "and cannot be changed here."
+            )
+
+    def perform_update(self, serializer):
+        # The serializer has already applied the request's attributes to
+        # serializer.instance, so a rename would make a present provisioned row
+        # look "missing". Judge the lock on the stored row. Bulk PATCH/PUT call
+        # perform_update per object, so this covers them too.
+        stored = OpenNMSServer.objects.get(pk=serializer.instance.pk)
+        self._check_editable(stored)
+        super().perform_update(serializer)
+
+    def perform_destroy(self, instance):
+        self._check_editable(instance)
+        super().perform_destroy(instance)
+
+
 class RequisitionViewSet(NetBoxModelViewSet):
-    queryset = Requisition.objects.prefetch_related("detectors", "policies")
+    queryset = Requisition.objects.select_related("server").prefetch_related(
+        "detectors", "policies"
+    )
     serializer_class = RequisitionSerializer
     filterset_class = RequisitionFilterSet
 

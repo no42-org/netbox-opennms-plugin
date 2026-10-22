@@ -9,6 +9,7 @@ from . import views
 app_name = "netbox_opennms-api"
 
 router = NetBoxRouter()
+router.register("servers", views.OpenNMSServerViewSet)
 router.register("requisitions", views.RequisitionViewSet)
 router.register("monitoring-detectors", views.MonitoringDetectorViewSet)
 router.register("monitoring-policies", views.MonitoringPolicyViewSet)

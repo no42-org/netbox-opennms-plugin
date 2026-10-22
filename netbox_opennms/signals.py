@@ -10,13 +10,30 @@ IP leaves the override, its dangling services are pruned so stored intent
 matches what is rendered (AD-15).
 """
 
+import logging
+
 from dcim.models import Device
 from django.contrib.contenttypes.models import ContentType
-from django.db.models.signals import post_delete, post_save
+from django.db.models.signals import post_delete, post_migrate, post_save
 from django.dispatch import receiver
 from virtualization.models import VirtualMachine
 
 from .models import MonitoredInterface, MonitoringOverride, override_ip_pks
+
+logger = logging.getLogger("netbox_opennms")
+
+
+@receiver(post_migrate)
+def on_post_migrate(sender, **kwargs):
+    """Reconcile provisioned servers after migrate; never aborts migrate."""
+    if getattr(sender, "name", None) != "netbox_opennms":
+        return
+    from .provisioning import reconcile_provisioned_servers
+
+    try:
+        reconcile_provisioned_servers()
+    except Exception:
+        logger.exception("Provisioned server reconciliation failed.")
 
 
 @receiver(post_delete, sender=Device)

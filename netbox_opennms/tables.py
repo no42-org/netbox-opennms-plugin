@@ -13,12 +13,50 @@ from .models import (
     MonitoringDetector,
     MonitoringOverride,
     MonitoringPolicy,
+    OpenNMSServer,
     Requisition,
 )
+
+SERVER_STATUS = """
+{% if record.is_provisioned %}{% if record.is_missing %}
+<span class="badge text-bg-danger">Missing from configuration</span>
+{% else %}<span class="badge text-bg-info">Managed by configuration</span>{% endif %}
+{% endif %}
+{% if not record.credentials_ok %}
+<span class="badge text-bg-warning">Credentials need re-entering</span>
+{% endif %}
+"""
+
+
+class OpenNMSServerTable(NetBoxTable):
+    name = tables.Column(linkify=True)
+    username = tables.Column(accessor="effective_username", orderable=False)
+    status = tables.TemplateColumn(
+        template_code=SERVER_STATUS, orderable=False, verbose_name="Status"
+    )
+
+    class Meta(NetBoxTable.Meta):
+        model = OpenNMSServer
+        # No password or headers column, so CSV export never carries secrets.
+        fields = (
+            "pk",
+            "id",
+            "name",
+            "origin",
+            "url",
+            "username",
+            "default_location",
+            "description",
+            "created",
+            "last_updated",
+            "actions",
+        )
+        default_columns = ("name", "origin", "status", "url", "username")
 
 
 class RequisitionTable(NetBoxTable):
     name = tables.Column(linkify=True)
+    server = tables.Column(linkify=True)
 
     class Meta(NetBoxTable.Meta):
         model = Requisition
@@ -26,6 +64,7 @@ class RequisitionTable(NetBoxTable):
             "pk",
             "id",
             "name",
+            "server",
             "description",
             "object_types",
             "scan_interval",
@@ -37,6 +76,7 @@ class RequisitionTable(NetBoxTable):
         )
         default_columns = (
             "name",
+            "server",
             "object_types",
             "scan_interval",
             "location",

@@ -248,17 +248,20 @@ docker compose --profile opennms up -d</code></pre>
         name.</li>
     </ol>
     <div class="note">
-      Test connectivity first at <b>Connect OpenNMS</b>
-      (<code>/plugins/opennms/connection-test/</code>) — it probes reachability +
-      credentials before you sync.
+      Test connectivity first: open the server under <b>OpenNMS Servers</b> and
+      click <b>Test connection</b>. It checks reachability and credentials and
+      stores nothing.
     </div>
 
     <h3>Point at your own OpenNMS</h3>
     <p>
       Edit
       <a href="https://github.com/no42-org/netbox-opennms-plugin/blob/main/quickstart/configuration/plugins.py"><code>configuration/plugins.py</code></a>
-      — set <code>opennms_url</code>, <code>opennms_username</code>,
-      <code>opennms_password</code> — then <code>docker compose up -d</code> (no
+      and set <code>opennms_url</code>, <code>opennms_username</code> and
+      <code>opennms_password</code>. These flat keys are the single-server shorthand
+      for <code>servers["default"]</code>. For several servers, use the
+      <code>servers</code> mapping, or add local servers under <b>OpenNMS
+      Servers</b> in the UI. Then run <code>docker compose up -d</code> (no
       <code>--profile opennms</code>). The plugin needs an account that can read/write
       requisitions and trigger imports.
     </p>

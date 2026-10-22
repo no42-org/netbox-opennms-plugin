@@ -28,6 +28,7 @@ from netbox_opennms.template_content import (
     DeviceSyncStatusPanel,
     VirtualMachineSyncStatusPanel,
 )
+from netbox_opennms.tests.servers import make_server
 
 User = get_user_model()
 FS = "netbox.raleigh.router"
@@ -37,11 +38,13 @@ OVERLAP_FILTER = {"site": ["raleigh"]}
 class ObservabilityTest(TestCase):
     @classmethod
     def setUpTestData(cls):
+        cls.server = make_server()
         cls.site = Site.objects.create(name="Raleigh", slug="raleigh")
         cls.role = DeviceRole.objects.create(name="Router", slug="router")
         mfr = Manufacturer.objects.create(name="Acme", slug="acme")
         cls.dt = DeviceType.objects.create(manufacturer=mfr, model="M1", slug="m1")
         cls.requisition = Requisition.objects.create(
+            server=cls.server,
             name=FS, filter_params={"site": ["raleigh"], "role": ["router"]}
         )
         cls.device = cls._device("rtr-1", "10.0.0.1/24")
@@ -59,14 +62,16 @@ class ObservabilityTest(TestCase):
         return device
 
     def _completed_job(self, foreign_source=FS, allow_empty=False):
-        job = SyncForeignSourceJob.enqueue_sync(foreign_source, allow_empty=allow_empty)
+        job = SyncForeignSourceJob.enqueue_sync(
+            foreign_source, self.server.pk, allow_empty=allow_empty
+        )
         Job.objects.filter(pk=job.pk).update(status=JobStatusChoices.STATUS_COMPLETED)
         return Job.objects.get(pk=job.pk)
 
     # --- sync_status_for ----------------------------------------------------
 
     def test_governed_device(self):
-        status = sync_status_for(self.device)
+        status = sync_status_for(self.device)[0]
         self.assertEqual(status["foreign_source"], FS)
         self.assertTrue(status["governed"])
         self.assertEqual(status["requisition"], self.requisition)
@@ -74,7 +79,7 @@ class ObservabilityTest(TestCase):
 
     def test_excluded_override(self):
         MonitoringOverride.objects.create(assigned_object=self.device, exclude=True)
-        status = sync_status_for(self.device)
+        status = sync_status_for(self.device)[0]
         self.assertTrue(status["excluded"])
         self.assertFalse(status["governed"])
         # Excluded objects still surface their claiming Requisition + FS (review #9).
@@ -87,13 +92,11 @@ class ObservabilityTest(TestCase):
             "10.0.0.2/24",
             role=DeviceRole.objects.create(name="Server", slug="server"),
         )
-        status = sync_status_for(other)
-        self.assertFalse(status["governed"])
-        self.assertIsNone(status["requisition"])
+        self.assertEqual(sync_status_for(other), [])
 
     def test_completed_job_outcome(self):
         self._completed_job()
-        status = sync_status_for(self.device)
+        status = sync_status_for(self.device)[0]
         self.assertEqual(status["outcome"], ("succeeded-accepted", "green"))
 
     def test_none_target(self):
@@ -101,8 +104,10 @@ class ObservabilityTest(TestCase):
 
     def test_conflicted_device(self):
         # C1: two matching filters → conflicted, named parties, not governed.
-        Requisition.objects.create(name="overlap", filter_params=OVERLAP_FILTER)
-        status = sync_status_for(self.device)
+        Requisition.objects.create(
+            server=self.server, name="overlap", filter_params=OVERLAP_FILTER
+        )
+        status = sync_status_for(self.device)[0]
         self.assertEqual(status["conflicts"], [FS, "overlap"])
         self.assertFalse(status["governed"])
         self.assertIsNone(status["requisition"])
@@ -112,17 +117,57 @@ class ObservabilityTest(TestCase):
         # actually synced the object — a conflict must not hide it. And the
         # outcome must NOT read "removed": the node is frozen-in-place (#2).
         self._completed_job()
-        Requisition.objects.create(name="overlap", filter_params=OVERLAP_FILTER)
-        status = sync_status_for(self.device)
+        Requisition.objects.create(
+            server=self.server, name="overlap", filter_params=OVERLAP_FILTER
+        )
+        status = sync_status_for(self.device)[0]
         self.assertEqual(status["conflicts"], [FS, "overlap"])
         self.assertIsNotNone(status["job"])
         self.assertEqual(status["outcome"][0], "succeeded-accepted")
 
     def test_panel_renders_conflicted_state(self):
-        Requisition.objects.create(name="overlap", filter_params=OVERLAP_FILTER)
+        Requisition.objects.create(
+            server=self.server, name="overlap", filter_params=OVERLAP_FILTER
+        )
         html = self._panel_html(DeviceSyncStatusPanel, self.device)
         self.assertIn("Conflicted between", html)
         self.assertIn("overlap", html)
+
+    # --- per server (multi-server) ------------------------------------------
+
+    def _two_servers(self, same_server_overlap=False):
+        # The device is matched by Requisition "a" on server a and "b" on server
+        # b (and "a2" on server a for the same-server conflict case).
+        self.requisition.delete()
+        server_a = make_server("a")
+        server_b = make_server("b")
+        names = [(server_a, "a"), (server_b, "b")]
+        if same_server_overlap:
+            names.append((server_a, "a2"))
+        for server, name in names:
+            Requisition.objects.create(
+                server=server, name=name, filter_params=OVERLAP_FILTER
+            )
+
+    def test_two_servers_two_rows_no_conflict(self):
+        self._two_servers()
+        rows = sync_status_for(self.device)
+        self.assertEqual([r["server"].name for r in rows], ["a", "b"])
+        self.assertTrue(all(r["governed"] and not r["conflicts"] for r in rows))
+
+    def test_same_server_overlap_is_conflict_only_there(self):
+        self._two_servers(same_server_overlap=True)
+        rows = {r["server"].name: r for r in sync_status_for(self.device)}
+        self.assertEqual(rows["a"]["conflicts"], ["a", "a2"])
+        self.assertTrue(rows["b"]["governed"])
+
+    def test_panel_renders_one_section_per_server(self):
+        self._two_servers()
+        self.client.force_login(self.user)
+        html = self.client.get(self.device.get_absolute_url()).content.decode()
+        self.assertEqual(html.count("OpenNMS Sync Status"), 1)
+        for name in ("a", "b"):
+            self.assertIn(f"Server {name}", html)
 
     # --- sync_outcome -------------------------------------------------------
 
@@ -164,7 +209,9 @@ class ObservabilityTest(TestCase):
         self.assertIn(f'value="{self.device.pk}"', html)
 
     def test_panel_offers_remove_for_conflicted(self):
-        Requisition.objects.create(name="overlap", filter_params=OVERLAP_FILTER)
+        Requisition.objects.create(
+            server=self.server, name="overlap", filter_params=OVERLAP_FILTER
+        )
         html = self._panel_html(DeviceSyncStatusPanel, self.device)
         self.assertIn("Remove from OpenNMS", html)
 

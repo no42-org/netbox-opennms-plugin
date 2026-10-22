@@ -23,6 +23,7 @@ from virtualization.models import VirtualMachine
 
 from netbox_opennms.jobs import sync_status_for
 from netbox_opennms.models import MonitoringDetector, MonitoringOverride, Requisition
+from netbox_opennms.tests.servers import make_server
 
 User = get_user_model()
 FS = "netbox.raleigh.router"
@@ -31,6 +32,7 @@ FS = "netbox.raleigh.router"
 class SyncViewTest(TestCase):
     @classmethod
     def setUpTestData(cls):
+        cls.server = make_server()
         site = Site.objects.create(name="Raleigh", slug="raleigh")
         role = DeviceRole.objects.create(name="Router", slug="router")
         mfr = Manufacturer.objects.create(name="Acme", slug="acme")
@@ -45,6 +47,7 @@ class SyncViewTest(TestCase):
         cls.device.primary_ip4 = ip
         cls.device.save()
         cls.requisition = Requisition.objects.create(
+            server=cls.server,
             name=FS, filter_params={"site": ["raleigh"], "role": ["router"]}
         )
         MonitoringDetector.objects.create(
@@ -72,6 +75,15 @@ class SyncViewTest(TestCase):
         )
         self.assertContains(response, "Remove submitted")
         self.assertEqual(mock_enqueue.call_args.kwargs["allow_empty"], True)
+        self.assertEqual(mock_enqueue.call_args.kwargs["server_id"], self.server.pk)
+
+    @mock.patch("netbox_opennms.views.SyncForeignSourceJob.enqueue_sync")
+    def test_foreign_source_sync_unknown_name_errors(self, mock_enqueue):
+        self.client.force_login(self.superuser)
+        url = reverse("plugins:netbox_opennms:foreign_source_sync")
+        response = self.client.post(url, {"foreign_source": "nope"}, follow=True)
+        self.assertContains(response, "No Requisition named nope.")
+        mock_enqueue.assert_not_called()
 
     # --- node-level Remove (#133) -------------------------------------------
 
@@ -99,7 +111,7 @@ class SyncViewTest(TestCase):
         response = self._remove(self.device)
         self.assertTrue(self._override(self.device).exclude)
         mock_enqueue.assert_called_once_with(
-            FS, user=self.superuser, allow_empty=True
+            FS, server_id=self.server.pk, user=self.superuser, allow_empty=True
         )
         self.assertContains(response, "Remove submitted")
         self.assertEqual(response.redirect_chain[-1][0], self.device.get_absolute_url())
@@ -122,12 +134,14 @@ class SyncViewTest(TestCase):
     @mock.patch("netbox_opennms.views.SyncForeignSourceJob.enqueue_sync")
     def test_remove_conflicted_object_removes_from_every_match(self, mock_enqueue):
         mock_enqueue.return_value = mock.Mock(pk=23)
-        Requisition.objects.create(name="overlap", filter_params={"site": ["raleigh"]})
+        Requisition.objects.create(
+            server=self.server, name="overlap", filter_params={"site": ["raleigh"]}
+        )
         self._remove(self.device)
         self.assertTrue(self._override(self.device).exclude)
         enqueued = sorted(c.args[0] for c in mock_enqueue.call_args_list)
         self.assertEqual(enqueued, [FS, "overlap"])
-        self.assertEqual(sync_status_for(self.device)["conflicts"], [])
+        self.assertEqual(sync_status_for(self.device)[0]["conflicts"], [])
 
     @mock.patch("netbox_opennms.views.SyncForeignSourceJob.enqueue_sync")
     def test_remove_virtual_machine(self, mock_enqueue):
@@ -141,7 +155,7 @@ class SyncViewTest(TestCase):
         self.assertTrue(self._override(vm).exclude)
         # rtr-1 is still a member, so the VM leaves through a plain Sync.
         mock_enqueue.assert_called_once_with(
-            FS, user=self.superuser, allow_empty=False
+            FS, server_id=self.server.pk, user=self.superuser, allow_empty=False
         )
 
     @mock.patch("netbox_opennms.views.SyncForeignSourceJob.enqueue_sync")
@@ -173,7 +187,7 @@ class SyncViewTest(TestCase):
         response = self._remove(self.device)
         self.assertTrue(self._override(self.device).exclude)
         mock_enqueue.assert_called_once_with(
-            FS, user=self.superuser, allow_empty=False
+            FS, server_id=self.server.pk, user=self.superuser, allow_empty=False
         )
         self.assertContains(response, "Sync submitted")
 
@@ -234,6 +248,7 @@ class SyncViewTest(TestCase):
         # Review #2: Sync-all must not enqueue a guaranteed-failed job for a
         # frozen requisition — it skips it with a warning.
         Requisition.objects.create(
+            server=self.server,
             name="overlap", filter_params={"site": ["raleigh"]}
         )
         self.client.force_login(self.superuser)
@@ -270,6 +285,7 @@ class SyncViewTest(TestCase):
         # Round-2 review #4: a zero-member source duplicates harmlessly — no
         # false freeze alarm.
         empty = Requisition.objects.create(
+            server=self.server,
             name="empty", filter_params={"site": ["raleigh"], "role": ["unused"]}
         )
         self.client.force_login(self.superuser)
@@ -315,7 +331,7 @@ class SyncViewTest(TestCase):
         # The nav menu renders on every page; home is a cheap one to fetch.
         links = [
             reverse("plugins:netbox_opennms:sync_preview"),
-            reverse("plugins:netbox_opennms:connection_test"),
+            reverse("plugins:netbox_opennms:opennmsserver_list"),
         ]
         self.client.force_login(self.plain)
         response = self.client.get(reverse("home"))

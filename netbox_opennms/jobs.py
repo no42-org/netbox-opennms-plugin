@@ -47,7 +47,12 @@ from .membership import (
     monitored_foreign_sources,
     resolve,
 )
-from .models import DeployedForeignSource, MonitoringOverride
+from .models import (
+    DeployedForeignSource,
+    MonitoringOverride,
+    OpenNMSServer,
+    Requisition,
+)
 from .translation import (
     RenderError,
     render_foreign_source_definition,
@@ -83,19 +88,22 @@ class SyncForeignSourceJob(JobRunner):
         name = "OpenNMS sync"
 
     @classmethod
-    def job_name(cls, foreign_source, allow_empty=False):
-        """The Job ``name`` for a Foreign Source (the single owner of the format).
+    def job_name(cls, foreign_source, server_id, allow_empty=False):
+        """The Job ``name`` for a Foreign Source on one server (owns the format).
 
         Shared by ``enqueue_sync`` (write) and ``latest_sync_job`` (read), so the
         observability lookup always matches what was enqueued. ``Job.name`` is
         max_length=200; the ``(remove)`` marker is budgeted INTO the cap so a long
-        Foreign Source can't truncate it away (Story 3.1).
+        Foreign Source can't truncate it away (Story 3.1). The server id makes
+        coalescing per server: a pending Sync to one server never swallows a
+        Sync of the same Foreign Source to another.
         """
         suffix = " (remove)" if allow_empty else ""
-        return f"{cls.name}: {foreign_source}"[: 200 - len(suffix)] + suffix
+        base = f"{cls.name}: {foreign_source} @{server_id}"
+        return base[: 200 - len(suffix)] + suffix
 
     @classmethod
-    def enqueue_sync(cls, foreign_source, user=None, allow_empty=False):
+    def enqueue_sync(cls, foreign_source, server_id, user=None, allow_empty=False):
         """Enqueue a sync, coalescing a redundant pending sync for the same FS.
 
         The advisory lock in ``run`` is the hard race guard (AD-6); this skip-if-
@@ -103,7 +111,7 @@ class SyncForeignSourceJob(JobRunner):
         (allow_empty) from coalescing into a pending Sync that would refuse the
         empty requisition (Story 3.1).
         """
-        job_name = cls.job_name(foreign_source, allow_empty=allow_empty)
+        job_name = cls.job_name(foreign_source, server_id, allow_empty=allow_empty)
         existing = Job.objects.filter(
             name=job_name,
             status__in=JobStatusChoices.ENQUEUED_STATE_CHOICES,
@@ -113,18 +121,41 @@ class SyncForeignSourceJob(JobRunner):
         return cls.enqueue(
             name=job_name,
             foreign_source=foreign_source,
+            server_id=server_id,
             user=user,
             allow_empty=allow_empty,
         )
 
-    def run(self, foreign_source, allow_empty=False, **kwargs):
+    def run(self, foreign_source, server_id=None, allow_empty=False, **kwargs):
+        if server_id is None:
+            # A job queued before the upgrade carries no server_id: use the
+            # Requisition's server.
+            server_id = (
+                Requisition.objects.filter(name=foreign_source)
+                .values_list("server_id", flat=True)
+                .first()
+            )
+            if server_id is None:
+                self.logger.error(
+                    f"No server given for {foreign_source} and no Requisition "
+                    "of that name exists."
+                )
+                raise JobFailed()
+        server = OpenNMSServer.objects.filter(pk=server_id).first()
+        if server is None:
+            self.logger.error(
+                f"Server #{server_id} for {foreign_source} no longer exists."
+            )
+            raise JobFailed()
         # Validate config once (it applies to the whole job).
-        default_location = get_plugin_config(PLUGIN_NAME, "default_location")
+        default_location = server.default_location
         if default_location:
             try:
                 validate_location_name(default_location)
             except ValueError as exc:
-                self.logger.error(f"Configured default_location is invalid: {exc}")
+                self.logger.error(
+                    f"default_location of server {server.name!r} is invalid: {exc}"
+                )
                 raise JobFailed() from exc
         rescan = str(get_plugin_config(PLUGIN_NAME, "import_mode")).strip().lower()
         if rescan not in ("true", "false", "dbonly"):
@@ -136,13 +167,14 @@ class SyncForeignSourceJob(JobRunner):
         with advisory_lock(f"netbox_opennms:fs:{foreign_source}"):
             self._render_and_replace(
                 foreign_source,
+                server,
                 allow_empty=allow_empty,
                 default_location=default_location,
                 rescan=rescan,
             )
 
     def _render_and_replace(
-        self, foreign_source, allow_empty, default_location, rescan
+        self, foreign_source, server, allow_empty, default_location, rescan
     ):
         """Render-and-replace ONE Foreign Source (AD-5). Returns True if a push
         happened, False if skipped (not governed / empty and not allow_empty).
@@ -151,10 +183,26 @@ class SyncForeignSourceJob(JobRunner):
         membership, validates intent (AD-12 safety net), renders, and pushes.
         """
         resolution = resolve(foreign_source)
+        # A Requisition moved to another server no longer governs this server's
+        # copy: a Remove here tears that copy down instead of re-pushing it.
+        if resolution is not None and resolution.requisition.server_id != server.pk:
+            if allow_empty and server.points_at_same_opennms(
+                resolution.requisition.server
+            ):
+                # Same OpenNMS, same global Foreign Source name: the "old copy"
+                # IS the moved Requisition's live copy. Never tear it down.
+                self.logger.info(
+                    f"{foreign_source} now lives on server "
+                    f"{resolution.requisition.server.name!r}, which points at the "
+                    f"same OpenNMS as {server.name!r} — Remove skipped."
+                )
+                return False
+            resolution = None
 
         if resolution is None and not allow_empty:
             self.logger.info(
-                f"{foreign_source} has no Requisition — skipped."
+                f"{foreign_source} has no Requisition on server {server.name!r} "
+                "— skipped."
             )
             return False
 
@@ -203,7 +251,7 @@ class SyncForeignSourceJob(JobRunner):
             raise JobFailed() from exc
 
         try:
-            with OpenNMSClient.from_config() as client:
+            with OpenNMSClient.for_server(server) as client:
                 # Order matters (AD-11): definition first, then requisition, then
                 # import. A bare Remove (no assignment) has no definition to push.
                 if fs_xml is not None:
@@ -214,7 +262,9 @@ class SyncForeignSourceJob(JobRunner):
                 # later even though its (user-chosen) name has no netbox. prefix.
                 # Only when we actually pushed nodes — an empty push is a teardown.
                 if nodes:
-                    DeployedForeignSource.objects.get_or_create(name=foreign_source)
+                    DeployedForeignSource.objects.get_or_create(
+                        server=server, name=foreign_source
+                    )
                 # Best-effort advisory (FR-5/AD-16): warn on an unknown location.
                 try:
                     for location in unknown_locations(client, locations):
@@ -236,7 +286,7 @@ class SyncForeignSourceJob(JobRunner):
                         client.delete_requisition(foreign_source)
                         client.delete_foreign_source(foreign_source)
                         DeployedForeignSource.objects.filter(
-                            name=foreign_source
+                            server=server, name=foreign_source
                         ).delete()
                     except OpenNMSError as exc:
                         self.logger.warning(
@@ -253,19 +303,27 @@ class SyncForeignSourceJob(JobRunner):
         return True
 
 
-def latest_sync_job(foreign_sources):
-    """The most recent sync/remove ``Job`` across one or more Foreign Sources.
+def latest_sync_job(targets):
+    """The most recent sync/remove ``Job`` across ``(foreign_source, server_id)`` pairs.
 
     The Job is the audit record (user, timestamps, status, log, error). Matches
     both the sync and remove name forms via the shared ``job_name`` so the lookup
-    can never drift from what ``enqueue_sync`` wrote. ``None`` if none found.
+    can never drift from what ``enqueue_sync`` wrote, plus the pre-upgrade name
+    form without the server id. ``None`` if none found.
     """
-    if isinstance(foreign_sources, str):
-        foreign_sources = [foreign_sources]
     names = []
-    for foreign_source in foreign_sources:
-        names.append(SyncForeignSourceJob.job_name(foreign_source))
-        names.append(SyncForeignSourceJob.job_name(foreign_source, allow_empty=True))
+    for foreign_source, server_id in targets:
+        for allow_empty in (False, True):
+            names.append(
+                SyncForeignSourceJob.job_name(
+                    foreign_source, server_id, allow_empty=allow_empty
+                )
+            )
+    # Jobs enqueued before the multi-server upgrade carry no ``@server`` part.
+    for foreign_source, _server_id in targets:
+        for suffix in ("", " (remove)"):
+            base = f"{SyncForeignSourceJob.name}: {foreign_source}"
+            names.append(base[: 200 - len(suffix)] + suffix)
     if not names:
         return None
     return Job.objects.filter(name__in=names).order_by("-created").first()
@@ -291,14 +349,17 @@ def sync_outcome(job, is_removal=False, governed=True):
 
 
 def sync_status_for(target):
-    """Last-sync state for a Device/VM — the single source the Device/VM template
-    extension renders (Story 4.2).
+    """Last-sync state for a Device/VM, one row per OpenNMS server — the single
+    source the Device/VM template extension renders (Story 4.2).
 
-    Finds every Requisition whose filter matches the object: exactly one =
-    governed by it; several = **conflicted** between them (C1 — the panel names
-    the parties); none = unmonitored. Also reports whether an override excludes
-    it, and attaches the latest Job for the governing Foreign Source. Returns
-    ``None`` for a missing or non-Device/VM target.
+    Groups every Requisition whose filter matches the object by its server. Per
+    server: exactly one match = governed by it; several = **conflicted** between
+    them (C1, per server — the panel names the parties). Each row also reports
+    whether an override excludes the object and attaches the latest Job for that
+    server's matching Foreign Sources. Rows are ordered by server name; a server
+    appears only while it has a current match (sync history without a match is
+    not looked up). Returns ``[]`` for an unmatched object and ``None`` for a
+    missing or non-Device/VM target.
     """
     if target is None or not isinstance(target, (Device, VirtualMachine)):
         return None
@@ -306,17 +367,16 @@ def sync_status_for(target):
     # keeps the Foreign Source + last-sync Job (review #9); `governed` (actively
     # monitored) then excludes the excluded ones. An excluded object never
     # conflicts (C3) — its first match is shown as the (inactive) requisition.
-    matches = matching_requisitions(target)
+    groups = {}
+    for requisition in matching_requisitions(target):
+        groups.setdefault(requisition.server_id, []).append(requisition)
+    if not groups:
+        return []
     content_type = ContentType.objects.get_for_model(type(target))
     override = MonitoringOverride.objects.filter(
         assigned_object_type=content_type, assigned_object_id=target.pk
     ).first()
     excluded = bool(override and override.exclude)
-    conflicted = len(matches) >= 2 and not excluded
-    requisition = None
-    if matches and (len(matches) == 1 or excluded):
-        requisition = matches[0]
-    governed = requisition is not None and not excluded and not conflicted
     # RD-6/h: a governed object with no management IP provisions as an interface-less
     # (inventory-only) node — surface it as a Warning on the panel (not blocking).
     management = None
@@ -324,32 +384,41 @@ def sync_status_for(target):
         management = override.management_ip
     if management is None:
         management = getattr(target, "primary_ip", None)
-    warning_no_management_ip = governed and management is None
-    foreign_source = requisition.name if requisition is not None else None
-    # Look up the last sync across EVERY matching Foreign Source (reviews #3/#9):
-    # a conflicted/excluded multi-match object's node and Job history live under
-    # whichever requisition actually synced it — the panel must keep them.
-    names = [r.name for r in matches]
-    job = latest_sync_job(names) if names else None
-    is_removal = bool(job) and job.name.endswith(" (remove)")
-    # For the OUTCOME label a conflicted object still counts as governed: its
-    # node is frozen-in-place, not removed — labelling a completed sync
-    # "removed" would contradict the C1 freeze contract (review #2).
-    return {
-        "foreign_source": foreign_source,
-        "requisition": requisition,
-        "governed": governed,
-        "excluded": excluded,
-        "warning_no_management_ip": warning_no_management_ip,
-        "conflicts": sorted(r.name for r in matches) if conflicted else [],
-        "job": job,
-        "outcome": sync_outcome(
-            job, is_removal=is_removal, governed=governed or conflicted
-        ),
-    }
+    rows = []
+    for server in OpenNMSServer.objects.filter(pk__in=groups).order_by("name"):
+        matches = groups[server.pk]
+        conflicted = len(matches) >= 2 and not excluded
+        requisition = None
+        if len(matches) == 1 or excluded:
+            requisition = matches[0]
+        governed = requisition is not None and not excluded and not conflicted
+        # Look up the last sync across EVERY matching Foreign Source on this server
+        # (reviews #3/#9): a conflicted/excluded multi-match object's node and Job
+        # history live under whichever requisition actually synced it.
+        job = latest_sync_job([(r.name, server.pk) for r in matches])
+        is_removal = bool(job) and job.name.endswith(" (remove)")
+        # For the OUTCOME label a conflicted object still counts as governed: its
+        # node is frozen-in-place, not removed — labelling a completed sync
+        # "removed" would contradict the C1 freeze contract (review #2).
+        rows.append(
+            {
+                "server": server,
+                "foreign_source": requisition.name if requisition else None,
+                "requisition": requisition,
+                "governed": governed,
+                "excluded": excluded,
+                "warning_no_management_ip": governed and management is None,
+                "conflicts": sorted(r.name for r in matches) if conflicted else [],
+                "job": job,
+                "outcome": sync_outcome(
+                    job, is_removal=is_removal, governed=governed or conflicted
+                ),
+            }
+        )
+    return rows
 
 
-def orphaned_foreign_sources(client):
+def orphaned_foreign_sources(client, server, monitored=None, same_instance=None):
     """Foreign Sources OpenNMS holds that NetBox manages but no longer monitors.
 
     The reconciliation core (pure given a ``client``, so it tests against a fake).
@@ -358,11 +427,39 @@ def orphaned_foreign_sources(client):
     ``netbox.`` name prefix (review #4): orphans = (OpenNMS requisitions ∩ our
     managed names) − currently monitored. Scoped to managed names, so a requisition
     NetBox never created is never touched. Catches every drift cause uniformly:
-    last-member departure, membership move, requisition rename, and deletion.
+    last-member departure, membership move, requisition rename, deletion, and a
+    Requisition moved to another server. Scoped to ``server`` throughout.
+
+    Foreign Source names are global on one OpenNMS instance. A name monitored on
+    another server row that points at the same OpenNMS (``points_at_same_opennms``)
+    is that row's live copy, so it is never an orphan here: removing it would
+    delete the nodes just pushed through the other row. The stale
+    ``DeployedForeignSource(server, name)`` row is left in place; it is harmless
+    because this guard keeps it from being acted on.
+
+    ``monitored`` (the ``monitored_foreign_sources()`` set) and
+    ``same_instance`` (the ids of rows on the same OpenNMS as ``server``,
+    ``server.pk`` included) let a caller looping over servers compute them once.
     """
     deployed = set(client.list_requisition_names())
-    managed = set(DeployedForeignSource.objects.values_list("name", flat=True))
-    return sorted((deployed & managed) - set(monitored_foreign_sources()))
+    managed = set(
+        DeployedForeignSource.objects.filter(server=server).values_list(
+            "name", flat=True
+        )
+    )
+    if same_instance is None:
+        same_instance = _same_instance_ids(server, OpenNMSServer.objects.all())
+    if monitored is None:
+        monitored = monitored_foreign_sources()
+    live = {name for server_id, name in monitored if server_id in same_instance}
+    return sorted((deployed & managed) - live)
+
+
+def _same_instance_ids(server, servers):
+    """Ids of the rows in ``servers`` on the same OpenNMS as ``server``, and its own."""
+    return {server.pk} | {
+        other.pk for other in servers if server.points_at_same_opennms(other)
+    }
 
 
 @system_job(interval=RECONCILE_INTERVAL_MINUTES)
@@ -376,7 +473,8 @@ class ReconcileOrphansJob(JobRunner):
     Remove for each orphan (which clears the nodes AND deletes the now-empty
     shell, so it doesn't recur). Opt-out via ``reconcile_orphans`` config.
 
-    Best-effort: an OpenNMS outage logs and returns (no raise), so a transient
+    Runs once per ``OpenNMSServer``. Best-effort: an OpenNMS outage on one
+    server logs a warning and moves on to the next (no raise), so a transient
     failure doesn't mark the recurring system job failed.
     """
 
@@ -387,18 +485,37 @@ class ReconcileOrphansJob(JobRunner):
         if str(get_plugin_config(PLUGIN_NAME, "reconcile_orphans")).lower() != "true":
             self.logger.info("reconcile_orphans disabled — skipping.")
             return
-        try:
-            with OpenNMSClient.from_config() as client:
-                orphans = orphaned_foreign_sources(client)
-        except OpenNMSError as exc:
-            self.logger.warning(f"reconcile skipped — OpenNMS error: {exc}")
-            return
-        if not orphans:
-            self.logger.info("reconcile: no orphaned Foreign Sources.")
-            return
-        for foreign_source in orphans:
-            SyncForeignSourceJob.enqueue_sync(foreign_source, allow_empty=True)
-            self.logger.info(
-                f"reconcile: enqueued Remove for orphaned Foreign Source "
-                f"{foreign_source}."
-            )
+        servers = list(OpenNMSServer.objects.order_by("name"))
+        # Resolving every Requisition is the expensive part: do it once.
+        monitored = monitored_foreign_sources()
+        same_instance = {
+            server.pk: _same_instance_ids(server, servers) for server in servers
+        }
+        for server in servers:
+            try:
+                with OpenNMSClient.for_server(server) as client:
+                    orphans = orphaned_foreign_sources(
+                        client,
+                        server,
+                        monitored=monitored,
+                        same_instance=same_instance[server.pk],
+                    )
+            except OpenNMSError as exc:
+                self.logger.warning(
+                    f"reconcile skipped for server {server.name!r} — "
+                    f"OpenNMS error: {exc}"
+                )
+                continue
+            if not orphans:
+                self.logger.info(
+                    f"reconcile: no orphaned Foreign Sources on {server.name!r}."
+                )
+                continue
+            for foreign_source in orphans:
+                SyncForeignSourceJob.enqueue_sync(
+                    foreign_source, server_id=server.pk, allow_empty=True
+                )
+                self.logger.info(
+                    f"reconcile: enqueued Remove for orphaned Foreign Source "
+                    f"{foreign_source} on {server.name!r}."
+                )

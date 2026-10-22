@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: MIT
 """Filter sets for plugin models (Requisition redesign)."""
 
+import django_filters
 from django.db.models import Q
 from netbox.filtersets import NetBoxModelFilterSet
 
@@ -13,11 +14,37 @@ from .models import (
     MonitoringDetector,
     MonitoringOverride,
     MonitoringPolicy,
+    OpenNMSServer,
     Requisition,
 )
 
 
+class OpenNMSServerFilterSet(NetBoxModelFilterSet):
+    class Meta:
+        model = OpenNMSServer
+        fields = ("id", "name", "origin", "url", "default_location")
+
+    def search(self, queryset, name, value):
+        if value:
+            return queryset.filter(
+                Q(name__icontains=value)
+                | Q(description__icontains=value)
+                | Q(url__icontains=value)
+            )
+        return queryset
+
+
 class RequisitionFilterSet(NetBoxModelFilterSet):
+    server_id = django_filters.ModelMultipleChoiceFilter(
+        queryset=OpenNMSServer.objects.all(), label="Server (ID)"
+    )
+    server = django_filters.ModelMultipleChoiceFilter(
+        field_name="server__name",
+        queryset=OpenNMSServer.objects.all(),
+        to_field_name="name",
+        label="Server (name)",
+    )
+
     class Meta:
         model = Requisition
         fields = (

@@ -25,6 +25,7 @@ classifiers = [
 ]
 # NetBox itself is the host application and is NOT declared here.
 dependencies = [
+    "cryptography>=42",
     "requests>=2.34",
 ]
 

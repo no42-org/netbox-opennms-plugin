@@ -79,17 +79,25 @@ class NodeSpec:
 
 @dataclass
 class Conflict:
-    """One object claimed by ≥2 Requisitions' filters — blocks Sync of all of them."""
+    """One object claimed by ≥2 Requisitions on ONE server — blocks Sync of them all.
+
+    The same object matched once on each of two servers is not a conflict: each
+    server holds its own node for it.
+    """
 
     label: str
     foreign_id: str
     requisition_names: list = field(default_factory=list)
+    server_name: str = ""
 
     def __str__(self):
-        return (
+        text = (
             f"{self.label} is matched by {len(self.requisition_names)} requisitions "
             f"({', '.join(self.requisition_names)})"
         )
+        if self.server_name:
+            text += f" on server {self.server_name}"
+        return text
 
 
 @dataclass
@@ -423,7 +431,9 @@ def resolve_all():
     Returns one ``Resolution`` per Requisition (zero-node/frozen ones included).
     """
     requisitions = list(
-        Requisition.objects.prefetch_related("asset_mappings", "metadata_entries")
+        Requisition.objects.select_related("server").prefetch_related(
+            "asset_mappings", "metadata_entries"
+        )
     )
 
     # Pass 1: independent membership per Requisition. A rejected filter (unknown
@@ -458,6 +468,7 @@ def resolve_all():
 
     # Conflict detection runs POST-exclusion (C3): an excluded object is monitored
     # nowhere regardless of how many filters match it — no ambiguity, no conflict.
+    # Claims are keyed per server: one Requisition per server may own an object.
     claims = defaultdict(list)
     for requisition in requisitions:
         for obj in membership[requisition.pk]:
@@ -466,7 +477,7 @@ def resolve_all():
             override = overrides.get(key)
             if override is not None and override.exclude:
                 continue
-            claims[key].append(requisition.name)
+            claims[(*key, requisition.server_id)].append(requisition.name)
     conflicted = {key: names for key, names in claims.items() if len(names) >= 2}
 
     # Pass 2: resolve nodes; conflicted objects become Conflict entries instead.
@@ -477,12 +488,14 @@ def resolve_all():
         for obj in membership[requisition.pk]:
             ct = ContentType.objects.get_for_model(type(obj))
             key = (ct.id, obj.pk)
-            if key in conflicted:
+            claim_key = (*key, requisition.server_id)
+            if claim_key in conflicted:
                 conflicts.append(
                     Conflict(
                         label=obj.name or str(obj),
                         foreign_id=foreign_id_for(obj),
-                        requisition_names=sorted(conflicted[key]),
+                        requisition_names=sorted(conflicted[claim_key]),
+                        server_name=requisition.server.name,
                     )
                 )
                 continue
@@ -589,7 +602,11 @@ def requisition_conflicts(requisition, warnings=None):
     vm_pks = [pk for (ct_id, pk) in members if ct_id == vm_ct.id]
 
     names_by_key = defaultdict(set)
-    for other in Requisition.objects.exclude(pk=requisition.pk):
+    # Only Requisitions on the same server can conflict with this one.
+    others = Requisition.objects.filter(server_id=requisition.server_id).exclude(
+        pk=requisition.pk
+    )
+    for other in others:
         if filter_errors(other):
             continue  # a rejected filter contributes nothing (as in resolve_all)
         params = other.filter_params or {}
@@ -613,6 +630,7 @@ def requisition_conflicts(requisition, warnings=None):
                 label=obj.name or str(obj),
                 foreign_id=foreign_id_for(obj),
                 requisition_names=sorted({requisition.name, *names}),
+                server_name=requisition.server.name,
             )
         )
     conflicts.sort(key=lambda c: c.foreign_id)
@@ -620,7 +638,7 @@ def requisition_conflicts(requisition, warnings=None):
 
 
 def monitored_foreign_sources():
-    """Every Foreign Source that is NOT cleanly empty — the reconciler's guard.
+    """Every ``(server_id, name)`` Foreign Source NOT cleanly empty — the guard.
 
     Drives the preview / the drift reconciler. A Foreign Source is subject to
     orphan teardown ONLY when its Requisition resolves **cleanly** to zero
@@ -639,8 +657,8 @@ def monitored_foreign_sources():
     A requisition whose members were genuinely removed (or deliberately excluded)
     resolves cleanly empty and is reconciled away, as intended.
     """
-    return sorted(
-        r.foreign_source
+    return {
+        (r.requisition.server_id, r.foreign_source)
         for r in resolve_all()
         if r.nodes or r.conflicts or r.warnings or r.rejected
-    )
+    }

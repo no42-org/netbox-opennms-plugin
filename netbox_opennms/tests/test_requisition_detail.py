@@ -7,17 +7,22 @@ a Requisition by FK; the detail page must let the user add each one in-context,
 pre-selecting the parent requisition via `?requisition=<pk>`.
 """
 
+from core.models import Job
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.urls import reverse
 
+from netbox_opennms.jobs import SyncForeignSourceJob
 from netbox_opennms.models import Requisition
+from netbox_opennms.tests.servers import make_server
 
 
 class RequisitionAddButtonsTest(TestCase):
     @classmethod
     def setUpTestData(cls):
+        cls.server = make_server()
         cls.requisition = Requisition.objects.create(
+            server=cls.server,
             name="router", filter_params={"role": ["router"]}
         )
         cls.user = get_user_model().objects.create_user(
@@ -43,3 +48,58 @@ class RequisitionAddButtonsTest(TestCase):
             self.assertContains(
                 response, f"{add_url}?requisition={self.requisition.pk}"
             )
+
+    def test_detail_shows_server(self):
+        url = reverse(
+            "plugins:netbox_opennms:requisition", kwargs={"pk": self.requisition.pk}
+        )
+        response = self.client.get(url)
+        self.assertContains(response, self.server.get_absolute_url())
+
+    def _move_to(self, server):
+        data = {
+            "name": self.requisition.name,
+            "server": server.pk,
+            "object_types": self.requisition.object_types,
+            "filter_params": '{"role": ["router"]}',
+            "scan_interval": self.requisition.scan_interval,
+            "default_interfaces": self.requisition.default_interfaces,
+        }
+        response = self.client.post(
+            reverse(
+                "plugins:netbox_opennms:requisition_edit",
+                args=[self.requisition.pk],
+            ),
+            data,
+            follow=True,
+        )
+        self.requisition.refresh_from_db()
+        self.assertEqual(self.requisition.server_id, server.pk)
+        return response
+
+    def test_server_change_submits_remove_on_old_server(self):
+        b = make_server("b", url="https://b.example.org/opennms")
+        response = self._move_to(b)
+        remove = SyncForeignSourceJob.job_name(
+            "router", self.server.pk, allow_empty=True
+        )
+        job = Job.objects.get(name=remove)
+        self.assertEqual(job.user, self.user)
+        self.assertContains(
+            response,
+            f"Moved to server b: Remove submitted for the copy on default "
+            f"(job #{job.pk}); Sync to push it to b.",
+        )
+
+    def test_move_to_same_opennms_keeps_nodes(self):
+        # Same instance, different spelling of the URL. Created directly: the
+        # model rule rejects such a row, but rows from before it may exist.
+        b = make_server("b", url="HTTPS://ONMS.example.org/opennms/")
+        response = self._move_to(b)
+        self.assertContains(
+            response,
+            "Moved to server b, which points at the same OpenNMS as default; "
+            "the existing nodes stay in place.",
+        )
+        self.assertNotContains(response, "Remove submitted")
+        self.assertFalse(Job.objects.filter(name__endswith=" (remove)").exists())

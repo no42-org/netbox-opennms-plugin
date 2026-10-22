@@ -157,39 +157,97 @@ The full walkthrough is in the **[Quickstart guide](https://no42-org.github.io/n
     [X] 0004_remove_requisition_priority
     [X] 0005_remove_monitoringoverride_additional_ips_and_more
     [X] 0006_assetmapping_metadataentry
+    [X] 0007_opennmsserver
    ```
 
 ## Prepare OpenNMS
 
 The plugin writes requisitions. It does not configure OpenNMS polling.
 
-- **Provisioning account.** Give **`opennms_username`** a role that can read and write requisitions and trigger imports.
+- **Provisioning account.** Give each server's **`username`** a role that can read and write requisitions and trigger imports.
 - **Poller packages.** OpenNMS polls a discovered service only if a poller package covers it. Make sure **`poller-configuration.xml`** covers the services your detectors discover and the Requisition's declared services.
 - **Minions.** A node in a location other than `Default` is polled only if a Minion is registered at that location. The plugin warns when a location is unknown to OpenNMS but cannot create it.
 
-## Configure the connection
+## Configure OpenNMS servers
 
-Set the connection and behaviour in **`PLUGINS_CONFIG`** in NetBox's **`configuration.py`**.
-Credentials are read at runtime and never stored on a NetBox model.
+The plugin can provision several OpenNMS servers.
+Each Requisition targets exactly one server.
+Two server rows must not point at the same OpenNMS instance, because Foreign Source names are global on an instance.
+The plugin rejects a server whose URL matches another server's, ignoring a trailing slash and the case of the scheme and host.
+A provisioned entry that clashes with an existing row is skipped with a warning in the log.
+A server comes from one of two origins:
+
+- **Provisioned.** Declared in **`PLUGINS_CONFIG`** in NetBox's **`configuration.py`**.
+  The UI shows it as **Managed by configuration** and refuses edits and deletes.
+  Its credentials are read from the configuration at runtime and never reach the database.
+- **Local.** Created under **Plugins → NetBox OpenNMS → OpenNMS Servers** or through the REST API.
+  Every field is editable.
+  The password and headers are stored Fernet-encrypted.
+
+Declare provisioned servers in the `servers` mapping, keyed by name:
 
 ```python
 PLUGINS_CONFIG = {
     "netbox_opennms": {
-        "opennms_url": "https://opennms.example.org/opennms",
-        "opennms_username": "provision-svc",
-        "opennms_password": "********",  # load from your secrets mechanism
-        "default_location": "",
+        "servers": {
+            "prod": {
+                "url": "https://opennms.example.org/opennms",
+                "username": "provision-svc",
+                "password": "********",  # load from your secrets mechanism
+                "default_location": "",
+                "headers": {},
+            },
+        },
         "import_mode": "false",
         "reconcile_orphans": "true",
     },
 }
 ```
 
-All settings are listed in [Settings](#settings).
+`headers` are extra HTTP headers sent with every request, for a server behind an auth proxy.
+Basic auth is always sent too.
 
-To test the connection, open **Plugins → NetBox OpenNMS → Connect OpenNMS**.
-The page needs the `netbox_opennms.view_requisition` permission.
-It shows the effective URL and username, never the password, and stores nothing.
+A single server can still use the flat keys `opennms_url`, `opennms_username`, `opennms_password` and `default_location`.
+They are the single-server shorthand for `servers["default"]`.
+
+Provisioned rows are created or updated on every `migrate` and whenever someone opens the server list.
+A local row with the same name as a configured server is taken over: it becomes provisioned and its stored credentials are cleared.
+When you remove a server from the configuration, its row stays, because Requisitions may still point at it.
+The row shows **Missing from configuration** and cannot sync.
+Re-add it to the configuration, or edit it and enter credentials to convert it to a local server.
+
+Local credentials are encrypted with a key derived from NetBox's `SECRET_KEY`.
+Set `credentials_key` to use a dedicated Fernet key instead:
+
+```bash
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+```
+
+Changing `SECRET_KEY` or `credentials_key` makes the stored credentials unreadable.
+They are not re-encrypted with the new key.
+The server page shows a warning, and you re-enter the password and headers on each local server.
+
+To test a server, open its detail page and click **Test connection**.
+The test needs the `netbox_opennms.view_opennmsserver` permission and stores nothing.
+
+The `netbox_opennms.add_opennmsserver` and `netbox_opennms.change_opennmsserver` permissions let a user point the stored credentials at any host.
+Grant them to administrators only.
+
+**Monitoring on several servers.** An object matched by two Requisitions on the same server is a conflict, as described in [Architecture](#architecture).
+Matches on different servers are independent, so a Device can be a node on production and on staging at once.
+A Monitoring Override applies on every server.
+Exclude removes the object from all servers, and the management IP, interfaces, services and location are the same on each.
+To leave an object out of one server only, narrow that server's Requisition filter.
+
+**Upgrade.** When Requisitions already exist, migration `0007_opennmsserver` creates one provisioned server and points all of them at it.
+With the flat keys set, that server is `default`.
+With no flat keys and exactly one `servers` entry, it is that entry.
+Otherwise, for example with several `servers` entries, the server is `default` with no URL and shows as missing.
+To avoid that, keep the flat keys for the upgrade deploy.
+When you later switch to the `servers` mapping, name the entry for that server `default`.
+The migrated `default` row then reads its credentials from the new entry.
+
+All settings are listed in [Settings](#settings).
 
 ## Run the sync worker
 
@@ -202,7 +260,7 @@ Start a NetBox RQ worker on the `default` queue:
 Sync, Remove and the drift reconciler run as NetBox background Jobs on that worker.
 Without a worker, the Requisition and Sync Preview pages show a warning and jobs stay pending.
 An OpenNMS `202 ACCEPTED` is reported as submitted for import, never as provisioned.
-Each Device/VM detail page shows its last sync state. See [Sync states](#sync-states).
+Each Device/VM detail page shows its last sync state, one row per server. See [Sync states](#sync-states).
 
 ## Deploy on Kubernetes
 
@@ -232,7 +290,9 @@ Mounting a plugin into the container at runtime is not supported (see [netbox-do
    cat > plugins.yaml <<'EOF'
    PLUGINS_CONFIG:
      netbox_opennms:
-       opennms_password: "********"
+       servers:
+         prod:
+           password: "********"
    EOF
    kubectl create secret generic netbox-opennms --from-file=plugins.yaml
    ```
@@ -243,7 +303,8 @@ Mounting a plugin into the container at runtime is not supported (see [netbox-do
    secret/netbox-opennms created
    ```
 
-   The chart mounts each `extraConfig` entry into the NetBox and worker pods and deep-merges it over `pluginsConfig`, so the Secret only needs the password.
+   The chart mounts each `extraConfig` entry into the NetBox and worker pods and deep-merges it over `pluginsConfig`, so the Secret only needs `servers.prod.password`.
+   The URL and username stay in `values.yaml`.
 
 3. Point the chart at the image, enable the plugin, load the Secret and enable the worker in **`values.yaml`**:
 
@@ -257,9 +318,11 @@ Mounting a plugin into the container at runtime is not supported (see [netbox-do
 
    pluginsConfig:
      netbox_opennms:
-       opennms_url: "https://opennms.example.org/opennms"
-       opennms_username: "provision-svc"
-       default_location: ""
+       servers:
+         prod:
+           url: "https://opennms.example.org/opennms"
+           username: "provision-svc"
+           default_location: ""
        import_mode: "false"
        reconcile_orphans: "true"
 
@@ -307,8 +370,9 @@ Renaming a Device relabels its node in place.
 Moving an object to another Requisition changes its Foreign Source, which OpenNMS treats as a new node.
 The dry run shows such moves before you Sync.
 
-**Conflicts.** Requisition filters must be disjoint.
-An object matched by two or more filters is rendered into none of them.
+**Conflicts.** Requisition filters on the same server must be disjoint.
+An object matched by two or more filters on one server is rendered into none of them.
+Matches on different servers are not a conflict.
 Sync of every involved Requisition is blocked and their OpenNMS state stays as last synced.
 Resolve it by narrowing a filter, for example with a negated parameter (`{"role": ["switch"], "tag__n": ["critical"]}`), or by excluding the object with an override.
 Conflicts show on the Requisition page, the Sync Preview, the dry run and the affected Device/VM page.
@@ -324,7 +388,7 @@ Plugin-provided detectors appear too.
 Results are cached for 300 seconds and refreshed at Sync.
 If OpenNMS is unreachable, the editors fall back to the curated presets for 30 seconds before retrying, and saving still works.
 
-**Drift reconciler.** Every 60 minutes, a system job removes Foreign Sources the plugin pushed but no longer governs: a renamed or deleted Requisition, or one whose last member left.
+**Drift reconciler.** Every 60 minutes, a system job checks each server and removes Foreign Sources the plugin pushed but no longer governs: a renamed or deleted Requisition, one moved to another server, or one whose last member left.
 Ownership is recorded per pushed Foreign Source, so the job never touches requisitions it did not create.
 Disable it with `reconcile_orphans: "false"`.
 
@@ -332,14 +396,16 @@ Disable it with `reconcile_orphans: "false"`.
 
 ### Settings
 
-All values are strings.
+All values except `servers` are strings.
 
 | Name | Type | Default | Description |
 | --- | --- | --- | --- |
-| **`opennms_url`** | string | required | OpenNMS base URL including the context path, for example `https://opennms.example.org/opennms`. |
-| **`opennms_username`** | string | required | REST account with the provisioning role. |
-| **`opennms_password`** | string | required | Password for `opennms_username`. Load it from your secrets mechanism. |
-| **`default_location`** | string | `""` | Monitoring location for Requisitions that set none. Empty means OpenNMS's built-in `Default`. |
+| **`servers`** | mapping | `{}` | Provisioned servers, keyed by name. Each entry takes `url`, `username`, `password`, `default_location` and `headers`. See [Configure OpenNMS servers](#configure-opennms-servers). |
+| **`credentials_key`** | string | `""` | Optional Fernet key that encrypts local server credentials. Empty derives a key from `SECRET_KEY`. Generate one with `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`. |
+| **`opennms_url`** | string | `""` | Single-server shorthand for `servers.default`. OpenNMS base URL including the context path, for example `https://opennms.example.org/opennms`. |
+| **`opennms_username`** | string | `""` | Single-server shorthand for `servers.default`. REST account with the provisioning role. |
+| **`opennms_password`** | string | `""` | Single-server shorthand for `servers.default`. Password for `opennms_username`. Load it from your secrets mechanism. |
+| **`default_location`** | string | `""` | Part of the single-server shorthand. It sets the per-server default `servers.default.default_location`. Monitoring location for Requisitions that set none. Empty means OpenNMS's built-in `Default`. Each server has its own default location. |
 | **`import_mode`** | `"true"` \| `"false"` \| `"dbonly"` | `"false"` | `rescanExisting` value sent with each import. See [`import_mode` values](#import_mode-values). |
 | **`reconcile_orphans`** | `"true"` \| `"false"` | `"true"` | Run the hourly drift reconciler. Needs an RQ worker. |
 
@@ -366,15 +432,14 @@ Shown on each Device/VM detail page, backed by the NetBox Job log.
 
 | Page | Menu | Permission |
 | --- | --- | --- |
+| OpenNMS Servers | Plugins → NetBox OpenNMS. Test connection is a button on each server's detail page. | `netbox_opennms.view_opennmsserver`. `add_opennmsserver`, `change_opennmsserver` and `delete_opennmsserver` let a user point stored credentials at any host. Grant them to administrators only. |
 | Requisitions | Plugins → NetBox OpenNMS | `netbox_opennms.view_requisition` |
 | Monitoring Overrides | Plugins → NetBox OpenNMS | `netbox_opennms.view_monitoringoverride` |
 | Sync Preview | Plugins → NetBox OpenNMS | `netbox_opennms.view_requisition` |
 | Dry run | Requisition detail page | `netbox_opennms.view_requisition` |
 | Sync to OpenNMS | Requisition detail, Dry run | `netbox_opennms.change_requisition` |
 | Remove from OpenNMS | OpenNMS Sync Status panel on a Device or VM. Sets Exclude on the object's override and removes its node. Clear Exclude and Sync to restore it. | `netbox_opennms.change_requisition`, `netbox_opennms.add_monitoringoverride`, `netbox_opennms.change_monitoringoverride` |
-| Remove a Foreign Source | `POST /plugins/opennms/sync/foreign-source/` with `remove` set. No button. | `netbox_opennms.change_requisition` |
-| Connect OpenNMS | Plugins → NetBox OpenNMS | `netbox_opennms.view_requisition` |
-
+| Remove a Foreign Source | `POST /plugins/opennms/sync/foreign-source/` with `remove` set. No button. Needs an existing Requisition of that name. The reconciler removes the copy of a deleted Requisition. | `netbox_opennms.change_requisition` |
 ### Requisition fields
 
 | Field | Rule |
@@ -401,7 +466,9 @@ Values resolve per member. An unresolved value is omitted.
 | Sync is blocked | A filter conflict, a rejected filter or an invalid location | Open the Sync Preview. Narrow the filter, exclude the object or fix the location. |
 | A node shows in OpenNMS but is never polled | No poller package covers its services | Add the services to **`poller-configuration.xml`**. |
 | Nodes in a non-`Default` location are not polled | No Minion is registered at that location | Register a Minion at that location. |
-| The detector editor shows presets only | OpenNMS was unreachable during editing | Check it with **Connect OpenNMS**. The editor retries after 30 seconds. |
+| The detector editor shows presets only | OpenNMS was unreachable during editing | Click **Test connection** on the Requisition's server. The editor retries after 30 seconds. |
+| A server shows **Missing from configuration** and its syncs fail | The server was removed from `servers` in `PLUGINS_CONFIG` | Re-add it to the configuration, or edit it and enter credentials to convert it to a local server. |
+| A local server warns that its credentials cannot be decrypted | `SECRET_KEY` or `credentials_key` changed | Edit the server and re-enter the password and headers. |
 | A node carries a warning and has no IP interface | The member has no management IP | Set a primary IP in NetBox, pin one with an override, or exclude the object. |
 
 ## Contribute

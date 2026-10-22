@@ -14,11 +14,29 @@ changes ``requisition-redesign`` (R1–R8) and ``replace-priority-with-conflicts
 (C1–C7) for the full design.
 """
 
+from functools import cached_property
+
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.urls import reverse
-from netbox.models import NetBoxModel
+from netbox.models import BaseModel, NetBoxModel
+from netbox.models.features import (
+    BookmarksMixin,
+    ChangeLoggingMixin,
+    CloningMixin,
+    CustomFieldsMixin,
+    CustomValidationMixin,
+    EventRulesMixin,
+    JournalingMixin,
+    NotificationsMixin,
+    TagsMixin,
+)
+
+# Not ``from . import config``: the package's ``config`` attribute is the
+# PluginConfig class until the submodule is imported, so that form can bind
+# the class. This form always imports (and binds) the module.
+import netbox_opennms.config as config
 
 from .choices import (
     DetectorPresetChoices,
@@ -28,9 +46,12 @@ from .choices import (
     NetBoxSourceChoices,
     ObjectTypeChoices,
     PolicyPresetChoices,
+    ServerOriginChoices,
     ServiceChoices,
 )
+from .crypto import Undecryptable
 from .derivation import validate_location_name, validate_requisition_name
+from .fields import EncryptedCharField, EncryptedJSONField
 from .presets import (
     detector_required_params,
     policy_required_params,
@@ -72,6 +93,161 @@ def _require_preset_params(rule, required):
         )
 
 
+class _SecretSafeModel(
+    BookmarksMixin,
+    ChangeLoggingMixin,
+    CloningMixin,
+    CustomFieldsMixin,
+    CustomValidationMixin,
+    JournalingMixin,
+    NotificationsMixin,
+    TagsMixin,
+    EventRulesMixin,
+    BaseModel,
+):
+    """``NetBoxModel`` minus ``ExportTemplatesMixin`` and ``CustomLinksMixin``.
+
+    Export templates and custom links both render arbitrary model attributes
+    (Jinja ``{{ object.password }}``) for whoever views or exports them, so a
+    template or link author could print a server's decrypted ``password``. Keep
+    the mixin list in step with ``netbox.models.NetBoxFeatureSet``.
+    """
+
+    class Meta:
+        abstract = True
+
+
+class OpenNMSServer(_SecretSafeModel):
+    """An OpenNMS instance that Requisitions are synced to.
+
+    A **provisioned** server is declared in ``PLUGINS_CONFIG``; the row carries
+    only its name and URL and the credentials are read from config at use. A
+    **local** server is created in the UI and stores its credentials here,
+    Fernet-encrypted. ``password`` and ``headers`` never enter the changelog.
+    """
+
+    name = models.CharField(max_length=100, unique=True)
+    origin = models.CharField(
+        max_length=16,
+        choices=ServerOriginChoices,
+        default=ServerOriginChoices.LOCAL,
+    )
+    # Base URL including the context path. A CharField, not a URLField: Django's
+    # URLValidator rejects single-label hosts such as ``http://opennms:8980``.
+    url = models.CharField(max_length=255)
+    username = models.CharField(max_length=100, blank=True)
+    password = EncryptedCharField(blank=True)
+    # Extra HTTP headers sent with every request (e.g. for an auth proxy).
+    headers = EncryptedJSONField(default=dict, blank=True)
+    # Monitoring Location used when a Requisition and its member leave it blank.
+    default_location = models.CharField(max_length=255, blank=True, default="")
+    description = models.CharField(max_length=200, blank=True)
+
+    class Meta:
+        ordering = ("name",)
+        verbose_name = "OpenNMS server"
+        verbose_name_plural = "OpenNMS servers"
+
+    def __str__(self):
+        return self.name
+
+    def get_absolute_url(self):
+        return reverse("plugins:netbox_opennms:opennmsserver", args=[self.pk])
+
+    def clean(self):
+        super().clean()
+        errors = {}
+        if self.url and not self.url.startswith(("https://", "http://")):
+            errors["url"] = "The URL must start with https:// or http://."
+        elif self.url:
+            # Foreign Source names are global on one OpenNMS: two rows on the
+            # same instance would let two Requisitions push the same object.
+            for other in OpenNMSServer.objects.exclude(pk=self.pk):
+                if self.points_at_same_opennms(other):
+                    errors["url"] = (
+                        f"Another server ({other.name}) already points at this "
+                        "OpenNMS instance."
+                    )
+                    break
+        try:
+            validate_location_name(self.default_location)
+        except ValueError as exc:
+            errors["default_location"] = str(exc)
+        if isinstance(self.headers, Undecryptable):
+            errors["headers"] = (
+                "The stored headers cannot be decrypted (SECRET_KEY or "
+                "credentials_key changed); re-enter them."
+            )
+        elif not isinstance(self.headers, dict) or not all(
+            isinstance(key, str) and isinstance(value, str)
+            for key, value in self.headers.items()
+        ):
+            errors["headers"] = "Headers must be a mapping of strings to strings."
+        # The one owner of the credential rule. Forms and serializers translate
+        # "blank keeps the stored password" into "leave the field untouched", so
+        # self.password is the value that will be saved: the stored one, a new
+        # one, or "" when there is none. An Undecryptable stored value is not a
+        # usable password, so credentials_ok false must be fixed by re-entering.
+        if self.origin == ServerOriginChoices.LOCAL:
+            if not self.username:
+                errors["username"] = "A local server needs a username."
+            if not self.password or isinstance(self.password, Undecryptable):
+                errors["password"] = "A local server needs a password."
+        if errors:
+            raise ValidationError(errors)
+
+    def serialize_object(self, exclude=None):
+        # Secrets (even as ciphertext) must never land in ObjectChange data.
+        exclude = [*(exclude or []), "password", "headers"]
+        return super().serialize_object(exclude=exclude)
+
+    @property
+    def is_provisioned(self):
+        return self.origin == ServerOriginChoices.PROVISIONED
+
+    @cached_property
+    def config_entry(self):
+        """This row's ``PLUGINS_CONFIG`` entry (or ``None``), read once per instance."""
+        return config.server_entry(self.name)
+
+    @property
+    def is_missing(self):
+        """A provisioned row whose ``PLUGINS_CONFIG`` entry is gone."""
+        return self.is_provisioned and self.config_entry is None
+
+    @property
+    def credentials_ok(self):
+        """False when stored secrets cannot be decrypted with the current key."""
+        return not isinstance(self.password, Undecryptable) and not isinstance(
+            self.headers, Undecryptable
+        )
+
+    @property
+    def effective_url(self):
+        """The URL requests go to: the config entry's for a provisioned row."""
+        if self.is_provisioned and self.config_entry:
+            return self.config_entry["url"]
+        return self.url
+
+    def points_at_same_opennms(self, other):
+        """True when ``other`` reaches the same OpenNMS instance as this row.
+
+        Compares the effective URLs, ignoring a trailing slash and the case of
+        the scheme and host. Foreign Source names are global on an instance, so
+        two such rows share every Foreign Source.
+        """
+        return config.normalised_url(self.effective_url) == config.normalised_url(
+            other.effective_url
+        )
+
+    @property
+    def effective_username(self):
+        if self.is_provisioned:
+            entry = self.config_entry
+            return entry["username"] if entry else ""
+        return self.username
+
+
 class Requisition(NetBoxModel):
     """A user-named OpenNMS Foreign Source (definition + filter-scoped requisition).
 
@@ -85,6 +261,10 @@ class Requisition(NetBoxModel):
 
     name = models.CharField(max_length=100, unique=True)
     description = models.CharField(max_length=200, blank=True)
+    # The OpenNMS server this Foreign Source is synced to.
+    server = models.ForeignKey(
+        to=OpenNMSServer, on_delete=models.PROTECT, related_name="requisitions"
+    )
     # Which NetBox object types this Requisition's filter draws from.
     object_types = models.CharField(
         max_length=10,
@@ -501,7 +681,11 @@ class AssetMapping(NetBoxModel):
         # Validate against the discovered/known OnmsAssetRecord field set (RD-2).
         from .catalog import get_asset_fields
 
-        if self.asset_field and self.asset_field not in get_asset_fields():
+        if (
+            self.asset_field
+            and self.requisition_id
+            and self.asset_field not in get_asset_fields(self.requisition.server)
+        ):
             raise ValidationError(
                 {"asset_field": f"Unknown OpenNMS asset field {self.asset_field!r}."}
             )
@@ -573,10 +757,21 @@ class DeployedForeignSource(models.Model):
     never touches a requisition NetBox didn't create.
     """
 
-    name = models.CharField(max_length=100, unique=True)
+    server = models.ForeignKey(
+        to=OpenNMSServer,
+        on_delete=models.CASCADE,
+        related_name="deployed_foreign_sources",
+    )
+    name = models.CharField(max_length=100)
 
     class Meta:
         ordering = ("name",)
+        constraints = [
+            models.UniqueConstraint(
+                fields=("server", "name"),
+                name="netbox_opennms_deployedforeignsource_unique_server_name",
+            ),
+        ]
         verbose_name = "deployed foreign source"
         verbose_name_plural = "deployed foreign sources"
 

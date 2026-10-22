@@ -3,11 +3,13 @@
 """REST API serializers (Requisition redesign)."""
 
 from django.contrib.contenttypes.models import ContentType
+from django.core.exceptions import ValidationError as DjangoValidationError
 from netbox.api.fields import ContentTypeField
 from netbox.api.serializers import NetBoxModelSerializer
 from rest_framework import serializers
 from utilities.api import get_serializer_for_model
 
+from ..choices import ServerOriginChoices
 from ..derivation import location_name_error, requisition_name_error
 from ..membership import filter_errors
 from ..models import (
@@ -19,6 +21,7 @@ from ..models import (
     MonitoringDetector,
     MonitoringOverride,
     MonitoringPolicy,
+    OpenNMSServer,
     Requisition,
 )
 
@@ -30,10 +33,75 @@ def _validate_location(value):
     return value
 
 
+class OpenNMSServerSerializer(NetBoxModelSerializer):
+    """An OpenNMS server; ``password`` and ``headers`` are write-only.
+
+    ``address`` is the model's ``url`` (the API ``url`` is the self link). On
+    read, ``username`` is the effective one (from ``PLUGINS_CONFIG`` for a
+    provisioned row). NetBox also serializes servers for its event queue.
+    """
+
+    url = serializers.HyperlinkedIdentityField(
+        view_name="plugins-api:netbox_opennms-api:opennmsserver-detail"
+    )
+    address = serializers.CharField(source="url", max_length=255)
+    password = serializers.CharField(
+        write_only=True, required=False, allow_blank=True, max_length=255
+    )
+    headers = serializers.JSONField(write_only=True, required=False)
+
+    class Meta:
+        model = OpenNMSServer
+        fields = (
+            "id",
+            "url",
+            "display",
+            "name",
+            "origin",
+            "address",
+            "username",
+            "password",
+            "headers",
+            "default_location",
+            "description",
+            "tags",
+            "custom_fields",
+            "created",
+            "last_updated",
+        )
+        read_only_fields = ("origin",)
+        brief_fields = ("id", "url", "display", "name")
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        if "username" in data:
+            data["username"] = instance.effective_username
+        return data
+
+    def validate(self, data):
+        # A blank password on update keeps the stored one (as in the UI form):
+        # leave the field untouched; OpenNMSServer.clean() owns the rule.
+        if self.instance is not None and not data.get("password", True):
+            data.pop("password")
+        # A provisioned row whose config entry is gone is adopted as local, as
+        # the UI form does. Checked before super().validate() applies the
+        # request's attributes (a new name) to the instance.
+        if self.instance is not None and self.instance.is_missing:
+            data["origin"] = ServerOriginChoices.LOCAL
+        try:
+            return super().validate(data)
+        except DjangoValidationError as exc:
+            # The model calls the API "address" field "url".
+            if hasattr(exc, "error_dict") and "url" in exc.error_dict:
+                exc.error_dict["address"] = exc.error_dict.pop("url")
+            raise
+
+
 class RequisitionSerializer(NetBoxModelSerializer):
     url = serializers.HyperlinkedIdentityField(
         view_name="plugins-api:netbox_opennms-api:requisition-detail"
     )
+    server = OpenNMSServerSerializer(nested=True, required=False)
 
     class Meta:
         model = Requisition
@@ -43,6 +111,7 @@ class RequisitionSerializer(NetBoxModelSerializer):
             "display",
             "name",
             "description",
+            "server",
             "object_types",
             "filter_params",
             "scan_interval",
@@ -66,6 +135,15 @@ class RequisitionSerializer(NetBoxModelSerializer):
         return value
 
     def validate(self, data):
+        if self.instance is None and "server" not in data:
+            servers = list(OpenNMSServer.objects.all()[:2])
+            if not servers:
+                message = "This field is required: no OpenNMS server exists yet."
+                raise serializers.ValidationError({"server": message})
+            if len(servers) > 1:
+                message = "This field is required when more than one server exists."
+                raise serializers.ValidationError({"server": message})
+            data["server"] = servers[0]
         data = super().validate(data)
         # Build a transient instance to reuse the resolver's filter guard (C1/H1).
         instance = self.instance or Requisition()

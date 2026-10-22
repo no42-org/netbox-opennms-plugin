@@ -42,6 +42,22 @@ class ObjectTypeChoices(ChoiceSet):
     ]
 
 
+class ServerOriginChoices(ChoiceSet):
+    """Where an OpenNMS server's connection details live.
+
+    A provisioned server is declared in ``PLUGINS_CONFIG`` and its credentials
+    stay there. A local server is created in the UI and stores them encrypted.
+    """
+
+    PROVISIONED = "provisioned"
+    LOCAL = "local"
+
+    CHOICES = [
+        (PROVISIONED, "Provisioned"),
+        (LOCAL, "Local"),
+    ]
+
+
 class DetectorPresetChoices(ChoiceSet):
     """Provisioning detector presets a Requisition can select (Epic 5).
 

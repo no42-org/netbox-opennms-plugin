@@ -14,6 +14,7 @@ from .models import (
     MonitoringDetector,
     MonitoringOverride,
     MonitoringPolicy,
+    OpenNMSServer,
     Requisition,
 )
 
@@ -47,6 +48,12 @@ def _crud(prefix, name, view_prefix, model, *, bulk_delete=True):
 
 
 urlpatterns = (
+    *_crud("servers", "opennmsserver", "OpenNMSServer", OpenNMSServer),
+    path(
+        "servers/<int:pk>/test/",
+        views.OpenNMSServerTestConnectionView.as_view(),
+        name="opennmsserver_test",
+    ),
     *_crud("requisitions", "requisition", "Requisition", Requisition),
     path(
         "requisitions/<int:pk>/sync/",
@@ -94,10 +101,5 @@ urlpatterns = (
         "sync/remove-object/",
         views.ObjectRemoveView.as_view(),
         name="object_remove",
-    ),
-    path(
-        "connection-test/",
-        views.OpenNMSConnectionTestView.as_view(),
-        name="connection_test",
     ),
 )

@@ -12,8 +12,9 @@ import logging
 from urllib.parse import quote
 
 import requests
-from netbox.plugins import get_plugin_config
 from requests.auth import HTTPBasicAuth
+
+import netbox_opennms.config as config
 
 from .discovery import parse_plugins
 from .errors import (
@@ -26,45 +27,72 @@ from .errors import (
 logger = logging.getLogger("netbox_opennms")
 
 DEFAULT_TIMEOUT = 10
-PLUGIN_NAME = "netbox_opennms"
 
 
 class OpenNMSClient:
     """Thin REST adapter for OpenNMS, behind a single port (AD-2)."""
 
     def __init__(
-        self, base_url, username, password, verify=True, timeout=DEFAULT_TIMEOUT
+        self,
+        base_url,
+        username,
+        password,
+        verify=True,
+        timeout=DEFAULT_TIMEOUT,
+        headers=None,
     ):
         self.base_url = (base_url or "").rstrip("/")
         self.verify = verify
         self.timeout = timeout
         self._session = requests.Session()
         self._session.auth = HTTPBasicAuth(username, password)
+        self._session.headers.update(headers or {})
 
     @classmethod
-    def from_config(cls):
-        """Build a client from PLUGINS_CONFIG (credentials never come from models)."""
-        base_url = get_plugin_config(PLUGIN_NAME, "opennms_url")
+    def for_server(cls, server):
+        """Build a client from an ``OpenNMSServer`` row.
+
+        Provisioned rows take the URL, credentials and headers from the
+        PLUGINS_CONFIG entry (the row's URL is only a display copy, so config
+        credentials never go to a stale or edited host); local rows take
+        everything from the (encrypted) row.
+        """
+        if server.is_provisioned:
+            entry = config.server_entry(server.name)
+            if entry is None:
+                raise OpenNMSError(
+                    f"Server {server.name!r} is provisioned but has no entry in "
+                    "PLUGINS_CONFIG['netbox_opennms']['servers']."
+                )
+            base_url = entry["url"]
+            username = entry["username"]
+            password = entry["password"]
+            headers = entry.get("headers")
+        else:
+            if not server.credentials_ok:
+                raise OpenNMSError(
+                    f"Stored credentials for server {server.name!r} cannot be "
+                    "decrypted (SECRET_KEY or credentials_key changed); "
+                    "re-enter them."
+                )
+            base_url = server.url
+            username = server.username
+            password = server.password
+            headers = server.headers
         if not base_url:
-            raise OpenNMSError(
-                "OpenNMS URL is not configured "
-                "(set PLUGINS_CONFIG['netbox_opennms']['opennms_url'])."
-            )
+            raise OpenNMSError(f"Server {server.name!r} has no URL.")
         if not base_url.startswith(("https://", "http://")):
             raise OpenNMSError("OpenNMS URL must start with https:// or http://.")
         if base_url.startswith("http://"):
             logger.warning(
                 "OpenNMS URL uses http:// — credentials are sent in cleartext; "
-                "use https:// (AD-13)."
+                "use https://."
             )
-        username = get_plugin_config(PLUGIN_NAME, "opennms_username")
-        password = get_plugin_config(PLUGIN_NAME, "opennms_password")
         if not username or not password:
-            raise OpenNMSError(
-                "OpenNMS credentials are not configured "
-                "(set opennms_username and opennms_password)."
-            )
-        return cls(base_url=base_url, username=username, password=password)
+            raise OpenNMSError(f"Server {server.name!r} has no credentials.")
+        return cls(
+            base_url=base_url, username=username, password=password, headers=headers
+        )
 
     def close(self):
         self._session.close()
@@ -101,9 +129,11 @@ class OpenNMSClient:
             detail = ""
             if isinstance(text, str) and text.strip():
                 detail = f" — {text.strip()[:500]}"
+            reason = getattr(response, "reason", "")
             raise OpenNMSHTTPError(
                 f"OpenNMS returned HTTP {response.status_code} for {path}.{detail}",
                 status_code=response.status_code,
+                reason=reason if isinstance(reason, str) else "",
             )
         return response
 
@@ -229,7 +259,7 @@ class OpenNMSClient:
     def import_requisition(self, foreign_source, rescan_existing="false"):
         """Activate the staged requisition (async — OpenNMS returns ``202``).
 
-        ``rescan_existing`` comes from ``import_mode`` config (AD-13). A ``202`` is
+        ``rescan_existing`` comes from the ``import_mode`` setting. A ``202`` is
         success here (accepted for import) — never read as "provisioned" (AD-12).
         """
         return self._request(

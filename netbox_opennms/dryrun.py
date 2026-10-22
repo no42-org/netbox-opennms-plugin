@@ -16,13 +16,10 @@ parsing is deliberately tolerant.
 
 from dataclasses import dataclass, field
 
-from netbox.plugins import get_plugin_config
-
 from .choices import InterfaceRoleChoices
 from .client import OpenNMSClient
 from .membership import resolve
-
-PLUGIN_NAME = "netbox_opennms"
+from .models import Requisition
 
 
 def _as_list(value, key=None):
@@ -242,11 +239,13 @@ def dry_run(foreign_source):
     conflict freeze is shown even when OpenNMS is unreachable (review #6) — and
     two live GETs are skipped when their result would be discarded anyway.
     """
-    default_location = get_plugin_config(PLUGIN_NAME, "default_location") or ""
+    requisition = Requisition.objects.select_related("server").get(name=foreign_source)
+    server = requisition.server
+    default_location = server.default_location or ""
     resolution = resolve(foreign_source)
     if resolution is not None and resolution.conflicts:
         return diff(resolution, None, None, default_location)
-    with OpenNMSClient.from_config() as client:
+    with OpenNMSClient.for_server(server) as client:
         current_requisition = client.get_requisition(foreign_source)
         current_definition = client.get_foreign_source(foreign_source)
     return diff(resolution, current_requisition, current_definition, default_location)

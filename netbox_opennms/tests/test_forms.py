@@ -16,12 +16,24 @@ from django.test import TestCase
 from extras.models import SavedFilter
 from ipam.models import IPAddress
 
-from netbox_opennms.forms import MonitoringOverrideForm, RequisitionForm
+from netbox_opennms.catalog import get_detector_catalog
+from netbox_opennms.client import DiscoveredParam, DiscoveredPlugin
+from netbox_opennms.forms import (
+    MonitoringDetectorForm,
+    MonitoringOverrideForm,
+    RequisitionForm,
+    _server_for_rule_form,
+)
 from netbox_opennms.models import (
     MonitoredInterface,
     MonitoredService,
+    MonitoringDetector,
     MonitoringOverride,
+    Requisition,
 )
+from netbox_opennms.presets import DETECTOR_PRESETS
+from netbox_opennms.tests.servers import make_server
+from netbox_opennms.tests.test_catalog import FakeClient
 
 
 class MonitoringOverrideFormTest(TestCase):
@@ -52,9 +64,14 @@ class MonitoringOverrideFormTest(TestCase):
 
 
 class RequisitionSavedFilterImportTest(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.server = make_server()
+
     def _form(self, **overrides):
         data = {
             "name": "core-switches",
+            "server": self.server.pk,
             "object_types": "device",
             "filter_params": "{}",
             "scan_interval": "1d",
@@ -181,3 +198,75 @@ class InterfaceServicePruneTest(TestCase):
                 override=self.override, ip_address=self.ip_a
             ).exists()
         )
+
+ICMP_CLASS = DETECTOR_PRESETS["icmp"]["class"]
+
+
+class DetectorFormServerTest(TestCase):
+    def setUp(self):
+        from django.core.cache import cache
+
+        cache.clear()
+        self.addCleanup(cache.clear)
+
+    def _prime(self):
+        a, b = make_server("a"), make_server("b")
+        for server, key in ((a, "pA"), (b, "pB")):
+            plugin = DiscoveredPlugin(
+                name="ICMP",
+                plugin_class=ICMP_CLASS,
+                parameters=(DiscoveredParam(key=key),),
+            )
+            get_detector_catalog(server, client=FakeClient(detectors=[plugin]))
+        req = Requisition.objects.create(
+            server=b, name="r-b", filter_params={"role": ["switch"]}
+        )
+        return a, b, req
+
+    def test_instance_path_uses_requisition_server(self):
+        _a, _b, req = self._prime()
+        det = MonitoringDetector.objects.create(
+            requisition=req, name="icmp", preset="icmp"
+        )
+        form = MonitoringDetectorForm(instance=det)
+        self.assertIn("param_pB", form.fields)
+        self.assertNotIn("param_pA", form.fields)
+
+    def test_data_path_uses_requisition_server(self):
+        _a, b, req = self._prime()
+        form = MonitoringDetectorForm(data={"requisition": str(req.pk)})
+        self.assertEqual(_server_for_rule_form(form), b)
+
+    def test_invalid_pk_resolves_no_server(self):
+        self._prime()
+        for bad in ("abc", "999999", ""):
+            form = MonitoringDetectorForm(data={"requisition": bad})
+            self.assertIsNone(_server_for_rule_form(form))
+
+    def test_no_server_falls_back_to_overlay(self):
+        det = MonitoringDetector(name="icmp", preset="icmp")
+        form = MonitoringDetectorForm(instance=det)
+        self.assertIn("param_timeout", form.fields)
+        self.assertIn("unavailable", str(form.fields["rule_class"].help_text))
+
+    def test_asset_form_uses_requisition_server(self):
+        a, b, req = self._prime()
+        from netbox_opennms.catalog import get_asset_fields
+        from netbox_opennms.forms import AssetMappingForm
+
+        get_asset_fields(a, client=FakeClient(assets=["fromA"]))
+        get_asset_fields(b, client=FakeClient(assets=["fromB"]))
+        form = AssetMappingForm(initial={"requisition": req.pk})
+        values = [v for v, _l in form.fields["asset_field"].choices]
+        self.assertEqual(values, ["fromB"])
+
+
+class RequisitionFormServerTest(TestCase):
+    def test_single_server_is_preselected(self):
+        server = make_server()
+        self.assertEqual(RequisitionForm().fields["server"].initial, server.pk)
+
+    def test_two_servers_no_preselection(self):
+        make_server("a")
+        make_server("b")
+        self.assertIsNone(RequisitionForm().fields["server"].initial)

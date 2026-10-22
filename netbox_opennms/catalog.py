@@ -27,11 +27,14 @@ from .presets import DETECTOR_PRESETS, POLICY_PRESETS
 CACHE_TTL = 300  # seconds — short; refreshed on demand and at Sync
 # A degraded (overlay-only) result is cached briefly so a configured-but-down
 # OpenNMS doesn't re-block every form render on the client timeout; it still
-# recovers within this window (and `refresh_catalogs()` clears it at Sync).
+# recovers within this window (or sooner via `refresh_catalogs(server)`).
 DEGRADED_CACHE_TTL = 30
-_DETECTOR_CACHE_KEY = "netbox_opennms:catalog:detectors"
-_POLICY_CACHE_KEY = "netbox_opennms:catalog:policies"
-_ASSET_CACHE_KEY = "netbox_opennms:catalog:assets"
+_KINDS = ("detectors", "policies", "assets")
+
+
+def _cache_key(kind, server):
+    """The per-server cache key for a catalog ``kind``."""
+    return f"netbox_opennms:catalog:{kind}:{server.pk}"
 
 # The OpenNMS node asset-field set (RD-2) — the offline fallback for
 # get_asset_fields() and the validation floor. This is the live Horizon 36
@@ -97,35 +100,35 @@ class Catalog:
         return None
 
 
-def get_detector_catalog(client=None, force_refresh=False):
+def get_detector_catalog(server, client=None, force_refresh=False):
     """The merged detector catalog (cached; degrades to the overlay when offline)."""
     return _get_catalog(
-        _DETECTOR_CACHE_KEY, DETECTOR_PRESETS, "list_detectors", client, force_refresh
+        server, "detectors", DETECTOR_PRESETS, "list_detectors", client, force_refresh
     )
 
 
-def get_policy_catalog(client=None, force_refresh=False):
+def get_policy_catalog(server, client=None, force_refresh=False):
     """The merged policy catalog (cached; degrades to the overlay when offline)."""
     return _get_catalog(
-        _POLICY_CACHE_KEY, POLICY_PRESETS, "list_policies", client, force_refresh
+        server, "policies", POLICY_PRESETS, "list_policies", client, force_refresh
     )
 
 
-def get_asset_fields(client=None, force_refresh=False):
+def get_asset_fields(server, client=None, force_refresh=False):
     """Valid OpenNMS asset field names — discovered, with ``ASSET_FIELDS`` fallback."""
     if not force_refresh:
-        cached = cache.get(_ASSET_CACHE_KEY)
+        cached = cache.get(_cache_key("assets", server))
         if cached is not None:
             return cached
     created = None
     try:
         if client is None:
-            client = created = OpenNMSClient.from_config()
+            client = created = OpenNMSClient.for_server(server)
     except OpenNMSError:
         return ASSET_FIELDS
     try:
         fields = client.list_assets() or ASSET_FIELDS
-        cache.set(_ASSET_CACHE_KEY, fields, CACHE_TTL)
+        cache.set(_cache_key("assets", server), fields, CACHE_TTL)
         return fields
     except OpenNMSError:
         return ASSET_FIELDS
@@ -137,17 +140,23 @@ def get_asset_fields(client=None, force_refresh=False):
                 pass
 
 
-def refresh_catalogs():
-    """Drop the cached catalogs so the next read re-discovers (on demand / at Sync)."""
-    cache.delete_many([_DETECTOR_CACHE_KEY, _POLICY_CACHE_KEY, _ASSET_CACHE_KEY])
+def refresh_catalogs(server):
+    """Drop a server's cached catalogs so the next read re-discovers."""
+    cache.delete_many([_cache_key(kind, server) for kind in _KINDS])
 
 
-def _get_catalog(cache_key, presets, method_name, client, force_refresh):
+def overlay_catalog(presets):
+    """An overlay-only catalog, for when no server is known."""
+    return Catalog(entries=_merge([], presets), live_unavailable=True)
+
+
+def _get_catalog(server, kind, presets, method_name, client, force_refresh):
+    cache_key = _cache_key(kind, server)
     if not force_refresh:
         cached = cache.get(cache_key)
         if cached is not None:
             return cached
-    discovered, live_unavailable = _discover(method_name, client)
+    discovered, live_unavailable = _discover(server, method_name, client)
     catalog = Catalog(
         entries=_merge(discovered, presets), live_unavailable=live_unavailable
     )
@@ -158,12 +167,12 @@ def _get_catalog(cache_key, presets, method_name, client, force_refresh):
     return catalog
 
 
-def _discover(method_name, client):
+def _discover(server, method_name, client):
     """Fetch discovered plugins; ``([], True)`` when OpenNMS can't be reached."""
     created = None
     try:
         if client is None:
-            client = created = OpenNMSClient.from_config()
+            client = created = OpenNMSClient.for_server(server)
     except OpenNMSError:
         return [], True
     try:

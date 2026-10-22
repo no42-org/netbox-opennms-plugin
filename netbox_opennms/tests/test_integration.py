@@ -29,8 +29,7 @@ the reconciler removes only the Foreign Source whose Requisition was deleted.
 import copy
 import os
 import time
-import unittest
-from unittest import mock
+from unittest import mock, skipUnless
 from urllib.parse import quote
 
 import requests
@@ -112,7 +111,7 @@ def delete_live_foreign_source(name):
             pass
 
 
-@unittest.skipUnless(
+@skipUnless(
     LIVE_URL, "set OPENNMS_LIVE_URL to run the live OpenNMS round-trip"
 )
 class OpenNMSRoundTripTest(TestCase):
@@ -360,7 +359,7 @@ class OpenNMSRoundTripTest(TestCase):
                 client.post_requisition(b"<not-a-requisition/>")
 
 
-@unittest.skipUnless(
+@skipUnless(
     LIVE_URL, "set OPENNMS_LIVE_URL to run the live OpenNMS round-trip"
 )
 class MultiServerRoundTripTest(TestCase):

@@ -2,8 +2,7 @@
 # SPDX-License-Identifier: MIT
 """REST API tests for the plugin models."""
 
-import unittest
-from unittest import mock
+from unittest import mock, skip
 
 from core.models import ObjectType
 from dcim.models import (
@@ -46,15 +45,15 @@ class _NoGraphQL:
 
     graphql_auto_filter_required = False
 
-    @unittest.skip("GraphQL not implemented yet (deferred)")
+    @skip("GraphQL not implemented yet (deferred)")
     def test_graphql_get_object(self):
         pass
 
-    @unittest.skip("GraphQL not implemented yet (deferred)")
+    @skip("GraphQL not implemented yet (deferred)")
     def test_graphql_list_objects(self):
         pass
 
-    @unittest.skip("GraphQL not implemented yet (deferred)")
+    @skip("GraphQL not implemented yet (deferred)")
     def test_graphql_filter_objects(self):
         pass
 

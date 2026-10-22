@@ -141,7 +141,7 @@ class SyncViewTest(TestCase):
         self.assertTrue(self._override(self.device).exclude)
         enqueued = sorted(c.args[0] for c in mock_enqueue.call_args_list)
         self.assertEqual(enqueued, [FS, "overlap"])
-        self.assertEqual(sync_status_for(self.device)["conflicts"], [])
+        self.assertEqual(sync_status_for(self.device)[0]["conflicts"], [])
 
     @mock.patch("netbox_opennms.views.SyncForeignSourceJob.enqueue_sync")
     def test_remove_virtual_machine(self, mock_enqueue):

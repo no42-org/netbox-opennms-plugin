@@ -15,22 +15,32 @@ PANEL = "netbox_opennms/inc/sync_status_panel.html"
 
 
 class _SyncStatusPanel(PluginTemplateExtension):
-    """Render the last-sync panel for a monitored object, or nothing if unmonitored."""
+    """Render the per-server last-sync panel, or nothing if unmonitored."""
 
     def right_page(self):
         # Self-guard: an observability panel must never break the host object's
         # detail page, so degrade to nothing on any unexpected error.
         try:
             obj = self.context["object"]
-            status = sync_status_for(obj)
+            rows = sync_status_for(obj)
             # Show the panel when the object is monitored, has sync history, or is
-            # CONFLICTED (the conflict must be visible where the operator looks —
-            # C1); an unmonitored object gets nothing.
-            if status is None or not (
-                status["governed"] or status["job"] or status["conflicts"]
+            # CONFLICTED on any server (the conflict must be visible where the
+            # operator looks — C1); an unmonitored object gets nothing.
+            if not rows or not any(
+                row["governed"] or row["job"] or row["conflicts"] for row in rows
             ):
                 return ""
-            return self.render(PANEL, extra_context={"sync_status": status})
+            return self.render(
+                PANEL,
+                extra_context={
+                    "sync_status_rows": rows,
+                    # One node-level Remove per panel: it excludes the object on
+                    # every server (spec decision 13).
+                    "sync_status_removable": any(
+                        row["governed"] or row["conflicts"] for row in rows
+                    ),
+                },
+            )
         except Exception:
             return ""
 

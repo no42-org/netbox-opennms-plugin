@@ -313,14 +313,17 @@ def sync_outcome(job, is_removal=False, governed=True):
 
 
 def sync_status_for(target):
-    """Last-sync state for a Device/VM — the single source the Device/VM template
-    extension renders (Story 4.2).
+    """Last-sync state for a Device/VM, one row per OpenNMS server — the single
+    source the Device/VM template extension renders (Story 4.2).
 
-    Finds every Requisition whose filter matches the object: exactly one =
-    governed by it; several = **conflicted** between them (C1 — the panel names
-    the parties); none = unmonitored. Also reports whether an override excludes
-    it, and attaches the latest Job for the governing Foreign Source. Returns
-    ``None`` for a missing or non-Device/VM target.
+    Groups every Requisition whose filter matches the object by its server. Per
+    server: exactly one match = governed by it; several = **conflicted** between
+    them (C1, per server — the panel names the parties). Each row also reports
+    whether an override excludes the object and attaches the latest Job for that
+    server's matching Foreign Sources. Rows are ordered by server name; a server
+    appears only while it has a current match (sync history without a match is
+    not looked up). Returns ``[]`` for an unmatched object and ``None`` for a
+    missing or non-Device/VM target.
     """
     if target is None or not isinstance(target, (Device, VirtualMachine)):
         return None
@@ -328,17 +331,16 @@ def sync_status_for(target):
     # keeps the Foreign Source + last-sync Job (review #9); `governed` (actively
     # monitored) then excludes the excluded ones. An excluded object never
     # conflicts (C3) — its first match is shown as the (inactive) requisition.
-    matches = matching_requisitions(target)
+    groups = {}
+    for requisition in matching_requisitions(target):
+        groups.setdefault(requisition.server_id, []).append(requisition)
+    if not groups:
+        return []
     content_type = ContentType.objects.get_for_model(type(target))
     override = MonitoringOverride.objects.filter(
         assigned_object_type=content_type, assigned_object_id=target.pk
     ).first()
     excluded = bool(override and override.exclude)
-    conflicted = len(matches) >= 2 and not excluded
-    requisition = None
-    if matches and (len(matches) == 1 or excluded):
-        requisition = matches[0]
-    governed = requisition is not None and not excluded and not conflicted
     # RD-6/h: a governed object with no management IP provisions as an interface-less
     # (inventory-only) node — surface it as a Warning on the panel (not blocking).
     management = None
@@ -346,29 +348,38 @@ def sync_status_for(target):
         management = override.management_ip
     if management is None:
         management = getattr(target, "primary_ip", None)
-    warning_no_management_ip = governed and management is None
-    foreign_source = requisition.name if requisition is not None else None
-    # Look up the last sync across EVERY matching Foreign Source (reviews #3/#9):
-    # a conflicted/excluded multi-match object's node and Job history live under
-    # whichever requisition actually synced it — the panel must keep them.
-    targets = [(r.name, r.server_id) for r in matches]
-    job = latest_sync_job(targets) if targets else None
-    is_removal = bool(job) and job.name.endswith(" (remove)")
-    # For the OUTCOME label a conflicted object still counts as governed: its
-    # node is frozen-in-place, not removed — labelling a completed sync
-    # "removed" would contradict the C1 freeze contract (review #2).
-    return {
-        "foreign_source": foreign_source,
-        "requisition": requisition,
-        "governed": governed,
-        "excluded": excluded,
-        "warning_no_management_ip": warning_no_management_ip,
-        "conflicts": sorted(r.name for r in matches) if conflicted else [],
-        "job": job,
-        "outcome": sync_outcome(
-            job, is_removal=is_removal, governed=governed or conflicted
-        ),
-    }
+    rows = []
+    for server in OpenNMSServer.objects.filter(pk__in=groups).order_by("name"):
+        matches = groups[server.pk]
+        conflicted = len(matches) >= 2 and not excluded
+        requisition = None
+        if len(matches) == 1 or excluded:
+            requisition = matches[0]
+        governed = requisition is not None and not excluded and not conflicted
+        # Look up the last sync across EVERY matching Foreign Source on this server
+        # (reviews #3/#9): a conflicted/excluded multi-match object's node and Job
+        # history live under whichever requisition actually synced it.
+        job = latest_sync_job([(r.name, server.pk) for r in matches])
+        is_removal = bool(job) and job.name.endswith(" (remove)")
+        # For the OUTCOME label a conflicted object still counts as governed: its
+        # node is frozen-in-place, not removed — labelling a completed sync
+        # "removed" would contradict the C1 freeze contract (review #2).
+        rows.append(
+            {
+                "server": server,
+                "foreign_source": requisition.name if requisition else None,
+                "requisition": requisition,
+                "governed": governed,
+                "excluded": excluded,
+                "warning_no_management_ip": governed and management is None,
+                "conflicts": sorted(r.name for r in matches) if conflicted else [],
+                "job": job,
+                "outcome": sync_outcome(
+                    job, is_removal=is_removal, governed=governed or conflicted
+                ),
+            }
+        )
+    return rows
 
 
 def orphaned_foreign_sources(client, server):

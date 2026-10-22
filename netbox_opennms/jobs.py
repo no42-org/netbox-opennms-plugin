@@ -83,16 +83,19 @@ class SyncForeignSourceJob(JobRunner):
         name = "OpenNMS sync"
 
     @classmethod
-    def job_name(cls, foreign_source, allow_empty=False):
-        """The Job ``name`` for a Foreign Source (the single owner of the format).
+    def job_name(cls, foreign_source, server_id, allow_empty=False):
+        """The Job ``name`` for a Foreign Source on one server (owns the format).
 
         Shared by ``enqueue_sync`` (write) and ``latest_sync_job`` (read), so the
         observability lookup always matches what was enqueued. ``Job.name`` is
         max_length=200; the ``(remove)`` marker is budgeted INTO the cap so a long
-        Foreign Source can't truncate it away (Story 3.1).
+        Foreign Source can't truncate it away (Story 3.1). The server id makes
+        coalescing per server: a pending Sync to one server never swallows a
+        Sync of the same Foreign Source to another.
         """
         suffix = " (remove)" if allow_empty else ""
-        return f"{cls.name}: {foreign_source}"[: 200 - len(suffix)] + suffix
+        base = f"{cls.name}: {foreign_source} @{server_id}"
+        return base[: 200 - len(suffix)] + suffix
 
     @classmethod
     def enqueue_sync(cls, foreign_source, server_id, user=None, allow_empty=False):
@@ -103,7 +106,7 @@ class SyncForeignSourceJob(JobRunner):
         (allow_empty) from coalescing into a pending Sync that would refuse the
         empty requisition (Story 3.1).
         """
-        job_name = cls.job_name(foreign_source, allow_empty=allow_empty)
+        job_name = cls.job_name(foreign_source, server_id, allow_empty=allow_empty)
         existing = Job.objects.filter(
             name=job_name,
             status__in=JobStatusChoices.ENQUEUED_STATE_CHOICES,
@@ -131,7 +134,9 @@ class SyncForeignSourceJob(JobRunner):
             try:
                 validate_location_name(default_location)
             except ValueError as exc:
-                self.logger.error(f"Configured default_location is invalid: {exc}")
+                self.logger.error(
+                    f"default_location of server {server.name!r} is invalid: {exc}"
+                )
                 raise JobFailed() from exc
         rescan = str(get_plugin_config(PLUGIN_NAME, "import_mode")).strip().lower()
         if rescan not in ("true", "false", "dbonly"):
@@ -268,19 +273,21 @@ class SyncForeignSourceJob(JobRunner):
         return True
 
 
-def latest_sync_job(foreign_sources):
-    """The most recent sync/remove ``Job`` across one or more Foreign Sources.
+def latest_sync_job(targets):
+    """The most recent sync/remove ``Job`` across ``(foreign_source, server_id)`` pairs.
 
     The Job is the audit record (user, timestamps, status, log, error). Matches
     both the sync and remove name forms via the shared ``job_name`` so the lookup
     can never drift from what ``enqueue_sync`` wrote. ``None`` if none found.
     """
-    if isinstance(foreign_sources, str):
-        foreign_sources = [foreign_sources]
     names = []
-    for foreign_source in foreign_sources:
-        names.append(SyncForeignSourceJob.job_name(foreign_source))
-        names.append(SyncForeignSourceJob.job_name(foreign_source, allow_empty=True))
+    for foreign_source, server_id in targets:
+        for allow_empty in (False, True):
+            names.append(
+                SyncForeignSourceJob.job_name(
+                    foreign_source, server_id, allow_empty=allow_empty
+                )
+            )
     if not names:
         return None
     return Job.objects.filter(name__in=names).order_by("-created").first()
@@ -344,8 +351,8 @@ def sync_status_for(target):
     # Look up the last sync across EVERY matching Foreign Source (reviews #3/#9):
     # a conflicted/excluded multi-match object's node and Job history live under
     # whichever requisition actually synced it — the panel must keep them.
-    names = [r.name for r in matches]
-    job = latest_sync_job(names) if names else None
+    targets = [(r.name, r.server_id) for r in matches]
+    job = latest_sync_job(targets) if targets else None
     is_removal = bool(job) and job.name.endswith(" (remove)")
     # For the OUTCOME label a conflicted object still counts as governed: its
     # node is frozen-in-place, not removed — labelling a completed sync

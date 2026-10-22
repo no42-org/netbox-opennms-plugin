@@ -183,7 +183,10 @@ class SyncForeignSourceJobTest(TestCase):
         job1 = SyncForeignSourceJob.enqueue_sync(FS, self.server.pk)
         job2 = SyncForeignSourceJob.enqueue_sync(FS, self.server.pk)
         self.assertEqual(job1.pk, job2.pk)
-        self.assertEqual(Job.objects.filter(name=f"OpenNMS sync: {FS}").count(), 1)
+        self.assertEqual(
+            Job.objects.filter(name=f"OpenNMS sync: {FS} @{self.server.pk}").count(),
+            1,
+        )
 
     @mock.patch("netbox_opennms.jobs.advisory_lock")
     @mock.patch("netbox_opennms.jobs.OpenNMSClient.for_server")
@@ -520,6 +523,25 @@ class MultiServerJobTest(TestCase):
         SyncForeignSourceJob.enqueue_sync("a", self.a.pk)
         self.assertEqual(mock_enqueue.call_args.kwargs["server_id"], self.a.pk)
 
+    def test_pending_sync_does_not_swallow_other_server(self):
+        # After a move, a Sync to the new server must not coalesce into the
+        # pending Sync to the old one.
+        first = SyncForeignSourceJob.enqueue_sync("a", self.a.pk)
+        second = SyncForeignSourceJob.enqueue_sync("a", self.b.pk)
+        self.assertNotEqual(first.pk, second.pk)
+        self.assertEqual(Job.objects.count(), 2)
+        # The same server still coalesces.
+        self.assertEqual(SyncForeignSourceJob.enqueue_sync("a", self.a.pk), first)
+
+    def test_job_name_carries_server(self):
+        self.assertEqual(
+            SyncForeignSourceJob.job_name("a", self.a.pk),
+            f"OpenNMS sync: a @{self.a.pk}",
+        )
+        removal = SyncForeignSourceJob.job_name("x" * 300, self.a.pk, allow_empty=True)
+        self.assertTrue(removal.endswith(" (remove)"))
+        self.assertLessEqual(len(removal), 200)
+
     def test_orphans_are_per_server(self):
         DeployedForeignSource.objects.create(server=self.a, name="gone")
         DeployedForeignSource.objects.create(server=self.b, name="gone")
@@ -546,6 +568,7 @@ class MultiServerJobTest(TestCase):
         # The reconciler's Remove for a moved Requisition's old copy must push
         # an empty requisition to the old server, not re-push the live one.
         DeployedForeignSource.objects.create(server=self.a, name="a")
+        DeployedForeignSource.objects.create(server=self.b, name="a")
         self.r_a.server = self.b
         self.r_a.save()
         client = mock_for_server.return_value.__enter__.return_value
@@ -557,6 +580,9 @@ class MultiServerJobTest(TestCase):
         client.delete_requisition.assert_called_once_with("a")
         self.assertFalse(
             DeployedForeignSource.objects.filter(server=self.a, name="a").exists()
+        )
+        self.assertTrue(
+            DeployedForeignSource.objects.filter(server=self.b, name="a").exists()
         )
 
     @mock.patch("netbox_opennms.jobs.SyncForeignSourceJob.enqueue_sync")

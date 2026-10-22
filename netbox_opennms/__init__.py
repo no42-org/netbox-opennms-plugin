@@ -13,9 +13,10 @@ __version__ = "0.0.14"
 class NetBoxOpenNMSConfig(PluginConfig):
     """Plugin configuration for netbox-opennms-plugin.
 
-    Declares NetBox compatibility and the connection configuration surface
-    (``PLUGINS_CONFIG``). Credentials are read at runtime via
-    ``get_plugin_config`` and are never stored in plugin models (AD-13).
+    Declares NetBox compatibility and the configuration surface
+    (``PLUGINS_CONFIG``). Provisioned servers read credentials from
+    PLUGINS_CONFIG at runtime. Local servers store them Fernet-encrypted in
+    ``OpenNMSServer``; the key never lives in the database (AD-13).
     """
 
     name = "netbox_opennms"
@@ -37,8 +38,8 @@ class NetBoxOpenNMSConfig(PluginConfig):
     # release (Story 4.4). Do not pin Django independently; NetBox bundles it.
 
     # Connection surface consumed by the OpenNMS REST client (Story 1.4).
-    # Override these in NetBox's PLUGINS_CONFIG. Secrets belong here / in a
-    # secrets backend, never in plugin models. The flat opennms_* keys and
+    # Override these in NetBox's PLUGINS_CONFIG. Provisioned server secrets
+    # belong here or in a secrets backend. The flat opennms_* keys and
     # default_location are the single-server shorthand for servers["default"];
     # "servers" maps a name to {url, username, password, default_location,
     # headers}. credentials_key seeds encryption of credentials stored in models.

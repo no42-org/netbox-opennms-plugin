@@ -43,7 +43,7 @@ def _assign_server(apps, schema_editor):
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('extras', '0144_customfield_status'),
+        ('extras', '0140_imageattachment_image_size'),
         ('netbox_opennms', '0006_assetmapping_metadataentry'),
     ]
 

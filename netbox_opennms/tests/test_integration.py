@@ -20,11 +20,17 @@ against a real Horizon:
   back asserting each preset's class survived. Catches a malformed/garbled class
   string or XSD-invalid parameter shape for the whole registry.
 * ``test_malformed_requisition_is_rejected`` — XSD enforcement still holds.
+
+``MultiServerRoundTripTest`` points one provisioned and one local server at the
+same Horizon, syncs a Requisition to each through the real jobs, and checks that
+the reconciler removes only the Foreign Source whose Requisition was deleted.
 """
 
+import copy
 import os
 import time
 import unittest
+from unittest import mock
 from urllib.parse import quote
 
 import requests
@@ -36,18 +42,22 @@ from dcim.models import (
     Manufacturer,
     Site,
 )
-from django.test import TestCase
+from django.conf import settings
+from django.test import TestCase, override_settings
 from ipam.models import IPAddress
 from requests.auth import HTTPBasicAuth
 
+from netbox_opennms.choices import ServerOriginChoices
 from netbox_opennms.client import OpenNMSClient, OpenNMSHTTPError
 from netbox_opennms.derivation import foreign_id_for
+from netbox_opennms.jobs import ReconcileOrphansJob, SyncForeignSourceJob
 from netbox_opennms.membership import resolve
 from netbox_opennms.models import (
     AssetMapping,
     MetadataEntry,
     MonitoringDetector,
     MonitoringPolicy,
+    OpenNMSServer,
     Requisition,
 )
 from netbox_opennms.presets import (
@@ -58,6 +68,7 @@ from netbox_opennms.presets import (
     resolve_detector,
     resolve_policy,
 )
+from netbox_opennms.provisioning import reconcile_provisioned_servers
 from netbox_opennms.tests.servers import make_server
 from netbox_opennms.translation import (
     render_foreign_source_definition,
@@ -71,6 +82,34 @@ FS = "netbox.citest.router"
 LOCATION = "Default"
 # Reachable BY the OpenNMS instance itself, so the ICMP detector can detect.
 REACHABLE_IP = "127.0.0.1"
+FS_PROV = "netbox.citest.multi.prov"
+FS_LOCAL = "netbox.citest.multi.local"
+
+
+def delete_live_foreign_source(name):
+    """Best-effort delete of one Foreign Source on the live instance."""
+    encoded = quote(name, safe="")
+    # Delete the DEPLOYED requisition before the pending one (mirrors the
+    # production client.delete_requisition order). GET /rest/requisitions
+    # unmarshals every deployed file on disk, so a deployed copy left behind
+    # by a prior test would 500 the whole list — these tests share one FS on
+    # a shared instance, so each must clean up its deployed copy too.
+    paths = (
+        f"/rest/requisitions/deployed/{encoded}",
+        f"/rest/requisitions/{encoded}",
+        f"/rest/foreignSources/{encoded}",
+    )
+    for path in paths:
+        try:
+            requests.delete(
+                f"{LIVE_URL.rstrip('/')}{path}",
+                auth=HTTPBasicAuth(LIVE_USER, LIVE_PASSWORD),
+                timeout=10,
+            )
+        except requests.RequestException:
+            # Best-effort cleanup: a leftover copy surfaces as a test
+            # failure later, not here.
+            pass
 
 
 @unittest.skipUnless(
@@ -95,26 +134,7 @@ class OpenNMSRoundTripTest(TestCase):
         )
 
     def _delete_foreign_source(self):
-        encoded = quote(FS, safe="")
-        # Delete the DEPLOYED requisition before the pending one (mirrors the
-        # production client.delete_requisition order). GET /rest/requisitions
-        # unmarshals every deployed file on disk, so a deployed copy left behind
-        # by a prior test would 500 the whole list — these tests share one FS on
-        # a shared instance, so each must clean up its deployed copy too.
-        paths = (
-            f"/rest/requisitions/deployed/{encoded}",
-            f"/rest/requisitions/{encoded}",
-            f"/rest/foreignSources/{encoded}",
-        )
-        for path in paths:
-            try:
-                requests.delete(
-                    f"{LIVE_URL.rstrip('/')}{path}", auth=self._auth(), timeout=10
-                )
-            except requests.RequestException:
-                # Best-effort cleanup: a leftover copy surfaces as a test
-                # failure later, not here.
-                pass
+        delete_live_foreign_source(FS)
 
     def _requisition_with_icmp(self):
         requisition = Requisition.objects.create(
@@ -338,3 +358,115 @@ class OpenNMSRoundTripTest(TestCase):
         with self.assertRaises(OpenNMSHTTPError):
             with self._client() as client:
                 client.post_requisition(b"<not-a-requisition/>")
+
+
+@unittest.skipUnless(
+    LIVE_URL, "set OPENNMS_LIVE_URL to run the live OpenNMS round-trip"
+)
+class MultiServerRoundTripTest(TestCase):
+    """A provisioned and a local server, both pointing at the live Horizon."""
+
+    def setUp(self):
+        # get_plugin_config reads settings.PLUGINS_CONFIG at call time, so the
+        # override reaches reconcile_provisioned_servers and for_server. Copy the
+        # live config so the plugin defaults (import_mode, ...) stay in place.
+        plugins_config = copy.deepcopy(settings.PLUGINS_CONFIG)
+        plugins_config.setdefault("netbox_opennms", {})["servers"] = {
+            "live-prov": {
+                "url": LIVE_URL,
+                "username": LIVE_USER,
+                "password": LIVE_PASSWORD,
+            }
+        }
+        override = override_settings(PLUGINS_CONFIG=plugins_config)
+        override.enable()
+        self.addCleanup(override.disable)
+        for name in (FS_PROV, FS_LOCAL):
+            self.addCleanup(delete_live_foreign_source, name)
+
+        (self.prov,) = reconcile_provisioned_servers()
+        self.local = OpenNMSServer.objects.create(
+            name="live-local",
+            origin=ServerOriginChoices.LOCAL,
+            url=LIVE_URL,
+            username=LIVE_USER,
+            password=LIVE_PASSWORD,
+        )
+        site = Site.objects.create(name="CI Multi", slug="cimulti")
+        mfr = Manufacturer.objects.create(name="Acme", slug="acme")
+        dt = DeviceType.objects.create(manufacturer=mfr, model="M1", slug="m1")
+        for index, slug in enumerate(("router", "switch"), start=1):
+            role = DeviceRole.objects.create(name=slug.title(), slug=slug)
+            device = Device.objects.create(
+                name=f"ci-{slug}-1", device_type=dt, role=role, site=site
+            )
+            iface = Interface.objects.create(
+                device=device, name="eth0", type="virtual"
+            )
+            ip = IPAddress.objects.create(
+                address=f"127.0.0.{index}/32", assigned_object=iface
+            )
+            device.primary_ip4 = ip
+            device.save()
+        Requisition.objects.create(
+            server=self.prov,
+            name=FS_PROV,
+            filter_params={"site": ["cimulti"], "role": ["router"]},
+            location=LOCATION,
+        )
+        self.req_local = Requisition.objects.create(
+            server=self.local,
+            name=FS_LOCAL,
+            filter_params={"site": ["cimulti"], "role": ["switch"]},
+            location=LOCATION,
+        )
+
+    def _poll_listed(self, server, expected):
+        """Poll until each name in ``expected`` is listed (True) or absent (False).
+
+        Import is async and GET /rest/requisitions transiently 500s while
+        provisiond writes a deployed file, so retry instead of asserting once.
+        """
+        for _ in range(30):
+            try:
+                with OpenNMSClient.for_server(server) as client:
+                    names = set(client.list_requisition_names())
+            except OpenNMSHTTPError:
+                names = None
+            if names is not None and all(
+                (name in names) == present for name, present in expected.items()
+            ):
+                return True
+            time.sleep(2)
+        return False
+
+    def _sync(self, foreign_source, server, allow_empty=False):
+        SyncForeignSourceJob(job=mock.Mock()).run(
+            foreign_source=foreign_source,
+            server_id=server.pk,
+            allow_empty=allow_empty,
+        )
+
+    def test_sync_two_servers_and_reconcile_one_orphan(self):
+        self.assertEqual(self.prov.origin, ServerOriginChoices.PROVISIONED)
+        self._sync(FS_PROV, self.prov)
+        self._sync(FS_LOCAL, self.local)
+        for server in (self.prov, self.local):
+            self.assertTrue(
+                self._poll_listed(server, {FS_PROV: True, FS_LOCAL: True}),
+                f"both Foreign Sources not listed via {server.name}",
+            )
+
+        self.req_local.delete()
+        with mock.patch.object(SyncForeignSourceJob, "enqueue_sync") as enqueue:
+            ReconcileOrphansJob(job=mock.Mock()).run()
+        enqueue.assert_called_once_with(
+            FS_LOCAL, server_id=self.local.pk, allow_empty=True
+        )
+
+        # Run the Remove the reconciler would have enqueued.
+        self._sync(FS_LOCAL, self.local, allow_empty=True)
+        self.assertTrue(
+            self._poll_listed(self.local, {FS_PROV: True, FS_LOCAL: False}),
+            "only the orphaned Foreign Source should be gone",
+        )

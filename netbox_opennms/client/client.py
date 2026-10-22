@@ -83,7 +83,7 @@ class OpenNMSClient:
         if base_url.startswith("http://"):
             logger.warning(
                 "OpenNMS URL uses http:// — credentials are sent in cleartext; "
-                "use https:// (AD-13)."
+                "use https://."
             )
         if not username or not password:
             raise OpenNMSError(f"Server {server.name!r} has no credentials.")
@@ -254,7 +254,7 @@ class OpenNMSClient:
     def import_requisition(self, foreign_source, rescan_existing="false"):
         """Activate the staged requisition (async — OpenNMS returns ``202``).
 
-        ``rescan_existing`` comes from ``import_mode`` config (AD-13). A ``202`` is
+        ``rescan_existing`` comes from the ``import_mode`` setting. A ``202`` is
         success here (accepted for import) — never read as "provisioned" (AD-12).
         """
         return self._request(

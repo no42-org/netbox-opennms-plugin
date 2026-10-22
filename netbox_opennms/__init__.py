@@ -38,8 +38,13 @@ class NetBoxOpenNMSConfig(PluginConfig):
 
     # Connection surface consumed by the OpenNMS REST client (Story 1.4).
     # Override these in NetBox's PLUGINS_CONFIG. Secrets belong here / in a
-    # secrets backend, never in plugin models.
+    # secrets backend, never in plugin models. The flat opennms_* keys and
+    # default_location are the single-server shorthand for servers["default"];
+    # "servers" maps a name to {url, username, password, default_location,
+    # headers}. credentials_key seeds encryption of credentials stored in models.
     default_settings = {
+        "servers": {},
+        "credentials_key": "",
         "opennms_url": "",
         "opennms_username": "",
         "opennms_password": "",

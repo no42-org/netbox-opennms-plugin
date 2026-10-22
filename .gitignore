@@ -18,6 +18,7 @@ venv/
 _bmad-output/
 _bmad/
 openspec/
+docs/superpowers/
 
 # IDEs / editors
 .idea/

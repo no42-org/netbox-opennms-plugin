@@ -56,6 +56,7 @@ class OpenNMSServerTable(NetBoxTable):
 
 class RequisitionTable(NetBoxTable):
     name = tables.Column(linkify=True)
+    server = tables.Column(linkify=True)
 
     class Meta(NetBoxTable.Meta):
         model = Requisition
@@ -63,6 +64,7 @@ class RequisitionTable(NetBoxTable):
             "pk",
             "id",
             "name",
+            "server",
             "description",
             "object_types",
             "scan_interval",
@@ -74,6 +76,7 @@ class RequisitionTable(NetBoxTable):
         )
         default_columns = (
             "name",
+            "server",
             "object_types",
             "scan_interval",
             "location",

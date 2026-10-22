@@ -46,3 +46,32 @@ class RequisitionAddButtonsTest(TestCase):
             self.assertContains(
                 response, f"{add_url}?requisition={self.requisition.pk}"
             )
+
+    def test_detail_shows_server(self):
+        url = reverse(
+            "plugins:netbox_opennms:requisition", kwargs={"pk": self.requisition.pk}
+        )
+        response = self.client.get(url)
+        self.assertContains(response, self.server.get_absolute_url())
+
+    def test_server_change_warns(self):
+        b = make_server("b")
+        data = {
+            "name": self.requisition.name,
+            "server": b.pk,
+            "object_types": self.requisition.object_types,
+            "filter_params": '{"role": ["router"]}',
+            "scan_interval": self.requisition.scan_interval,
+            "default_interfaces": self.requisition.default_interfaces,
+        }
+        response = self.client.post(
+            reverse(
+                "plugins:netbox_opennms:requisition_edit",
+                args=[self.requisition.pk],
+            ),
+            data,
+            follow=True,
+        )
+        self.requisition.refresh_from_db()
+        self.assertEqual(self.requisition.server_id, b.pk)
+        self.assertContains(response, "Moved to server b")

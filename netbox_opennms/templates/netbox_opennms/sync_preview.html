@@ -26,12 +26,13 @@
     </div>
     <table class="table table-hover">
       <thead>
-        <tr><th>Requisition</th><th>Conflicts</th><th>Nodes</th><th>Warnings</th><th></th></tr>
+        <tr><th>Requisition</th><th>Server</th><th>Conflicts</th><th>Nodes</th><th>Warnings</th><th></th></tr>
       </thead>
       <tbody>
         {% for row in rows %}
           <tr>
             <td>{{ row.requisition|linkify }} <code class="text-muted">{{ row.foreign_source }}</code></td>
+            <td>{{ row.server|linkify }}</td>
             <td>
               {% if row.conflicts %}
                 <span class="badge text-bg-danger" title="Sync blocked — resolve the filter overlap">{{ row.conflicts|length }} — frozen</span>
@@ -54,7 +55,7 @@
             </td>
           </tr>
         {% empty %}
-          <tr><td colspan="5" class="text-muted">No requisitions — create one to start monitoring.</td></tr>
+          <tr><td colspan="6" class="text-muted">No requisitions — create one to start monitoring.</td></tr>
         {% endfor %}
       </tbody>
     </table>

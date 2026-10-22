@@ -251,7 +251,7 @@ class RequisitionView(generic.ObjectView):
 
 
 class RequisitionListView(generic.ObjectListView):
-    queryset = Requisition.objects.all()
+    queryset = Requisition.objects.select_related("server")
     table = tables.RequisitionTable
     filterset = filtersets.RequisitionFilterSet
 
@@ -259,6 +259,21 @@ class RequisitionListView(generic.ObjectListView):
 class RequisitionEditView(generic.ObjectEditView):
     queryset = Requisition.objects.all()
     form = forms.RequisitionForm
+
+    def post(self, request, *args, **kwargs):
+        obj = self.get_object(**kwargs)
+        old = obj.server if obj.pk else None
+        response = super().post(request, *args, **kwargs)
+        # A redirect means the save succeeded; a re-rendered form means it did not.
+        if old and response.status_code == 302:
+            new = Requisition.objects.select_related("server").get(pk=obj.pk).server
+            if new != old:
+                messages.warning(
+                    request,
+                    f"Moved to server {new.name}: the next Sync pushes there "
+                    f"and the reconciler removes the copy on {old.name}.",
+                )
+        return response
 
 
 class RequisitionDeleteView(generic.ObjectDeleteView):
@@ -760,6 +775,7 @@ class SyncPreviewView(PermissionRequiredMixin, View):
                 {
                     "foreign_source": resolution.foreign_source,
                     "requisition": resolution.requisition,
+                    "server": resolution.requisition.server,
                     "node_count": len(resolution.nodes),
                     # Rejected-filter errors join the warnings badge so a broken
                     # filter stays visible on the preview.

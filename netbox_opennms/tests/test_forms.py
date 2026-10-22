@@ -259,3 +259,14 @@ class DetectorFormServerTest(TestCase):
         form = AssetMappingForm(initial={"requisition": req.pk})
         values = [v for v, _l in form.fields["asset_field"].choices]
         self.assertEqual(values, ["fromB"])
+
+
+class RequisitionFormServerTest(TestCase):
+    def test_single_server_is_preselected(self):
+        server = make_server()
+        self.assertEqual(RequisitionForm().fields["server"].initial, server.pk)
+
+    def test_two_servers_no_preselection(self):
+        make_server("a")
+        make_server("b")
+        self.assertIsNone(RequisitionForm().fields["server"].initial)

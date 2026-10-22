@@ -134,6 +134,9 @@ class RequisitionForm(NetBoxModelForm):
             "object types to compute members."
         ),
     )
+    server = DynamicModelChoiceField(
+        queryset=OpenNMSServer.objects.all(), label=_("OpenNMS server")
+    )
     services = forms.MultipleChoiceField(
         choices=ServiceChoices,
         required=False,
@@ -156,6 +159,11 @@ class RequisitionForm(NetBoxModelForm):
             "location",
             "tags",
         )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if not self.instance.pk and OpenNMSServer.objects.count() == 1:
+            self.fields["server"].initial = OpenNMSServer.objects.get().pk
 
     def clean(self):
         super().clean()

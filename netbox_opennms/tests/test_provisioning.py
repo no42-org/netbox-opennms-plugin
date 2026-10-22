@@ -69,6 +69,18 @@ class ReconcileProvisionedServersTest(TestCase):
         )
         self.assertIn("'b' points at the same OpenNMS as server 'a'", logs.output[0])
 
+    def test_existing_row_is_not_updated_onto_a_clashing_url(self):
+        other = {**ENTRY, "url": "https://q/opennms"}
+        with mock.patch(PATCH, return_value={"a": ENTRY, "b": other}):
+            reconcile_provisioned_servers()
+        entries = {"a": ENTRY, "b": {**ENTRY, "url": "https://p/opennms/"}}
+        with mock.patch(PATCH, return_value=entries):
+            with self.assertLogs("netbox_opennms", level="WARNING") as logs:
+                rows = reconcile_provisioned_servers()
+        self.assertEqual(OpenNMSServer.objects.get(name="b").url, "https://q/opennms")
+        self.assertEqual([row.name for row in rows], ["a"])
+        self.assertIn("'b' points at the same OpenNMS as server 'a'", logs.output[0])
+
     def test_removed_entry_keeps_row(self):
         OpenNMSServer.objects.create(name="old", origin="provisioned", url="https://o/")
         with mock.patch(PATCH, return_value={}):

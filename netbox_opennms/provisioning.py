@@ -44,16 +44,15 @@ def reconcile_provisioned_servers():
         )
         if row is None or drifted:
             # This bypasses OpenNMSServer.clean(), so check its one-row-per-
-            # OpenNMS rule here. A clash never creates a second row.
+            # OpenNMS rule here. A clash neither creates nor updates the row.
             clash = _same_instance_row(name, entry["url"])
             if clash is not None:
                 logger.warning(
                     f"Provisioned server {name!r} points at the same OpenNMS as "
                     f"server {clash.name!r}; each OpenNMS instance needs one "
-                    "server." + (" Row not created." if row is None else "")
+                    "server. Row " + ("not created." if row is None else "not updated.")
                 )
-                if row is None:
-                    continue
+                continue
         if row is None:
             row = OpenNMSServer.objects.create(name=name, **wanted)
         elif drifted:

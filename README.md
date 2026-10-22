@@ -173,6 +173,8 @@ The plugin writes requisitions. It does not configure OpenNMS polling.
 The plugin can provision several OpenNMS servers.
 Each Requisition targets exactly one server.
 Two server rows must not point at the same OpenNMS instance, because Foreign Source names are global on an instance.
+The plugin rejects a server whose URL matches another server's, ignoring a trailing slash and the case of the scheme and host.
+A provisioned entry that clashes with an existing row is skipped with a warning in the log.
 A server comes from one of two origins:
 
 - **Provisioned.** Declared in **`PLUGINS_CONFIG`** in NetBox's **`configuration.py`**.

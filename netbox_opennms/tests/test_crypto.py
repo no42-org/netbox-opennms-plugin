@@ -95,5 +95,12 @@ class EncryptedFieldTest(SimpleTestCase):
         self.assertEqual(f.get_prep_value(value), "gAAAAAnot-a-real-token")
         self.assertIs(f.to_python(value), value)
 
+    def test_json_token_with_non_json_plaintext_is_undecryptable(self):
+        f = EncryptedJSONField()
+        token = encrypt("not json")
+        value = f.from_db_value(token, None, None)
+        self.assertIsInstance(value, Undecryptable)
+        self.assertEqual(f.get_prep_value(value), token)
+
     def test_json_formfield_is_json_field(self):
         self.assertIsInstance(EncryptedJSONField().formfield(), forms.JSONField)

@@ -286,8 +286,9 @@ class OpenNMSServerAPITest(_NoGraphQL, APIViewTestCases.APIViewTestCase):
 
     @classmethod
     def setUpTestData(cls):
+        # Distinct URLs: two rows on one OpenNMS fail clean() (bulk update).
         for name in ("s1", "s2", "s3"):
-            make_server(name)
+            make_server(name, url=f"https://{name}.example.org/opennms")
 
 
 class _SuperuserAPITestCase(APITestCase):

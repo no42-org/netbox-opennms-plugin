@@ -385,6 +385,9 @@ class MultiServerRoundTripTest(TestCase):
             self.addCleanup(delete_live_foreign_source, name)
 
         (self.prov,) = reconcile_provisioned_servers()
+        # objects.create skips clean(), which rejects a second row on the same
+        # OpenNMS. CI has one Horizon container, and both origins must run
+        # against it. Distinct Foreign Source names keep the two rows apart.
         self.local = OpenNMSServer.objects.create(
             name="live-local",
             origin=ServerOriginChoices.LOCAL,

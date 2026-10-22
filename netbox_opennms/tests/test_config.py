@@ -6,7 +6,12 @@ from unittest import mock
 
 from django.test import SimpleTestCase
 
-from netbox_opennms.config import server_entries, server_entry, upgrade_target
+from netbox_opennms.config import (
+    normalised_url,
+    server_entries,
+    server_entry,
+    upgrade_target,
+)
 
 
 def _cfg(values):
@@ -81,6 +86,25 @@ class ServerEntriesTest(SimpleTestCase):
         self.assertEqual(entries["ok"]["url"], "")
         self.assertEqual(entries["ok"]["username"], "5")
         self.assertEqual(entries["ok"]["headers"], {})
+
+    def test_header_keys_and_values_are_coerced_to_text(self):
+        # requests raises InvalidHeader for a non-str value at request time.
+        headers = {"X-Port": 8980, 7: "seven", "X-None": None, None: "v"}
+        with _patch({"servers": {"prod": {"url": "https://p/", "headers": headers}}}):
+            self.assertEqual(
+                server_entries()["prod"]["headers"],
+                {"X-Port": "8980", "7": "seven"},
+            )
+
+    def test_normalised_url_ignores_trailing_slash_and_case(self):
+        self.assertEqual(
+            normalised_url("HTTPS://ONMS.Example.org/opennms/"),
+            normalised_url("https://onms.example.org/opennms"),
+        )
+        self.assertNotEqual(
+            normalised_url("https://onms.example.org/OpenNMS"),
+            normalised_url("https://onms.example.org/opennms"),
+        )
 
     def test_non_dict_servers_is_empty(self):
         with _patch({"servers": ["x"]}):

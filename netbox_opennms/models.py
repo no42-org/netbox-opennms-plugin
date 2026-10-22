@@ -14,7 +14,7 @@ changes ``requisition-redesign`` (R1–R8) and ``replace-priority-with-conflicts
 (C1–C7) for the full design.
 """
 
-from urllib.parse import urlsplit
+from functools import cached_property
 
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.core.exceptions import ValidationError
@@ -93,12 +93,6 @@ def _require_preset_params(rule, required):
         )
 
 
-def _normalised_url(url):
-    """``url`` without a trailing slash and with a lower-case scheme and host."""
-    parts = urlsplit((url or "").strip())
-    return (parts.scheme.lower(), parts.netloc.lower(), parts.path.rstrip("/"))
-
-
 class _SecretSafeModel(
     BookmarksMixin,
     ChangeLoggingMixin,
@@ -165,6 +159,16 @@ class OpenNMSServer(_SecretSafeModel):
         errors = {}
         if self.url and not self.url.startswith(("https://", "http://")):
             errors["url"] = "The URL must start with https:// or http://."
+        elif self.url:
+            # Foreign Source names are global on one OpenNMS: two rows on the
+            # same instance would let two Requisitions push the same object.
+            for other in OpenNMSServer.objects.exclude(pk=self.pk):
+                if self.points_at_same_opennms(other):
+                    errors["url"] = (
+                        f"Another server ({other.name}) already points at this "
+                        "OpenNMS instance."
+                    )
+                    break
         try:
             validate_location_name(self.default_location)
         except ValueError as exc:
@@ -201,10 +205,15 @@ class OpenNMSServer(_SecretSafeModel):
     def is_provisioned(self):
         return self.origin == ServerOriginChoices.PROVISIONED
 
+    @cached_property
+    def config_entry(self):
+        """This row's ``PLUGINS_CONFIG`` entry (or ``None``), read once per instance."""
+        return config.server_entry(self.name)
+
     @property
     def is_missing(self):
         """A provisioned row whose ``PLUGINS_CONFIG`` entry is gone."""
-        return self.is_provisioned and config.server_entry(self.name) is None
+        return self.is_provisioned and self.config_entry is None
 
     @property
     def credentials_ok(self):
@@ -216,10 +225,8 @@ class OpenNMSServer(_SecretSafeModel):
     @property
     def effective_url(self):
         """The URL requests go to: the config entry's for a provisioned row."""
-        if self.is_provisioned:
-            entry = config.server_entry(self.name)
-            if entry:
-                return entry["url"]
+        if self.is_provisioned and self.config_entry:
+            return self.config_entry["url"]
         return self.url
 
     def points_at_same_opennms(self, other):
@@ -229,14 +236,14 @@ class OpenNMSServer(_SecretSafeModel):
         the scheme and host. Foreign Source names are global on an instance, so
         two such rows share every Foreign Source.
         """
-        return _normalised_url(self.effective_url) == _normalised_url(
+        return config.normalised_url(self.effective_url) == config.normalised_url(
             other.effective_url
         )
 
     @property
     def effective_username(self):
         if self.is_provisioned:
-            entry = config.server_entry(self.name)
+            entry = self.config_entry
             return entry["username"] if entry else ""
         return self.username
 

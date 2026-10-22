@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: MIT
 """Tests for the OpenNMS sync background job (mocked port, no network)."""
 
+import uuid
 from unittest import mock
 
 from core.exceptions import JobFailed
@@ -21,6 +22,7 @@ from netbox_opennms.client import OpenNMSError, OpenNMSHTTPError
 from netbox_opennms.jobs import (
     ReconcileOrphansJob,
     SyncForeignSourceJob,
+    latest_sync_job,
     orphaned_foreign_sources,
     unknown_locations,
 )
@@ -654,3 +656,28 @@ class MultiServerJobTest(TestCase):
         mock_enqueue.assert_called_once_with(
             "gone", server_id=self.b.pk, allow_empty=True
         )
+
+    @mock.patch("netbox_opennms.jobs.SyncForeignSourceJob.enqueue_sync")
+    @mock.patch("netbox_opennms.jobs.OpenNMSClient.for_server")
+    def test_reconcile_resolves_requisitions_once(self, mock_for_server, _enqueue):
+        client = mock_for_server.return_value.__enter__.return_value
+        client.list_requisition_names.return_value = []
+        with mock.patch(
+            "netbox_opennms.membership.resolve_all", return_value=[]
+        ) as resolve_all:
+            ReconcileOrphansJob(job=mock.Mock()).run()
+        self.assertEqual(mock_for_server.call_count, 2)
+        resolve_all.assert_called_once_with()
+
+    def test_latest_sync_job_finds_pre_upgrade_job(self):
+        # Jobs enqueued before the upgrade are named without "@<server id>".
+        legacy = Job.objects.create(name="OpenNMS sync: a", job_id=uuid.uuid4())
+        self.assertEqual(latest_sync_job([("a", self.a.pk)]), legacy)
+        removal = Job.objects.create(
+            name="OpenNMS sync: a (remove)", job_id=uuid.uuid4()
+        )
+        self.assertEqual(latest_sync_job([("a", self.a.pk)]), removal)
+        current = Job.objects.create(
+            name=SyncForeignSourceJob.job_name("a", self.a.pk), job_id=uuid.uuid4()
+        )
+        self.assertEqual(latest_sync_job([("a", self.a.pk)]), current)

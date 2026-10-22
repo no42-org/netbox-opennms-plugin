@@ -128,10 +128,14 @@ class OpenNMSServerListView(generic.ObjectListView):
     def get(self, request, *args, **kwargs):
         # Spec decision 2: opening the list corrects provisioned rows after a
         # restart that skipped `migrate`. Never let it break the page.
-        try:
-            reconcile_provisioned_servers()
-        except Exception:
-            logger.exception("reconciling provisioned OpenNMS servers failed")
+        # Only for a user who may change servers: a read must not write
+        # ObjectChanges in a view-only user's name.
+        if request.user.has_perm("netbox_opennms.change_opennmsserver"):
+            try:
+                with transaction.atomic():
+                    reconcile_provisioned_servers()
+            except Exception:
+                logger.exception("reconciling provisioned OpenNMS servers failed")
         return super().get(request, *args, **kwargs)
 
 
@@ -271,6 +275,8 @@ class RequisitionEditView(generic.ObjectEditView):
     def post(self, request, *args, **kwargs):
         obj = self.get_object(**kwargs)
         old = obj.server if obj.pk else None
+        # The copy on the old server lives under the name before this edit.
+        old_name = obj.name
         response = super().post(request, *args, **kwargs)
         # A redirect means the save succeeded; a re-rendered form means it did not.
         if old and response.status_code == 302:
@@ -282,10 +288,14 @@ class RequisitionEditView(generic.ObjectEditView):
                     f"OpenNMS as {old.name}; the existing nodes stay in place.",
                 )
             elif new != old:
+                job = SyncForeignSourceJob.enqueue_sync(
+                    old_name, old.pk, user=request.user, allow_empty=True
+                )
                 messages.warning(
                     request,
-                    f"Moved to server {new.name}: the next Sync pushes there "
-                    f"and the reconciler removes the copy on {old.name}.",
+                    f"Moved to server {new.name}: Remove submitted for the copy "
+                    f"on {old.name} (job #{job.pk}); Sync to push it to "
+                    f"{new.name}.",
                 )
         return response
 

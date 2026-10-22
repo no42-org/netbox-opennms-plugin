@@ -8,7 +8,7 @@ shorthand for ``servers["default"]``. Malformed values are tolerated (skipped or
 coerced) so a typo in configuration never raises at import or render time.
 """
 
-import copy
+from urllib.parse import urlsplit
 
 from netbox.plugins import get_plugin_config
 
@@ -22,11 +22,34 @@ def _text(value):
     return value if isinstance(value, str) else str(value)
 
 
+def _headers(raw):
+    """``raw`` as a ``{str: str}`` dict; ``requests`` rejects any other type."""
+    if not isinstance(raw, dict):
+        return {}
+    headers = {}
+    for key, value in raw.items():
+        if key is None or value is None:
+            continue
+        try:
+            headers[_text(key)] = _text(value)
+        except Exception:
+            continue
+    return headers
+
+
 def _normalise(raw):
     entry = {field: _text(raw.get(field)) for field in _STR_FIELDS}
-    headers = raw.get("headers")
-    entry["headers"] = copy.deepcopy(headers) if isinstance(headers, dict) else {}
+    entry["headers"] = _headers(raw.get("headers"))
     return entry
+
+
+def normalised_url(url):
+    """``url`` without a trailing slash and with a lower-case scheme and host.
+
+    Two URLs that normalise equal reach the same OpenNMS instance.
+    """
+    parts = urlsplit((url or "").strip())
+    return (parts.scheme.lower(), parts.netloc.lower(), parts.path.rstrip("/"))
 
 
 def server_entries():

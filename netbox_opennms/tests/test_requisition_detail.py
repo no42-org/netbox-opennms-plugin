@@ -7,10 +7,12 @@ a Requisition by FK; the detail page must let the user add each one in-context,
 pre-selecting the parent requisition via `?requisition=<pk>`.
 """
 
+from core.models import Job
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.urls import reverse
 
+from netbox_opennms.jobs import SyncForeignSourceJob
 from netbox_opennms.models import Requisition
 from netbox_opennms.tests.servers import make_server
 
@@ -75,15 +77,23 @@ class RequisitionAddButtonsTest(TestCase):
         self.assertEqual(self.requisition.server_id, server.pk)
         return response
 
-    def test_server_change_warns(self):
+    def test_server_change_submits_remove_on_old_server(self):
         b = make_server("b", url="https://b.example.org/opennms")
         response = self._move_to(b)
+        remove = SyncForeignSourceJob.job_name(
+            "router", self.server.pk, allow_empty=True
+        )
+        job = Job.objects.get(name=remove)
+        self.assertEqual(job.user, self.user)
         self.assertContains(
-            response, "the reconciler removes the copy on default"
+            response,
+            f"Moved to server b: Remove submitted for the copy on default "
+            f"(job #{job.pk}); Sync to push it to b.",
         )
 
     def test_move_to_same_opennms_keeps_nodes(self):
-        # Same instance, different spelling of the URL.
+        # Same instance, different spelling of the URL. Created directly: the
+        # model rule rejects such a row, but rows from before it may exist.
         b = make_server("b", url="HTTPS://ONMS.example.org/opennms/")
         response = self._move_to(b)
         self.assertContains(
@@ -91,4 +101,5 @@ class RequisitionAddButtonsTest(TestCase):
             "Moved to server b, which points at the same OpenNMS as default; "
             "the existing nodes stay in place.",
         )
-        self.assertNotContains(response, "reconciler removes")
+        self.assertNotContains(response, "Remove submitted")
+        self.assertFalse(Job.objects.filter(name__endswith=" (remove)").exists())

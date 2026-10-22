@@ -4,7 +4,7 @@
 
 from unittest import mock
 
-from core.models import ObjectChange
+from core.models import ObjectChange, ObjectType
 from dcim.models import (
     Device,
     DeviceRole,
@@ -17,6 +17,7 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.urls import reverse
 from ipam.models import IPAddress
+from users.models import ObjectPermission
 from utilities.testing import ViewTestCases
 
 from netbox_opennms.crypto import Undecryptable
@@ -505,3 +506,30 @@ class ServerLockingTest(TestCase):
                 self.client.get(reverse("plugins:netbox_opennms:opennmsserver_list"))
         changes = ObjectChange.objects.filter(object_repr="cfg")
         self.assertEqual(list(changes.values_list("action", flat=True)), ["create"])
+
+    def _user_with(self, *actions):
+        user = get_user_model().objects.create_user(username="-".join(actions))
+        perm = ObjectPermission.objects.create(name="servers", actions=list(actions))
+        perm.object_types.set([ObjectType.objects.get_for_model(OpenNMSServer)])
+        perm.users.add(user)
+        return user
+
+    def _list_as(self, user):
+        entry = {"url": "https://c/opennms", "username": "u", "password": "p",
+                 "default_location": "", "headers": {}}
+        self.client.force_login(user)
+        with mock.patch(
+            "netbox_opennms.config.server_entries", return_value={"cfg": entry}
+        ):
+            response = self.client.get(
+                reverse("plugins:netbox_opennms:opennmsserver_list")
+            )
+        self.assertEqual(response.status_code, 200)
+
+    def test_list_does_not_reconcile_for_a_view_only_user(self):
+        self._list_as(self._user_with("view"))
+        self.assertFalse(OpenNMSServer.objects.filter(name="cfg").exists())
+
+    def test_list_reconciles_for_a_user_who_may_change_servers(self):
+        self._list_as(self._user_with("view", "change"))
+        self.assertTrue(OpenNMSServer.objects.filter(name="cfg").exists())

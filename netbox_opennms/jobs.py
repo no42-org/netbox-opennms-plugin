@@ -308,7 +308,8 @@ def latest_sync_job(targets):
 
     The Job is the audit record (user, timestamps, status, log, error). Matches
     both the sync and remove name forms via the shared ``job_name`` so the lookup
-    can never drift from what ``enqueue_sync`` wrote. ``None`` if none found.
+    can never drift from what ``enqueue_sync`` wrote, plus the pre-upgrade name
+    form without the server id. ``None`` if none found.
     """
     names = []
     for foreign_source, server_id in targets:
@@ -318,6 +319,11 @@ def latest_sync_job(targets):
                     foreign_source, server_id, allow_empty=allow_empty
                 )
             )
+    # Jobs enqueued before the multi-server upgrade carry no ``@server`` part.
+    for foreign_source, _server_id in targets:
+        for suffix in ("", " (remove)"):
+            base = f"{SyncForeignSourceJob.name}: {foreign_source}"
+            names.append(base[: 200 - len(suffix)] + suffix)
     if not names:
         return None
     return Job.objects.filter(name__in=names).order_by("-created").first()
@@ -412,7 +418,7 @@ def sync_status_for(target):
     return rows
 
 
-def orphaned_foreign_sources(client, server):
+def orphaned_foreign_sources(client, server, monitored=None, same_instance=None):
     """Foreign Sources OpenNMS holds that NetBox manages but no longer monitors.
 
     The reconciliation core (pure given a ``client``, so it tests against a fake).
@@ -430,6 +436,10 @@ def orphaned_foreign_sources(client, server):
     delete the nodes just pushed through the other row. The stale
     ``DeployedForeignSource(server, name)`` row is left in place; it is harmless
     because this guard keeps it from being acted on.
+
+    ``monitored`` (the ``monitored_foreign_sources()`` set) and
+    ``same_instance`` (the ids of rows on the same OpenNMS as ``server``,
+    ``server.pk`` included) let a caller looping over servers compute them once.
     """
     deployed = set(client.list_requisition_names())
     managed = set(
@@ -437,17 +447,19 @@ def orphaned_foreign_sources(client, server):
             "name", flat=True
         )
     )
-    same_instance = {server.pk} | {
-        other.pk
-        for other in OpenNMSServer.objects.exclude(pk=server.pk)
-        if server.points_at_same_opennms(other)
+    if same_instance is None:
+        same_instance = _same_instance_ids(server, OpenNMSServer.objects.all())
+    if monitored is None:
+        monitored = monitored_foreign_sources()
+    live = {name for server_id, name in monitored if server_id in same_instance}
+    return sorted((deployed & managed) - live)
+
+
+def _same_instance_ids(server, servers):
+    """Ids of the rows in ``servers`` on the same OpenNMS as ``server``, and its own."""
+    return {server.pk} | {
+        other.pk for other in servers if server.points_at_same_opennms(other)
     }
-    monitored = {
-        name
-        for server_id, name in monitored_foreign_sources()
-        if server_id in same_instance
-    }
-    return sorted((deployed & managed) - monitored)
 
 
 @system_job(interval=RECONCILE_INTERVAL_MINUTES)
@@ -473,10 +485,21 @@ class ReconcileOrphansJob(JobRunner):
         if str(get_plugin_config(PLUGIN_NAME, "reconcile_orphans")).lower() != "true":
             self.logger.info("reconcile_orphans disabled — skipping.")
             return
-        for server in OpenNMSServer.objects.order_by("name"):
+        servers = list(OpenNMSServer.objects.order_by("name"))
+        # Resolving every Requisition is the expensive part: do it once.
+        monitored = monitored_foreign_sources()
+        same_instance = {
+            server.pk: _same_instance_ids(server, servers) for server in servers
+        }
+        for server in servers:
             try:
                 with OpenNMSClient.for_server(server) as client:
-                    orphans = orphaned_foreign_sources(client, server)
+                    orphans = orphaned_foreign_sources(
+                        client,
+                        server,
+                        monitored=monitored,
+                        same_instance=same_instance[server.pk],
+                    )
             except OpenNMSError as exc:
                 self.logger.warning(
                     f"reconcile skipped for server {server.name!r} — "

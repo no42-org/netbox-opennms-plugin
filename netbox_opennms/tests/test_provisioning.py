@@ -36,11 +36,38 @@ class ReconcileProvisionedServersTest(TestCase):
     def test_takes_over_same_named_local_row(self):
         make_server("prod", password="local-secret")
         with mock.patch(PATCH, return_value={"prod": ENTRY}):
-            reconcile_provisioned_servers()
+            with self.assertLogs("netbox_opennms", level="WARNING") as logs:
+                reconcile_provisioned_servers()
         row = OpenNMSServer.objects.get(name="prod")
         self.assertEqual(
             (row.origin, row.password, row.username), ("provisioned", "", "")
         )
+        self.assertEqual(
+            logs.output,
+            [
+                "WARNING:netbox_opennms:Provisioned server 'prod' takes over a "
+                "local row; its stored credentials are discarded."
+            ],
+        )
+
+    def test_entry_on_the_url_of_a_local_row_is_skipped(self):
+        make_server("local", url="HTTPS://P/opennms/")
+        with mock.patch(PATCH, return_value={"prod": ENTRY}):
+            with self.assertLogs("netbox_opennms", level="WARNING") as logs:
+                rows = reconcile_provisioned_servers()
+        self.assertEqual(rows, [])
+        self.assertFalse(OpenNMSServer.objects.filter(name="prod").exists())
+        self.assertIn("same OpenNMS as server 'local'", logs.output[0])
+
+    def test_second_entry_on_the_same_url_is_skipped(self):
+        entries = {"a": ENTRY, "b": {**ENTRY, "url": "https://p/opennms/"}}
+        with mock.patch(PATCH, return_value=entries):
+            with self.assertLogs("netbox_opennms", level="WARNING") as logs:
+                reconcile_provisioned_servers()
+        self.assertEqual(
+            list(OpenNMSServer.objects.values_list("name", flat=True)), ["a"]
+        )
+        self.assertIn("'b' points at the same OpenNMS as server 'a'", logs.output[0])
 
     def test_removed_entry_keeps_row(self):
         OpenNMSServer.objects.create(name="old", origin="provisioned", url="https://o/")

@@ -277,6 +277,61 @@ class OpenNMSServerModelTest(TestCase):
             return exc.message_dict
         return {}
 
+    def test_url_of_another_local_row_is_rejected(self):
+        # Stored by a path that skips clean(), so the upper-case scheme stays.
+        make_server("a", url="HTTPS://onms.example.org/opennms")
+        for url in (
+            "https://onms.example.org/opennms",
+            "https://onms.example.org/opennms/",
+            "https://ONMS.Example.org/opennms",
+        ):
+            server = OpenNMSServer(name="b", url=url, username="u", password="p")
+            self.assertEqual(
+                self._errors(server)["url"],
+                ["Another server (a) already points at this OpenNMS instance."],
+            )
+
+    def test_effective_url_of_provisioned_row_is_rejected(self):
+        # The stored url is stale; the config entry decides where it points.
+        OpenNMSServer.objects.create(
+            name="prod", origin=ServerOriginChoices.PROVISIONED, url="https://old/"
+        )
+        entry = {"url": "https://p.example.org/opennms", "username": "u"}
+        with mock.patch(
+            "netbox_opennms.models.config.server_entry",
+            side_effect=lambda name: entry if name == "prod" else None,
+        ):
+            clash = OpenNMSServer(
+                name="b", url="https://p.example.org/opennms/", username="u",
+                password="p",
+            )
+            free = OpenNMSServer(
+                name="c", url="https://old/", username="u", password="p"
+            )
+            self.assertIn("(prod)", self._errors(clash)["url"][0])
+            self.assertEqual(self._errors(free), {})
+
+    def test_own_url_is_not_a_clash(self):
+        server = OpenNMSServer.objects.get(pk=make_server().pk)
+        server.description = "edited"
+        self.assertEqual(self._errors(server), {})
+
+    def test_config_entry_is_read_once_per_instance(self):
+        server = OpenNMSServer.objects.create(
+            name="prod", origin=ServerOriginChoices.PROVISIONED, url="https://p/"
+        )
+        entry = {"url": "https://p/", "username": "cfg"}
+        with mock.patch(
+            "netbox_opennms.models.config.server_entry", return_value=entry
+        ) as lookup:
+            values = (
+                server.is_missing,
+                server.effective_username,
+                server.effective_url,
+            )
+        self.assertEqual(values, (False, "cfg", "https://p/"))
+        lookup.assert_called_once_with("prod")
+
     def test_untouched_stored_password_is_kept(self):
         server = OpenNMSServer.objects.get(pk=make_server().pk)
         self.assertEqual(self._errors(server), {})

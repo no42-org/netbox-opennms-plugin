@@ -28,7 +28,9 @@ class _EncryptedField(models.TextField):
             return copy.copy(self.empty_value)
         try:
             return self._load(decrypt(value))
-        except InvalidToken:
+        except (InvalidToken, ValueError):
+            # ValueError covers a token that decrypts to invalid JSON
+            # (json.JSONDecodeError) or to invalid UTF-8.
             return Undecryptable(value)
 
     def to_python(self, value):

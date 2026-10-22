@@ -15,6 +15,8 @@ import requests
 from netbox.plugins import get_plugin_config
 from requests.auth import HTTPBasicAuth
 
+import netbox_opennms.config as config
+
 from .discovery import parse_plugins
 from .errors import (
     OpenNMSAuthError,
@@ -33,13 +35,63 @@ class OpenNMSClient:
     """Thin REST adapter for OpenNMS, behind a single port (AD-2)."""
 
     def __init__(
-        self, base_url, username, password, verify=True, timeout=DEFAULT_TIMEOUT
+        self,
+        base_url,
+        username,
+        password,
+        verify=True,
+        timeout=DEFAULT_TIMEOUT,
+        headers=None,
     ):
         self.base_url = (base_url or "").rstrip("/")
         self.verify = verify
         self.timeout = timeout
         self._session = requests.Session()
         self._session.auth = HTTPBasicAuth(username, password)
+        self._session.headers.update(headers or {})
+
+    @classmethod
+    def for_server(cls, server):
+        """Build a client from an ``OpenNMSServer`` row.
+
+        Provisioned rows take credentials and headers from the PLUGINS_CONFIG
+        entry; local rows take everything from the (encrypted) row.
+        """
+        if server.is_provisioned:
+            entry = config.server_entry(server.name)
+            if entry is None:
+                raise OpenNMSError(
+                    f"Server {server.name!r} is provisioned but has no entry in "
+                    "PLUGINS_CONFIG['netbox_opennms']['servers']."
+                )
+            username = entry["username"]
+            password = entry["password"]
+            headers = entry.get("headers")
+        else:
+            if not server.credentials_ok:
+                raise OpenNMSError(
+                    f"Stored credentials for server {server.name!r} cannot be "
+                    "decrypted (SECRET_KEY or credentials_key changed); "
+                    "re-enter them."
+                )
+            username = server.username
+            password = server.password
+            headers = server.headers
+        base_url = server.url
+        if not base_url:
+            raise OpenNMSError(f"Server {server.name!r} has no URL.")
+        if not base_url.startswith(("https://", "http://")):
+            raise OpenNMSError("OpenNMS URL must start with https:// or http://.")
+        if base_url.startswith("http://"):
+            logger.warning(
+                "OpenNMS URL uses http:// — credentials are sent in cleartext; "
+                "use https:// (AD-13)."
+            )
+        if not username or not password:
+            raise OpenNMSError(f"Server {server.name!r} has no credentials.")
+        return cls(
+            base_url=base_url, username=username, password=password, headers=headers
+        )
 
     @classmethod
     def from_config(cls):

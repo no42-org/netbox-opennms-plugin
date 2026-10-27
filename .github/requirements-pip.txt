@@ -1,0 +1,5 @@
+# pip for the release workflow's SBOM job, hash-pinned to the wheel.
+# pip < 26.2.2 trusts the compromised emSign roots through its vendored
+# certifi. Dependabot (pip ecosystem, /.github) keeps the pin current.
+pip==26.2.2 \
+    --hash=sha256:fd7f4dfa8190e014013b9f08f3e973f4e4c26ffd179a204895533a7254813a70

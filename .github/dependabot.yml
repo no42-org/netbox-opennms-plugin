@@ -19,6 +19,13 @@ updates:
       interval: "weekly"
     cooldown:
       default-days: 7
+  # Hash-pinned pip for the release workflow's SBOM job.
+  - package-ecosystem: "pip"
+    directory: "/.github"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
   # The repo has no Dockerfiles — container images are pinned in Compose files,
   # which the "docker" ecosystem does not scan (it fails the update job).
   - package-ecosystem: "docker-compose"

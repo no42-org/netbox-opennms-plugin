@@ -29,7 +29,7 @@ services:
     # grouped with quickstart/compose.yml in dependabot.yml, and the quality
     # gates assert both pins agree (the README badge reads this pin). Runs
     # against another tag still work: setting NETBOX_VERSION makes the Makefile
-    # add compose.override.netbox.yml (the weekly canary uses that for v4.6).
+    # add compose.override.netbox.yml.
     image: netboxcommunity/netbox:v4.7.4
     depends_on:
       postgres:

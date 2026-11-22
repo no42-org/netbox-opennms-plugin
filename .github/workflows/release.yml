@@ -190,7 +190,7 @@ jobs:
       # tag), so the pair cannot drift when Dependabot bumps the action.
       - name: HTML SBOM report
         id: sbom-report
-        uses: no42-org/blitsbom@192b3010b1f8570b0aa7652522bca16cf76b5408  # v0.9.2
+        uses: no42-org/blitsbom@f5be9a1865dc86fbf29f8b66d81fdd370b848831  # v0.9.3
         with:
           sbom: dist/sbom.spdx.json
           output: dist/sbom-report.html
